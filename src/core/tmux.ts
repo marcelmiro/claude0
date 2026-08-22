@@ -181,7 +181,9 @@ export async function sendKeys(paneId: string, keys: string[]): Promise<void> {
  */
 export async function sendTextAndEnter(paneId: string, text: string): Promise<void> {
   try {
-    Bun.spawnSync(["tmux", "send-keys", "-t", paneId, "-l", text]);
+    // `--` ends option parsing: a message starting with `-` (a bullet list) is otherwise
+    // read by tmux as a flag ("invalid flag"), and nothing is typed.
+    Bun.spawnSync(["tmux", "send-keys", "-t", paneId, "-l", "--", text]);
     await Bun.sleep(250);
     Bun.spawnSync(["tmux", "send-keys", "-t", paneId, "Enter"]);
   } catch {
@@ -201,7 +203,7 @@ export async function sendKey(paneId: string, key: string): Promise<void> {
 /** Send literal text to a pane WITHOUT a trailing Enter (cf. sendTextAndEnter). */
 export async function sendLiteral(paneId: string, text: string): Promise<void> {
   try {
-    Bun.spawnSync(["tmux", "send-keys", "-t", paneId, "-l", text]);
+    Bun.spawnSync(["tmux", "send-keys", "-t", paneId, "-l", "--", text]);
   } catch {
     // pane may have closed
   }

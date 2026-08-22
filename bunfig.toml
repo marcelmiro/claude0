@@ -1,0 +1,6 @@
+[test]
+# Set the CLAUDE0_HOME seam before ANY module loads: bun test shares one module
+# registry across files, so the first file to import config.ts without the helper
+# would freeze PATHS.dir to the real ~/.config/claude0 for the whole run — and
+# config.test.ts rmSync()s PATHS.dir.
+preload = ["./test/helpers/home.ts"]
