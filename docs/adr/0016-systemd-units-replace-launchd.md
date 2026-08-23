@@ -17,8 +17,9 @@ nobody watching.
 - `loginctl enable-linger` — without it, logind kills the user's whole process
   tree (the tmux server and every Claude session in it) when the last SSH session
   closes.
-- **tmux and the bridge are systemd user units** (`deploy/units/`), installed and
-  enabled by `deploy/provision.sh`. `WantedBy=default.target` (the user instance
+- **tmux and the bridge are systemd user units** (`config/units/`), installed and
+  enabled by `claude0 setup` host provisioning (originally
+  `deploy/provision.sh`). `WantedBy=default.target` (the user instance
   has no `multi-user.target`; that value silently never starts). The bridge token
   moves to a 0600 `EnvironmentFile` — minted once, no process-environment
   spelunking. Bridge restarts are `Restart=always` with `RestartSec=5s` and

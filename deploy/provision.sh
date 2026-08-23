@@ -159,10 +159,18 @@ if [ -d /run/systemd/system ]; then
 
   UNIT_DIR="$HOME/.config/systemd/user"
   mkdir -p "$UNIT_DIR"
-  for unit in tmux.service claude0-bridge.service claude0-monitor.service claude0-daemon.service snapshot-check.service snapshot-check.timer; do
-    if ! cmp -s "$here/units/$unit" "$UNIT_DIR/$unit" 2>/dev/null; then
+  # Product units live in config/units/ (installed by `claude0 setup` since the
+  # provisioning port); the snapshot-check pair is personal ops in deploy/aws/.
+  for unit in tmux.service claude0-bridge.service claude0-monitor.service claude0-daemon.service; do
+    if ! cmp -s "$here/../config/units/$unit" "$UNIT_DIR/$unit" 2>/dev/null; then
       note "installing user unit $unit"
-      cp "$here/units/$unit" "$UNIT_DIR/$unit"
+      cp "$here/../config/units/$unit" "$UNIT_DIR/$unit"
+    fi
+  done
+  for unit in snapshot-check.service snapshot-check.timer; do
+    if ! cmp -s "$here/aws/$unit" "$UNIT_DIR/$unit" 2>/dev/null; then
+      note "installing user unit $unit"
+      cp "$here/aws/$unit" "$UNIT_DIR/$unit"
     fi
   done
 

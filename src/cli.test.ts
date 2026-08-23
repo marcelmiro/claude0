@@ -373,6 +373,12 @@ test("role host refuses on darwin regardless of the machine running the tests", 
   await expect(resolveSetupRole(undefined, "darwin")).resolves.toBe("local");
 });
 
+test("setup --dry-run refuses off a linux host and persists nothing", async () => {
+  await expect(setup("client", { dryRun: true })).rejects.toThrow("previews host provisioning");
+  // dry-run pins no role and creates no config
+  expect(existsSync(`${TEST_HOME}/.config/claude0/config.json`)).toBe(false);
+});
+
 test("client setup installs no hooks, no daemon, no sidebar marker — but keeps the terminal layer", async () => {
   await setup("client");
   const { PATHS } = await import("./core/config");

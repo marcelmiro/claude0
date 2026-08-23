@@ -15,7 +15,8 @@ function help() {
     \x1b[36mlist\x1b[0m                Print sessions with status, repo, and context %
     \x1b[36mswitch <name>\x1b[0m       Fuzzy-match a session by name and switch to it
     \x1b[36mnotify <message>\x1b[0m    Web-push a message to every subscribed device
-    \x1b[36msetup\x1b[0m               Install Claude0 for this machine's role (--role local|host|client)
+    \x1b[36msetup\x1b[0m               Install Claude0 for this machine's role (--role local|host|client;
+                        host provisioning: --tz <zone> --swap-gb <n> --dry-run)
     \x1b[36mdoctor\x1b[0m              Check this machine's Claude0 install for its role (exit 0 = healthy)
     \x1b[36mconfig\x1b[0m              Print the absolute user config path
     \x1b[36mterminal [command]\x1b[0m  Manage local/remote terminal attachment
@@ -93,14 +94,28 @@ switch (cmd) {
     break;
   case "setup": {
     // "--role client" and "--role=client"; a missing value becomes "" so the
-    // validator errors instead of silently falling back to inference.
+    // validator errors instead of silently falling back to inference. Same for
+    // the host-provisioning flags --tz and --swap-gb.
     let role: string | undefined;
+    let tz: string | undefined;
+    let swapGb: string | undefined;
+    let dryRun = false;
     for (let i = 3; i < process.argv.length; i++) {
       const arg = process.argv[i]!;
-      if (arg === "--role") role = process.argv[i + 1] ?? "";
+      if (arg === "--role") role = process.argv[++i] ?? "";
       else if (arg.startsWith("--role=")) role = arg.slice("--role=".length);
+      else if (arg === "--tz") tz = process.argv[++i] ?? "";
+      else if (arg.startsWith("--tz=")) tz = arg.slice("--tz=".length);
+      else if (arg === "--swap-gb") swapGb = process.argv[++i] ?? "";
+      else if (arg.startsWith("--swap-gb=")) swapGb = arg.slice("--swap-gb=".length);
+      else if (arg === "--dry-run") dryRun = true;
+      else {
+        // a misspelled flag must not silently provision with defaults
+        console.error(`claude0 setup: unknown argument "${arg}"`);
+        process.exit(2);
+      }
     }
-    await import("../src/cli").then((m) => m.setup(role));
+    await import("../src/cli").then((m) => m.setup(role, { tz, swapGb, dryRun }));
     break;
   }
   case "doctor":

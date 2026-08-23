@@ -50,7 +50,6 @@ const HOST_UNITS = [
   "claude0-bridge.service",
   "claude0-monitor.service",
   "claude0-daemon.service",
-  "snapshot-check.timer",
 ] as const;
 
 const ok = (label: string): DoctorResult => ({ status: "ok", label });
@@ -280,7 +279,7 @@ function hooksCheck(): DoctorCheck {
 function unitsCheck(): DoctorCheck {
   return {
     name: "units",
-    async run() {
+    async run(ctx) {
       if (!existsSync("/run/systemd/system")) return [fail("systemd is not running")];
       const results: DoctorResult[] = [];
       for (const unit of HOST_UNITS) {
@@ -288,6 +287,16 @@ function unitsCheck(): DoctorCheck {
         const enabled = (await probe(["systemctl", "--user", "is-enabled", unit])).out;
         results.push(active === "active" ? ok(`${unit} active`) : fail(`${unit} active = ${active || "<empty>"} (expected active)`));
         results.push(enabled === "enabled" ? ok(`${unit} enabled`) : fail(`${unit} enabled = ${enabled || "<empty>"} (expected enabled)`));
+      }
+      // snapshot-check is personal ops (deploy/aws/) — setup never installs it, so
+      // absent is healthy; a copy someone DID install should still be running.
+      if (existsSync(`${ctx.home}/.config/systemd/user/snapshot-check.timer`)) {
+        const active = (await probe(["systemctl", "--user", "is-active", "snapshot-check.timer"])).out;
+        results.push(
+          active === "active"
+            ? ok("snapshot-check.timer active")
+            : warn(`snapshot-check.timer is installed but ${active || "not active"} — EBS staleness alerts are off`),
+        );
       }
       const user = process.env.USER ?? userInfo().username;
       const linger = (await probe(["loginctl", "show-user", user, "-p", "Linger", "--value"])).out;

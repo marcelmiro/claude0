@@ -882,11 +882,13 @@ function canPrompt(): boolean {
  * zero-question default. Explicit and non-local resolutions are written to
  * config to pin them; an inferred "local" is deliberately NOT written, so a
  * machine later pointed at a remote host re-infers client and retires its
- * daemon instead of trusting a frozen default.
+ * daemon instead of trusting a frozen default. dryRun answers the same question
+ * with zero side effects: no confirm prompt, nothing persisted.
  */
 export async function resolveSetupRole(
   flag: string | undefined,
   platform: NodeJS.Platform = process.platform,
+  dryRun = false,
 ): Promise<DeploymentRole> {
   const config = await loadConfig();
   let role: DeploymentRole;
@@ -897,7 +899,7 @@ export async function resolveSetupRole(
     role = flag as DeploymentRole;
   } else {
     role = resolveRole(config, platform);
-    if (config.deployment?.role === undefined && role !== "local" && canPrompt()) {
+    if (!dryRun && config.deployment?.role === undefined && role !== "local" && canPrompt()) {
       const what =
         role === "host"
           ? "the host (owns tmux, sessions, daemon, bridge, inbox)"
@@ -911,19 +913,59 @@ export async function resolveSetupRole(
   if (role === "host" && platform === "darwin") {
     throw new Error('role "host" requires a linux/systemd machine — a Mac holding host duties is role "local"');
   }
-  const pin = flag !== undefined || role !== "local";
+  const pin = !dryRun && (flag !== undefined || role !== "local");
   if (pin && config.deployment?.role !== role) {
     await saveConfig({ ...config, deployment: { role } });
   }
   return role;
 }
 
-export async function setup(roleFlag?: string): Promise<void> {
+export interface SetupOptions {
+  tz?: string;
+  swapGb?: string;
+  dryRun?: boolean;
+}
+
+/** The host-provisioning context for this machine (flags win over defaults). */
+async function provisionContext(home: string, opts: SetupOptions) {
+  const { userInfo } = await import("node:os");
+  const swapGb = opts.swapGb === undefined ? 16 : Number(opts.swapGb);
+  if (!Number.isInteger(swapGb) || swapGb <= 0) {
+    throw new Error(`--swap-gb must be a positive integer (received "${opts.swapGb}")`);
+  }
+  if (opts.tz !== undefined && opts.tz === "") {
+    throw new Error("--tz needs an IANA zone value (e.g. Europe/London)");
+  }
+  return {
+    home,
+    unitsDir: `${import.meta.dir}/../config/units`,
+    user: process.env.USER ?? userInfo().username,
+    tz: opts.tz ?? "Europe/London",
+    swapGb,
+    bridgePort: process.env.CLAUDE0_BRIDGE_PORT ?? "8473",
+  };
+}
+
+export async function setup(roleFlag?: string, opts: SetupOptions = {}): Promise<void> {
   const { homedir } = await import("os");
   const home = process.env.CLAUDE0_HOME ?? homedir(); // CLAUDE0_HOME: test seam (see config.ts)
   const settingsPath = `${home}/.claude/settings.json`;
   const hookDir = `${home}/.config/claude0/hooks`;
   const scriptPath = (name: string) => `${hookDir}/${name}`;
+
+  // --dry-run previews host provisioning and exits — no side effects at all,
+  // no sudo prompt, nothing persisted (role resolution included).
+  if (opts.dryRun) {
+    const role = await resolveSetupRole(roleFlag, process.platform, true);
+    if (role !== "host" || process.platform !== "linux") {
+      throw new Error(`--dry-run previews host provisioning, but this machine's role is "${role}" (${process.platform})`);
+    }
+    const { probeSystemState, planProvision, renderDryRun } = await import("./core/provision");
+    const ctx = await provisionContext(home, opts);
+    const state = await probeSystemState(ctx);
+    for (const line of renderDryRun(planProvision(state, ctx), state, ctx)) console.log(line);
+    return;
+  }
 
   const configCreated = await ensureUserConfig();
   const role = await resolveSetupRole(roleFlag);
@@ -1063,8 +1105,18 @@ export async function setup(roleFlag?: string): Promise<void> {
     } catch {}
   }
 
+  // Host provisioning (the deploy/provision.sh port) runs last on both exit
+  // paths so the guided auth checklist is setup's final output — doctor's TODO
+  // list. CLAUDE0_HOME is the test seam: tests must never spawn sudo/apt/curl.
+  const provisionHost = async () => {
+    if (role !== "host" || process.platform !== "linux" || process.env.CLAUDE0_HOME) return;
+    const { runHostProvisioning } = await import("./core/provision");
+    await runHostProvisioning(await provisionContext(home, opts));
+  };
+
   if (!scriptsWritten && !settingsChanged && daemonResult === "unchanged" && integrationChanged.length === 0 && !configCreated) {
     console.log("Claude0 hooks and terminal integration already configured.");
+    await provisionHost();
     return;
   }
 
@@ -1090,6 +1142,7 @@ export async function setup(roleFlag?: string): Promise<void> {
       ? "\nClient setup complete — `claude0 terminal` attaches to the remote host."
       : "\nNew Claude Code sessions will now emit status/transcript events.",
   );
+  await provisionHost();
 }
 
 /**
@@ -1101,7 +1154,7 @@ export async function setup(roleFlag?: string): Promise<void> {
  */
 async function installDaemonAgent(home: string, role: DeploymentRole): Promise<"installed" | "updated" | "unchanged"> {
   // launchd is darwin-only. On the Linux VM host the daemon runs as the
-  // claude0-daemon.service user unit, installed by deploy/provision.sh like the
+  // claude0-daemon.service user unit, installed by host provisioning like the
   // other units — setup must not scatter launchd artifacts there.
   if (process.platform !== "darwin") return "unchanged";
   // One host owns the inbox. A darwin machine runs the launchd daemon only
