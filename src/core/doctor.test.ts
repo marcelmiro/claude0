@@ -9,7 +9,7 @@ import "../../test/helpers/home";
 import { TEST_HOME, CONFIG_DIR } from "../../test/helpers/home";
 import { test, expect, beforeEach } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync, cpSync } from "node:fs";
-import { doctorChecks, summarize, runDoctor, renderTmuxFragment, resurrectDoubleLoad, probe } from "./doctor";
+import { doctorChecks, summarize, runDoctor, renderTmuxFragment, renderTerminalLauncher, resurrectDoubleLoad, probe } from "./doctor";
 import type { DoctorContext } from "./doctor";
 import { DEFAULT_CONFIG, tmuxKeys } from "./config";
 import { claude0ResurrectDir } from "./resurrect";
@@ -143,6 +143,8 @@ async function installFragments(keys = tmuxKeys(null), resurrectDir: string | nu
   const tmux = renderTmuxFragment(await Bun.file(`${templateDir}/tmux.conf`).text(), keys, resurrectDir);
   writeFileSync(`${CONFIG_DIR}/tmux.conf`, tmux);
   cpSync(`${templateDir}/shell.zsh`, `${CONFIG_DIR}/shell.zsh`);
+  const launcher = renderTerminalLauncher(await Bun.file(`${templateDir}/terminal-launcher`).text(), DEFAULT_CONFIG.terminal);
+  writeFileSync(`${CONFIG_DIR}/terminal-launcher`, launcher);
 }
 
 /** Fake a user-managed TPM resurrect install under TEST_HOME. */
@@ -163,8 +165,8 @@ test("fragments: forward-rendered template matches; layered imports accepted on 
   writeFileSync(`${TEST_HOME}/.config/zsh/common.zsh`, 'source "$HOME/.config/claude0/shell.zsh"\n');
 
   const results = await check("fragments", ctx());
-  // [tmux fragment, tmux import, zsh fragment, zsh import]
-  expect(results.map((r) => r.status)).toEqual(["ok", "ok", "ok", "ok"]);
+  // [tmux fragment, tmux import, zsh fragment, zsh import, launcher fragment]
+  expect(results.map((r) => r.status)).toEqual(["ok", "ok", "ok", "ok", "ok"]);
 });
 
 test("fragments: a fragment rendered with custom keys is fresh iff config still holds those keys", async () => {
@@ -183,8 +185,8 @@ test("fragments: unrendered {{...}} tokens, a stale fragment, or a missing impor
   cpSync(`${templateDir}/tmux.conf`, `${CONFIG_DIR}/tmux.conf`);
   writeFileSync(`${CONFIG_DIR}/shell.zsh`, "# an old fragment\n");
   const results = await check("fragments", ctx());
-  // [tmux fragment, tmux import, zsh fragment, zsh import]
-  expect(results.map((r) => r.status)).toEqual(["fail", "fail", "fail", "fail"]);
+  // [tmux fragment, tmux import, zsh fragment, zsh import, launcher fragment]
+  expect(results.map((r) => r.status)).toEqual(["fail", "fail", "fail", "fail", "fail"]);
 });
 
 test("renderTmuxFragment renders binds per table and both resurrect outcomes", () => {
@@ -194,6 +196,59 @@ test("renderTmuxFragment renders binds per table and both resurrect outcomes", (
     "bind-key a x\nbind-key -n M-n y\nrun-shell '/h/plugins/tmux-resurrect/resurrect.tmux'\n",
   );
   expect(renderTmuxFragment(template, keys, null)).toBe("bind-key a x\nbind-key -n M-n y\n");
+});
+
+test("renderTerminalLauncher quotes every value; null remoteHost renders ''", () => {
+  const template = "d={{DEFAULT_TARGET}} h={{REMOTE_HOST}} l={{LOCAL_SESSION}} r={{REMOTE_SESSION}} again={{REMOTE_HOST}}";
+  expect(renderTerminalLauncher(template, DEFAULT_CONFIG.terminal)).toBe("d='local' h='' l='main' r='main' again=''");
+  const terminal: Config["terminal"] = {
+    defaultTarget: "remote",
+    remoteHost: "o'brien.net",
+    localSession: "a b",
+    remoteSession: "$x",
+  };
+  expect(renderTerminalLauncher(template, terminal)).toBe(
+    "d='remote' h='o'\\''brien.net' l='a b' r='$x' again='o'\\''brien.net'",
+  );
+});
+
+test("rendered launcher is valid sh: status prints the baked values, remote without a host exits 2", async () => {
+  const template = await Bun.file(`${templateDir}/terminal-launcher`).text();
+  const rendered = renderTerminalLauncher(template, { ...DEFAULT_CONFIG.terminal, localSession: "it's main" });
+  const path = `${TEST_HOME}/launcher-under-test`;
+  writeFileSync(path, rendered);
+
+  expect((await probe(["sh", "-n", path])).code).toBe(0);
+  const status = await probe(["sh", path, "status"]);
+  expect(status.code).toBe(0);
+  expect(status.out.split("\n")).toEqual([
+    "default_target=local",
+    "remote_host=<unset>",
+    "local_session=it's main",
+    "remote_session=main",
+  ]);
+  expect((await probe(["sh", path, "remote"])).code).toBe(2);
+
+  // Env override wins over the baked value: the same script's missing-host
+  // guard (exit 2) must not fire once CLAUDE0_REMOTE_HOST supplies a host.
+  // ".invalid" never resolves, so whatever runs after the guard fails without
+  // reaching a real host — any outcome but 2 proves the override was taken.
+  const overridden = await probe([
+    "sh", "-c", `CLAUDE0_REMOTE_HOST=claude0-test.invalid sh '${path}' remote`,
+  ]);
+  expect(overridden.code).not.toBe(2);
+});
+
+test("fragments: launcher freshness tracks the terminal config; it emits no import result", async () => {
+  await installFragments();
+  const results = await check("fragments", ctx());
+  expect(results).toHaveLength(5);
+  expect(results[4].status).toBe("ok");
+  expect(results[4].label).toContain("launcher");
+
+  // config changed since the launcher was rendered → stale
+  const config: Config = { ...DEFAULT_CONFIG, terminal: { ...DEFAULT_CONFIG.terminal, remoteHost: "vm.ts.net" } };
+  expect((await check("fragments", ctx({ config })))[4].status).toBe("fail");
 });
 
 test("fragments: fresh in both resurrect render outcomes, stale across them", async () => {

@@ -19,8 +19,8 @@ import { detectStatus } from "./core/status";
 import { eventSourcedStatus } from "./core/hook-events";
 import { nativeStatus, resolveStatus } from "./core/session-state";
 import { loadNameCache, slugify } from "./core/names";
-import { PATHS, loadConfig, saveConfig, ensureUserConfig, tmuxKeys, resolveRole } from "./core/config";
-import { renderTmuxFragment, importAccepted, installedHookVersion, runDoctor } from "./core/doctor";
+import { PATHS, DEFAULT_CONFIG, loadConfig, saveConfig, ensureUserConfig, tmuxKeys, resolveRole } from "./core/config";
+import { renderTmuxFragment, renderTerminalLauncher, importAccepted, installedHookVersion, runDoctor } from "./core/doctor";
 import type { Config, DeploymentRole } from "./types";
 import { PRESENCE_WINDOW_S } from "./core/presence";
 import { pickSavedCwd, resolveRestoreTarget, resolveResurrect, resurrectOptionSet, resurrectRenderDir, resurrectCommand, cloneResurrectCommands, RESURRECT_COMMIT, daemonSaveCommand, RESURRECT_SAVE_INTERVAL_MS } from "./core/resurrect";
@@ -773,16 +773,21 @@ async function installTerminalIntegration(home: string, resurrectDir: string | n
   ];
   const changed: string[] = [];
 
-  // Render tmux.keys into the fragment's {{BIND_*}} tokens (shared with doctor's
-  // freshness check so the two can't diverge). A key change lands on the next
-  // setup run (the fragment is re-sourced below when it differs).
-  const keys = tmuxKeys(await loadConfig().catch(() => null));
+  // Render tmux.keys into the fragment's {{BIND_*}} tokens and terminal.* into
+  // the launcher's (both shared with doctor's freshness check so the two can't
+  // diverge). A config change lands on the next setup run (the tmux fragment is
+  // re-sourced below when it differs).
+  const config = await loadConfig().catch(() => null);
+  const keys = tmuxKeys(config);
   const staleBinds: string[][] = [];
 
   for (const file of files) {
     let wanted = await Bun.file(file.source).text();
     if (file.source.endsWith("tmux.conf")) {
       wanted = renderTmuxFragment(wanted, keys, resurrectDir);
+    }
+    if (file.source.endsWith("terminal-launcher")) {
+      wanted = renderTerminalLauncher(wanted, (config ?? DEFAULT_CONFIG).terminal);
     }
     let existing = "";
     try { existing = await Bun.file(file.target).text(); } catch {}
@@ -1125,6 +1130,9 @@ export async function setup(roleFlag?: string, opts: SetupOptions = {}): Promise
     console.log(`  Profile: ${home}/.config/claude0/{tmux.conf,shell.zsh}`);
     console.log(`  Command: ${home}/.local/bin/c0`);
     console.log(`  Launcher: ${home}/.config/claude0/terminal-launcher`);
+    if (integrationChanged.some((path) => path.endsWith("/terminal-launcher"))) {
+      console.log(`  Note: terminal.* values are baked into the launcher — after editing ${PATHS.config}, re-run claude0 setup.`);
+    }
   }
 
   if (configCreated) console.log(`Claude0 config created: ${PATHS.config}`);

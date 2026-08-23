@@ -7,7 +7,7 @@
 
 import { existsSync, accessSync, constants } from "node:fs";
 import { userInfo } from "node:os";
-import { tmuxKeys, parseTmuxKey } from "./config";
+import { DEFAULT_CONFIG, tmuxKeys, parseTmuxKey } from "./config";
 import { resolveResurrect, resurrectOptionSet, resurrectRenderDir } from "./resurrect";
 import type { ResurrectResolution } from "./resurrect";
 import type { Config, DeploymentRole, TmuxKeys } from "../types";
@@ -43,8 +43,8 @@ export interface DoctorCheck {
 
 /** Tools claude0 functionally invokes on every role. */
 const ESSENTIAL_TOOLS = ["tmux", "git", "bun", "claude", "gh", "lsof", "nc"] as const;
-/** doctor.sh parity: what the host workload additionally needs (jq leaves with the launcher rewrite). */
-const HOST_TOOLS = ["claude0", "zsh", "curl", "jq", "mosh-server", "bwrap", "socat"] as const;
+/** doctor.sh parity: what the host workload additionally needs. */
+const HOST_TOOLS = ["claude0", "zsh", "curl", "mosh-server", "bwrap", "socat"] as const;
 const HOST_UNITS = [
   "tmux.service",
   "claude0-bridge.service",
@@ -106,6 +106,28 @@ export function renderTmuxFragment(template: string, keys: TmuxKeys, resurrectDi
     .replace("{{RESURRECT_LOAD}}\n", resurrectDir === null ? "" : `run-shell '${resurrectDir}/resurrect.tmux'\n`);
 }
 
+/**
+ * Render the terminal launcher template: the four terminal.* config values are
+ * baked in at install time, so the script reads nothing at runtime. Every
+ * value is single-quote shell-escaped — session names and hosts
+ * come from user-edited config.json and must not break or inject into the
+ * script. A null remoteHost renders as '' so the launcher's missing-host guard
+ * fires. Setup writes this exact output; doctor re-renders and compares, so a
+ * config edit without a re-run reads as a stale launcher.
+ */
+export function renderTerminalLauncher(template: string, terminal: Config["terminal"]): string {
+  const quoted = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
+  const values: Record<string, string> = {
+    "{{DEFAULT_TARGET}}": quoted(terminal.defaultTarget),
+    "{{REMOTE_HOST}}": quoted(terminal.remoteHost ?? ""),
+    "{{LOCAL_SESSION}}": quoted(terminal.localSession),
+    "{{REMOTE_SESSION}}": quoted(terminal.remoteSession),
+  };
+  // Single pass: a substituted value that itself looks like a token must not
+  // be re-substituted by a later replacement.
+  return template.replace(/\{\{[A-Z_]+\}\}/g, (token) => values[token] ?? token);
+}
+
 /** Pure: does the fragment's resurrect run-shell line collide with a user-managed copy? */
 export function resurrectDoubleLoad(fragment: string, resolution: ResurrectResolution): boolean {
   return (
@@ -162,7 +184,16 @@ function fragmentsCheck(): DoctorCheck {
         ctx.role,
         ctx.home,
       );
-      const fragments = [
+      // `entry` etc. are absent for fragments no dotfile needs to import.
+      const fragments: Array<{
+        kind: string;
+        installed: string;
+        template: string;
+        render: (template: string) => string;
+        entry?: string;
+        aux?: string;
+        importPath?: string;
+      }> = [
         {
           kind: "tmux",
           installed: `${ctx.home}/.config/claude0/tmux.conf`,
@@ -181,6 +212,12 @@ function fragmentsCheck(): DoctorCheck {
           importPath: ".config/claude0/shell.zsh",
           render: (template: string) => template,
         },
+        {
+          kind: "launcher",
+          installed: `${ctx.home}/.config/claude0/terminal-launcher`,
+          template: `${ctx.templateDir}/terminal-launcher`,
+          render: (template: string) => renderTerminalLauncher(template, (ctx.config ?? DEFAULT_CONFIG).terminal),
+        },
       ];
       const results: DoctorResult[] = [];
       for (const fragment of fragments) {
@@ -195,11 +232,13 @@ function fragmentsCheck(): DoctorCheck {
             ? ok(`current Claude0-owned ${fragment.kind} fragment is installed`)
             : fail(`Claude0-owned ${fragment.kind} fragment is missing or stale: ${fragment.installed} — run claude0 setup`),
         );
-        results.push(
-          (await importAccepted(fragment.entry, fragment.aux, fragment.importPath))
-            ? ok(`${fragment.entry} imports the Claude0 fragment`)
-            : fail(`${fragment.entry} does not import the Claude0 fragment — run claude0 setup`),
-        );
+        if (fragment.entry !== undefined && fragment.aux !== undefined && fragment.importPath !== undefined) {
+          results.push(
+            (await importAccepted(fragment.entry, fragment.aux, fragment.importPath))
+              ? ok(`${fragment.entry} imports the Claude0 fragment`)
+              : fail(`${fragment.entry} does not import the Claude0 fragment — run claude0 setup`),
+          );
+        }
       }
       return results;
     },

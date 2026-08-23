@@ -53,11 +53,13 @@ const cmd = process.argv[2];
 async function runTerminal(args: string[]): Promise<never> {
   const home = process.env.HOME;
   const installed = home ? `${home}/.config/claude0/terminal-launcher` : "";
-  const bundled = `${import.meta.dir}/../config/terminal-launcher`;
-  const command = installed && (await Bun.file(installed).exists())
-    ? [installed, ...args]
-    : ["/bin/sh", bundled, ...args];
-  const child = Bun.spawn(command, {
+  if (!installed || !(await Bun.file(installed).exists())) {
+    // The bundled copy is a template (terminal.* values are baked in by setup),
+    // so there is nothing runnable to fall back to.
+    console.error("No terminal launcher installed. Run: claude0 setup");
+    process.exit(2);
+  }
+  const child = Bun.spawn([installed, ...args], {
     stdin: "inherit",
     stdout: "inherit",
     stderr: "inherit",

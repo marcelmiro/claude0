@@ -1,55 +1,40 @@
 #!/bin/sh
 # Start the local or remote tmux environment used by Claude0. All durable choices
-# live in the single user-editable config.json; CLI arguments are transient.
+# live in the single user-editable config.json; the terminal.* values are baked
+# in here when `claude0 setup` renders this script, so config edits take effect
+# after re-running setup. CLI arguments and CLAUDE0_* env vars are transient.
 
 PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/.bun/bin:/usr/bin:/bin:${PATH:-}"
 export PATH
-
-config_file="$HOME/.config/claude0/config.json"
 
 usage() {
   cat <<'EOF'
 Usage: claude0 terminal [local|remote|status]
 
 With no argument, uses terminal.defaultTarget from ~/.config/claude0/config.json.
-Edit the file shown by: claude0 config
+Edit the file shown by: claude0 config — then re-run: claude0 setup
 EOF
-}
-
-command -v jq >/dev/null 2>&1 || {
-  printf 'jq is required to read %s.\n' "$config_file" >&2
-  exit 127
-}
-[ -r "$config_file" ] || {
-  printf 'Claude0 config is missing. Run: claude0 setup\n' >&2
-  exit 2
-}
-
-read_json() {
-  filter=$1
-  fallback=$2
-  value=$(jq -er "$filter" "$config_file" 2>/dev/null) || value=$fallback
-  printf '%s' "$value"
 }
 
 command=${1:-}
 case "$command" in
   status)
-    printf 'default_target=%s\n' "$(read_json '.terminal.defaultTarget' local)"
-    printf 'remote_host=%s\n' "$(read_json '.terminal.remoteHost // "<unset>"' '<unset>')"
-    printf 'local_session=%s\n' "$(read_json '.terminal.localSession' main)"
-    printf 'remote_session=%s\n' "$(read_json '.terminal.remoteSession' main)"
+    host={{REMOTE_HOST}}
+    printf 'default_target=%s\n' {{DEFAULT_TARGET}}
+    printf 'remote_host=%s\n' "${host:-<unset>}"
+    printf 'local_session=%s\n' {{LOCAL_SESSION}}
+    printf 'remote_session=%s\n' {{REMOTE_SESSION}}
     exit 0
     ;;
   local|remote) mode=$command ;;
   -h|--help|help) usage; exit 0 ;;
-  '') mode=$(read_json '.terminal.defaultTarget' local) ;;
+  '') mode={{DEFAULT_TARGET}} ;;
   *) usage >&2; exit 2 ;;
 esac
 
 case "$mode" in
   local)
-    session=${CLAUDE0_LOCAL_TMUX_SESSION:-$(read_json '.terminal.localSession' main)}
+    session=${CLAUDE0_LOCAL_TMUX_SESSION:-{{LOCAL_SESSION}}}
     command -v tmux >/dev/null 2>&1 || {
       printf 'tmux is required for local Claude0 mode.\n' >&2
       exit 127
@@ -57,10 +42,10 @@ case "$mode" in
     tmux new-session -A -s "$session"
     ;;
   remote)
-    host=${CLAUDE0_REMOTE_HOST:-$(read_json '.terminal.remoteHost // empty' '')}
-    session=${CLAUDE0_REMOTE_TMUX_SESSION:-$(read_json '.terminal.remoteSession' main)}
+    host=${CLAUDE0_REMOTE_HOST:-{{REMOTE_HOST}}}
+    session=${CLAUDE0_REMOTE_TMUX_SESSION:-{{REMOTE_SESSION}}}
     [ -n "$host" ] || {
-      printf 'No remote host configured. Edit terminal.remoteHost in %s.\n' "$config_file" >&2
+      printf 'No remote host configured. Set terminal.remoteHost in ~/.config/claude0/config.json, then re-run: claude0 setup\n' >&2
       exit 2
     }
     command -v mosh >/dev/null 2>&1 || {

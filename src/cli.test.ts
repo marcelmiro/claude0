@@ -79,9 +79,31 @@ test("setup installs Claude0-owned terminal fragments and imports them idempoten
   expect(tmux.match(/\.config\/claude0\/tmux\.conf/g)).toHaveLength(2); // test + source in one import line
 });
 
-test("setup installs the config.json-reading terminal launcher", async () => {
+test("setup bakes terminal.* into the launcher and re-renders when config changes", async () => {
+  const { DEFAULT_CONFIG } = await import("./core/config");
+  const config = {
+    ...DEFAULT_CONFIG,
+    deployment: { role: "local" },
+    terminal: { defaultTarget: "remote", remoteHost: "vm.tailnet.ts.net", localSession: "desk", remoteSession: "vm" },
+  };
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(`${configDir}/config.json`, JSON.stringify(config));
+
   await setup();
-  expect(readFileSync(`${configDir}/terminal-launcher`, "utf8")).toContain('config_file="$HOME/.config/claude0/config.json"');
+  const launcher = readFileSync(`${configDir}/terminal-launcher`, "utf8");
+  expect(launcher).toContain("'vm.tailnet.ts.net'");
+  expect(launcher).toContain("'desk'");
+  expect(launcher).toContain("'vm'");
+  expect(launcher).toContain("'remote'");
+  expect(launcher).not.toContain("{{");
+  expect(launcher).not.toContain("jq");
+
+  writeFileSync(
+    `${configDir}/config.json`,
+    JSON.stringify({ ...config, terminal: { ...config.terminal, remoteHost: "vm2.tailnet.ts.net" } }),
+  );
+  await setup();
+  expect(readFileSync(`${configDir}/terminal-launcher`, "utf8")).toContain("'vm2.tailnet.ts.net'");
 });
 
 /** Count Claude0 registrations (command points into the Claude0 hooks dir) for an event. */
