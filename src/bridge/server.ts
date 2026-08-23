@@ -1805,7 +1805,9 @@ export function startBridge(): ReturnType<typeof Bun.serve> {
     async fetch(req) {
       try {
         return await route(req);
-      } catch {
+      } catch (e) {
+        const url = new URL(req.url);
+        console.error(`unhandled error on ${req.method} ${url.pathname}:`, e);
         return json({ ok: false, reason: "internal-error" }, 500);
       }
     },
