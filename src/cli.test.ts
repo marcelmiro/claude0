@@ -62,7 +62,7 @@ test("setup installs Claude0-owned terminal fragments and imports them idempoten
   const shellFragment = readFileSync(`${configDir}/shell.zsh`, "utf8");
   const tmuxFragment = readFileSync(`${configDir}/tmux.conf`, "utf8");
   expect(shellFragment).not.toContain("PROMPT=");
-  expect(tmuxFragment).toContain("display-popup -E");
+  expect(tmuxFragment).toContain("display-popup -E -w 90% -h 85% claude0 tui");
   expect(tmuxFragment).toContain("@claude0_status");
   expect(tmuxFragment).not.toContain("@plugin");
   expect(tmuxFragment).not.toContain("catppuccin");

@@ -2,7 +2,7 @@
 
 # Claude0
 
-Full-screen terminal TUI (blessed) for managing Claude Code sessions. Launched via `tmux display-popup`. Shows sessions grouped by repo with live status detection, ANSI preview pane, vim navigation, attention notifications, and AI naming.
+Full-screen terminal TUI (blessed) for managing Claude Code sessions. Launched via `tmux display-popup` (`claude0 tui`; bare `claude0` prints help). Shows sessions grouped by repo with live status detection, ANSI preview pane, vim navigation, attention notifications, and AI naming.
 
 ## Environment
 
@@ -34,7 +34,8 @@ The mobile bridge (`claude0 bridge`) runs as a systemd user unit on the Linux VM
 
 | Command | Description | Output |
 |---------|-------------|--------|
-| `claude0` | Open full TUI (`CLAUDE0_FOCUS_PANE` env var pre-selects a pane) | blessed screen |
+| `claude0` | Print help (same as `--help`) | stdout |
+| `claude0 tui` | Open full TUI (`CLAUDE0_FOCUS_PANE` env var pre-selects a pane) | blessed screen |
 | `claude0 next` | Switch to next attention session (oldest first) | tmux display-message |
 | `claude0 reset` | Reset all window names to "claude", clear ⚡ and attention state | tmux display-message |
 | `claude0 status` | Tmux status-right monitor (`⚡3 🔄2`) | stdout |
@@ -58,7 +59,7 @@ The mobile bridge (`claude0 bridge`) runs as a systemd user unit on the Linux VM
 
 **`claude0 switch` scoring**: exact=100, starts-with=80, contains=60, word-starts-with=40, subsequence=20. Matches against window names with ⚡/🔄 stripped.
 
-**Focus pane pre-selection**: Set `CLAUDE0_FOCUS_PANE=%42` (tmux pane ID) to pre-select that session on launch. Requires `run-shell` to expand the format string: `bind a run-shell 'tmux set-environment CLAUDE0_FOCUS_PANE "#{pane_id}"' \; display-popup -E -w 90% -h 85% claude0`. Falls back to first session if pane not found.
+**Focus pane pre-selection**: Set `CLAUDE0_FOCUS_PANE=%42` (tmux pane ID) to pre-select that session on launch. Requires `run-shell` to expand the format string: `bind a run-shell 'tmux set-environment CLAUDE0_FOCUS_PANE "#{pane_id}"' \; display-popup -E -w 90% -h 85% claude0 tui`. Falls back to first session if pane not found.
 
 **`claude0 setup` details**: Installs Claude0's Claude lifecycle hooks under `~/.config/claude0/hooks`, preserving existing hooks and settings. It also updates narrowly scoped Claude0 tmux/zsh fragments under `~/.config/claude0/`, installs the `~/.local/bin/claude0` and `~/.local/bin/c0` commands plus a private terminal launcher under `~/.config/claude0/`, and adds one import to the user's `.tmux.conf` and `.zshrc`. Safe to run multiple times (idempotent); personal dotfiles, prompts, and tmux presentation are never replaced, and a user-managed tmux-resurrect always takes precedence over the claude0-owned clone ([ADR 23](docs/adr/0023-dotfiles-independence.md)).
 

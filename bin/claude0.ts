@@ -8,7 +8,7 @@ function help() {
   \x1b[1mUsage:\x1b[0m  claude0 [command]
 
   \x1b[1mCommands:\x1b[0m
-    \x1b[36m(none)\x1b[0m              Open the full TUI
+    \x1b[36mtui\x1b[0m                 Open the full TUI
     \x1b[36mnext\x1b[0m                Switch to next attention session (oldest first)
     \x1b[36mreset\x1b[0m               Reset all window names and clear attention state
     \x1b[36mstatus\x1b[0m              Tmux status-right monitor (⚡3 🔄2)
@@ -69,6 +69,9 @@ async function runTerminal(args: string[]): Promise<never> {
 
 switch (cmd) {
   case undefined:
+    help();
+    break;
+  case "tui":
     await import("../src/index");
     break;
   case "-h":
