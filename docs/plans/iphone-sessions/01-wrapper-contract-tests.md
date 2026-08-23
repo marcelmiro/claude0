@@ -10,7 +10,7 @@
 
 ## Goal
 
-Build a test suite that pins the behavior of the parts of CSM that **wrap Claude
+Build a test suite that pins the behavior of the parts of Claude0 that **wrap Claude
 Code** — status detection and session-content parsing — as executable contracts.
 
 Two outcomes:
@@ -21,7 +21,7 @@ Two outcomes:
    the failing tests are the specification for Implementation 2.
 2. **Detect Claude Code drift.** A new `claude` release that changes hook
    payloads, transcript shapes, or TUI rendering should make a test fail loudly
-   instead of silently breaking CSM in production.
+   instead of silently breaking Claude0 in production.
 
 ## Why first
 
@@ -85,8 +85,8 @@ Before writing assertions, capture ground truth from a live session on the Mac
 1. Install a throwaway hook for every event of interest that appends its stdin
    to a dump file:
    ```sh
-   # ~/.config/csm/hooks/dump.sh
-   printf '%s\n' "$(cat)" >> /tmp/csm-hook-dump.jsonl
+   # ~/.config/claude0/hooks/dump.sh
+   printf '%s\n' "$(cat)" >> /tmp/claude0-hook-dump.jsonl
    ```
    Register it for `SessionStart`, `UserPromptSubmit`, `PreToolUse`,
    `PostToolUse`, `Notification`, `Stop`, `SubagentStop`.
@@ -188,7 +188,7 @@ test("scraper misreports scrolled-up running session as ready", () => {
 > definition-of-done. Build it once the tool is a daily dependency. Spec retained
 > below for when that time comes.
 
-A test, gated behind an env flag (e.g. `CSM_LIVE_CLAUDE=1`) so it does not run in
+A test, gated behind an env flag (e.g. `CLAUDE0_LIVE_CLAUDE=1`) so it does not run in
 normal CI without a `claude` binary, that:
 
 - Spawns a minimal real session, captures a fresh hook payload + transcript line,

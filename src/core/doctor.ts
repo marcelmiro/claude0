@@ -1,8 +1,7 @@
 /**
- * `claude0 doctor` — read-only, role-aware health checks. Superset of the
- * deploy/doctor.sh host checks; deliberately never prints credentials or the
- * bridge token. Every probe is wrapped: a failed probe is a failed check,
- * never a crash.
+ * `claude0 doctor` — read-only, role-aware health checks; deliberately never
+ * prints credentials or the bridge token. Every probe is wrapped: a failed
+ * probe is a failed check, never a crash.
  */
 
 import { existsSync, accessSync, constants } from "node:fs";
@@ -43,7 +42,7 @@ export interface DoctorCheck {
 
 /** Tools claude0 functionally invokes on every role. */
 const ESSENTIAL_TOOLS = ["tmux", "git", "bun", "claude", "gh", "lsof", "nc"] as const;
-/** doctor.sh parity: what the host workload additionally needs. */
+/** What the host workload additionally needs. */
 const HOST_TOOLS = ["claude0", "zsh", "curl", "mosh-server", "bwrap", "socat"] as const;
 const HOST_UNITS = [
   "tmux.service",
@@ -345,7 +344,7 @@ function unitsCheck(): DoctorCheck {
   };
 }
 
-/** Executable-at-this-path, `command -v` semantics (doctor.sh probed via PATH= command -v). */
+/** Executable-at-this-path, `command -v` semantics. */
 function executable(path: string): boolean {
   try {
     accessSync(path, constants.X_OK);

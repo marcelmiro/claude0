@@ -9,7 +9,7 @@ sessions. It supports two independent modes:
 
 ## Install Claude0 on a computer
 
-Requirements: [Bun](https://bun.sh), tmux, zsh, Git, jq, and Claude Code. Remote
+Requirements: [Bun](https://bun.sh), tmux, zsh, Git, and Claude Code. Remote
 mode also requires Mosh on the client and host.
 
 ```sh
@@ -32,9 +32,11 @@ Claude0-owned extensions at:
 ~/.local/bin/c0
 ```
 
-It adds one import line to `~/.tmux.conf` and `~/.zshrc`; it does not replace
-personal dotfiles or install tmux themes/plugins. The dotfiles profile owns
-presentation, navigation, clipboard behavior, and TPM.
+It adds one import line to `~/.tmux.conf` and `~/.zshrc`; it never replaces or
+templates personal dotfiles, and none are required — Claude0 installs everything
+it needs, including tmux-resurrect (a user-managed TPM copy always takes
+precedence over the Claude0-owned clone). See
+[ADR 23](docs/adr/0023-dotfiles-independence.md).
 
 ### Migrating an existing `~/Documents` installation
 
@@ -53,18 +55,18 @@ bun run scripts/migrate-dev-layout.ts apply
 ```
 
 Immediately before a later account rename, generate a fresh home-only manifest
-from the already-migrated layout, then use the cutover guide:
+from the already-migrated layout, then run `apply` on the renamed account:
 
 ```sh
 bun run scripts/migrate-dev-layout.ts preflight \
   --target-home /Users/marcel \
   --source-root "$HOME/dev" \
   --target-root /Users/marcel/dev
-scripts/migrate-dev-layout-wizard.sh prepare
+# after the rename, as the new account:
+bun run scripts/migrate-dev-layout.ts apply
 ```
 
-The wizard resumes from `~/dev/claude0` with `finish` after the required macOS
-logout. Each apply phase keeps path-state backups under
+Each apply phase keeps path-state backups under
 `~/.config/claude0/migrations/`. See
 [ADR 17](docs/adr/0017-user-centric-development-layout.md) for the invariants.
 
@@ -105,28 +107,19 @@ through to a local login shell:
 ```
 
 Remote mode requires Mosh on both machines. Hostname, mode, and session choices
-are fields in the machine-local `~/.config/claude0/config.json`, never committed to dotfiles.
+are fields in the machine-local `~/.config/claude0/config.json`.
 The remote Mosh server keeps a reconnect window of 30 days so ordinary laptop
 sleep, roaming, and travel do not strand an open terminal.
 
-On Linux, install the optional Linux profile from the dotfiles repository for
-the same tmux UI, bindings, plugins, and portable shell defaults used on macOS.
-Claude0 contributes only its command path and application integration.
-
 ## Provision an always-on Linux host
 
-Install the explicit Linux dotfiles profile before provisioning Claude0:
-
 ```sh
-git clone git@github.com:marcelmiro/dotfiles.git ~/.dotfiles
-~/.dotfiles/install linux
-~/.dotfiles/bin/setup-linux
-
 cd ~/dev/claude0
 claude0 setup --role host --tz Europe/Madrid --swap-gb 16
-~/.dotfiles/doctor
 claude0 doctor
 ```
 
-See [deploy/README.md](deploy/README.md) for prerequisites and
-[deploy/RUNBOOK.md](deploy/RUNBOOK.md) for a full VM cutover.
+One idempotent pass with a single sudo authorization; interactive auth
+(`claude`, `gh`, `tailscale up`) ends as a printed checklist. See
+[deploy/README.md](deploy/README.md) for prerequisites and the role model in
+[ADR 22](docs/adr/0022-per-machine-roles.md).

@@ -37,7 +37,7 @@ Claude0 Ideas Backlog
 - Worktree path template
 - Configurable IDE command (not just Cursor)
 
-## Session Inbox (IN FLIGHT — worktree ../csm-inbox, branch `inbox`, ADR 0013)
+## Session Inbox (SHIPPED — ADR 0013; upgrade ideas below still open)
 Lifecycle model locked 2026-08-02 (see docs/adr/0013 + CONTEXT.md terms). Phase 1 = model + Mac CLI verbs + tmux sidebar prototype; Phase 2 = portkey Inbox UI. Upgrade-path ideas deferred during the grilling, to revisit AFTER living with v1:
 - Blocked-on links: point a blocked session at another session or Linear ticket, auto-resurface into Needs you when the blocker resolves (derived self-healing; v1 is free-text note only)
 - Repo chip filter on the inbox (narrow all sections to one repo) — compatible with sections-primary; repo *grouping* as primary axis is rejected

@@ -18,7 +18,7 @@
 
 ## Summary
 
-CSM has zero tests and its status/transcript sensing is unpinned. Build a
+Claude0 has zero tests and its status/transcript sensing is unpinned. Build a
 hermetic `bun:test` suite that (a) captures Claude Code's **real** hook,
 transcript, and viewport shapes as fixtures + `SCHEMA.md`, closing Gate A;
 (b) encodes the event-sourced status truth table (Contract A) and transcript
@@ -148,8 +148,8 @@ keys; returns the last assistant message.
 ## Verification
 
 - Run: `bun test`
-- Capture procedure (closes Gate A): install a throwaway `~/.config/csm/hooks/dump.sh`
-  (`printf '%s\n' "$(cat)" >> /tmp/csm-hook-dump.jsonl`) registered for all seven
+- Capture procedure (closes Gate A): install a throwaway `~/.config/claude0/hooks/dump.sh`
+  (`printf '%s\n' "$(cat)" >> /tmp/claude0-hook-dump.jsonl`) registered for all seven
   hook events (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse,
   Notification, Stop, SubagentStop) — note this is 7 *hooks*, distinct from the 5
   fixture *scenarios* below, several of which span multiple events → drive a live

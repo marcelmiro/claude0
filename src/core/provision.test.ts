@@ -13,7 +13,6 @@ import {
   HOST_PACKAGES,
   PRODUCT_UNITS,
   SYSCTL_FILE,
-  OLD_SYSCTL_FILE,
   planProvision,
   executeProvision,
   guidedStops,
@@ -40,7 +39,6 @@ function satisfied(overrides: Partial<SystemState> = {}): SystemState {
     zshPath: "/usr/bin/zsh",
     loginShell: "/usr/bin/zsh",
     sysctlFilePresent: true,
-    oldSysctlFilePresent: false,
     swapActive: true,
     fstabHasSwap: true,
     timezone: "Europe/London",
@@ -132,7 +130,7 @@ test("login shell: chsh only when the passwd entry differs; targets /usr/bin/zsh
   expect(pending.commands).toEqual([{ argv: ["sudo", "chsh", "-s", "/usr/bin/zsh", "marcel"] }]);
 });
 
-test("sysctl: writes the claude0-named file, removes the legacy csm file, reloads", () => {
+test("sysctl: writes the claude0-named file and reloads", () => {
   const fresh = step(planProvision(satisfied({ sysctlFilePresent: false }), ctx), "sysctl");
   expect(fresh.verdict).toBe("run");
   expect(fresh.commands.map((c) => c.argv)).toEqual([
@@ -140,21 +138,6 @@ test("sysctl: writes the claude0-named file, removes the legacy csm file, reload
     ["sudo", "sysctl", "--system"],
   ]);
   expect(fresh.commands[0].stdin).toContain("fs.inotify.max_user_watches = 1048576");
-
-  // the real VM's migration case: old file present, new absent
-  const migrate = step(planProvision(satisfied({ sysctlFilePresent: false, oldSysctlFilePresent: true }), ctx), "sysctl");
-  expect(migrate.commands.map((c) => c.argv)).toEqual([
-    ["sudo", "tee", SYSCTL_FILE],
-    ["sudo", "rm", "-f", OLD_SYSCTL_FILE],
-    ["sudo", "sysctl", "--system"],
-  ]);
-
-  // both present: only the legacy file is removed
-  const cleanup = step(planProvision(satisfied({ oldSysctlFilePresent: true }), ctx), "sysctl");
-  expect(cleanup.commands.map((c) => c.argv)).toEqual([
-    ["sudo", "rm", "-f", OLD_SYSCTL_FILE],
-    ["sudo", "sysctl", "--system"],
-  ]);
 
   expect(step(planProvision(satisfied(), ctx), "sysctl").verdict).toBe("done");
 });

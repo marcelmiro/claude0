@@ -5,17 +5,17 @@ Status: accepted
 
 ## Context
 
-CSM wraps the **interactive** Claude Code TUI — tmux/`ps` discovery, hooks, the native status
+Claude0 wraps the **interactive** Claude Code TUI — tmux/`ps` discovery, hooks, the native status
 file, JSONL transcripts — rather than driving Claude headless through the Agent SDK. That
-choice is deliberate: the sessions CSM manages are real sessions you can attach to at the
+choice is deliberate: the sessions Claude0 manages are real sessions you can attach to at the
 desk. It is also a constraint, because some things Claude does are only ever expressed as
 pixels in a terminal.
 
 A survey of eight other tools that wrap Claude the same way was run on 2026-07-16 to answer:
-where is CSM scrappy, and does anyone have a better mechanism worth adopting? Its findings
+where is Claude0 scrappy, and does anyone have a better mechanism worth adopting? Its findings
 are recorded below. **Those competitor observations are a dated snapshot** — the repos were
 cloned to scratch and are gone, so nothing here about another tool can be re-verified without
-re-cloning. Everything stated about *CSM's own* code was re-verified against `5f6b2bf`.
+re-cloning. Everything stated about *Claude0's own* code was re-verified against `5f6b2bf`.
 
 The survey's conclusion: the read/observe half (discovery, session-ID resolution, status,
 content, subagents, notifications) is structured and in good shape. The remaining scrappiness
@@ -37,7 +37,7 @@ gives up the interactive session, and that trade is refused.
 
 ### Adopted from the survey
 
-- **`--session-id` dictation.** Sessions CSM launches get a UUID we mint, so the id is known
+- **`--session-id` dictation.** Sessions Claude0 launches get a UUID we mint, so the id is known
   before the process starts. This removed a launch→hook race and fixed forks, whose
   `SessionStart` hook records the *parent's* id. Live for the bridge (`tmux.ts`) and forks
   (`index.ts`). **Not yet on the TUI wizard's own launch path** — `buildLaunchCommand`
@@ -95,7 +95,7 @@ gives up the interactive session, and that trade is refused.
 Three patterns were observed and are explicitly out of bounds: auto-selecting "Yes, and don't
 ask again" on injected commands; mapping an unrecognised permission prompt to a *guessed*
 option instead of aborting; and binary-patching the Claude CLI to strip its anti-debug guards.
-The first two trade correctness for convenience in exactly the place CSM refuses to; the third
+The first two trade correctness for convenience in exactly the place Claude0 refuses to; the third
 is a supply-chain risk that breaks every release.
 
 ## Consequences
@@ -103,7 +103,7 @@ is a supply-chain risk that breaks every release.
 - Keystroke paths stay in the codebase permanently, and stay tested. "Replace the last
   send-keys call" is not a goal — some of them are the failure-mode safety net.
 - Question interception is gated three ways before the hook answers: the pane must be
-  CSM-tracked, a phone must be connected (a `bridge-consumer` marker within 40s), and the
+  Claude0-tracked, a phone must be connected (a `bridge-consumer` marker within 40s), and the
   window must not be focused — including a macOS frontmost-app check. Any ambiguity falls
   through to the native widget, so the desk experience is never degraded by a failed probe.
   This is the interaction model whose absence caused an earlier always-intercept version to be

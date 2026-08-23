@@ -83,7 +83,7 @@ begin.
 (claude v2.1.191, 2026-06-25; evidence in `test/fixtures/SCHEMA.md`). A3/A4
 differed from the original plan and were reconciled (plans amended). A6 (the
 attach-aware blocking hook — highest risk) was proven in a **contained
-project-scoped** spike (`/tmp/csm-a6-spike/.claude/`, since removed) so it could
+project-scoped** spike (`/tmp/claude0-a6-spike/.claude/`, since removed) so it could
 never intercept real sessions.
 
 This is the gate the whole project hinges on. The prior research cited

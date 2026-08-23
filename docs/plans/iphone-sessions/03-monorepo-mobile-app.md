@@ -95,7 +95,7 @@ terminal fallback) forces it.
 **Stack (decided — doc 00): Preact + `@preact/signals` + `htm`, no build step**,
 served as ES modules. Signals map 1:1 onto SSE pushes (an SSE message updates a
 signal → the list/detail re-render), which is the whole interaction model; `htm`
-avoids a JSX compiler so there's no toolchain. ~5KB, consistent with CSM's
+avoids a JSX compiler so there's no toolchain. ~5KB, consistent with Claude0's
 low-dependency ethos. Inline assets; mobile-first CSS.
 
 **Screens:**
@@ -114,9 +114,9 @@ bridge is unreachable (show last-known state, queue nothing dangerous).
 ## Deployment (Mac)
 
 - The Mac, kept awake (`caffeinate` / never-sleep), running tmux + zsh + `claude`
-  + CSM + the `src/bridge` server (e.g. a tmux window or a `launchd` agent).
+  + Claude0 + the `src/bridge` server (e.g. a tmux window or a `launchd` agent).
 - Tailscale on Mac and iPhone; bridge bound to the tailnet address (fail-closed).
-- `csm setup` (extended in Impl #2) installs the hooks.
+- `claude0 setup` (extended in Impl #2) installs the hooks.
 
 ## Acceptance criteria (MVP)
 

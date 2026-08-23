@@ -11,7 +11,7 @@
 Access and continue Claude Code sessions from an iPhone, so work is no longer
 tied to carrying the Mac. The plan is to run the existing setup (tmux + zsh +
 `claude`) on an always-on host — **the Mac, reached over Tailscale, for the MVP;
-migrating to an always-on EC2 box as a later iteration** — keep CSM running
+migrating to an always-on EC2 box as a later iteration** — keep Claude0 running
 there, and build a small single-user companion app that lists and drives those
 sessions from the phone. (See §Resolved decisions for why Mac-first and what
 that defers.)
@@ -38,12 +38,12 @@ camps (full detail and citations in [`90-references.md`](./90-references.md)):
 **We chose Camp 1.** Rationale:
 
 1. The stated goal is to keep "my same setup of tmux, zsh, and Claude" and have
-   CSM observe *real* sessions that are also reachable by SSH from the Mac.
+   Claude0 observe *real* sessions that are also reachable by SSH from the Mac.
    Camp 2 replaces real sessions with an app-owned process and rebuilds the
-   entire UX — a different (much larger) product that discards CSM.
-2. Camp 1 is an **incremental upgrade** to CSM: the `SessionStart` hook is
+   entire UX — a different (much larger) product that discards Claude0.
+2. Camp 1 is an **incremental upgrade** to Claude0: the `SessionStart` hook is
    already installed, and `core/` is already headless and reusable.
-3. The only thing actually wrong with CSM today is the *sensing layer* (scraping
+3. The only thing actually wrong with Claude0 today is the *sensing layer* (scraping
    the rendered TUI viewport). Camp 1 replaces just that layer. The substrate
    (interactive `claude` in tmux) was always correct — it is the only mode that
    preserves human-in-the-loop tool approval.
@@ -84,7 +84,7 @@ The work is three large, sequential implementations. Each unblocks the next.
                                  │ unblocks (defines the target contract)
                                  ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│ 2. Camp 1 Migration (hooks + JSONL)        [internal to CSM]          │
+│ 2. Camp 1 Migration (hooks + JSONL)        [internal to Claude0]          │
 │    Replace viewport-scraping with event-sourced status + transcript   │
 │    parsing + blocking-hook approval. Many sub-phases. Makes the tests  │
 │    from #1 pass and exposes a clean internal API for the bridge.      │
@@ -178,10 +178,10 @@ of these as open, treat it as closed per this list and reconcile on next edit.
   port. The "detached pane" verification (Gate A9) must be exercised **in the Mac
   phase** (test with no tmux client attached), not deferred to EC2.
 - **Dogfood checkpoint — STOP after Implementation 2.** Land the Camp 1 migration
-  *internal to CSM* and use it through real Mac coding sessions until it is
+  *internal to Claude0* and use it through real Mac coding sessions until it is
   boringly reliable (status never flips on scroll-up; transcript-driven
   preview/answers correct; desk approval via the IPC works) **before** building
-  any bridge/app. The migration is validated as a CSM-internal change, while it's
+  any bridge/app. The migration is validated as a Claude0-internal change, while it's
   still cheap to iterate, before product depends on it.
 - **MVP slice = mobile web page, not a PWA.** First shippable product is a
   mobile-Safari web page (Preact) hitting `src/bridge/` over Tailscale,
@@ -258,7 +258,7 @@ of these as open, treat it as closed per this list and reconcile on next edit.
 - **Single user.** This is a personal tool. No multi-tenancy, no auth beyond a
   bearer token, no App Store. Prefer a web page / PWA over native unless a hard
   requirement forces otherwise.
-- **No new runtime deps without justification.** CSM's convention is "no
+- **No new runtime deps without justification.** Claude0's convention is "no
   external deps beyond blessed" and Bun built-ins. The bridge/app may add deps,
   but keep them minimal and document why.
 

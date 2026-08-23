@@ -6,14 +6,14 @@ Type=oneshot
 # Same rule as every other unit here: carry PATH so `claude0` resolves regardless of
 # install order (%h = user home).
 Environment=PATH=%h/.bun/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
-# Newest snapshot of any csm-backup volume must be younger than the staleness
+# Newest snapshot of any claude0-backup volume must be younger than the staleness
 # window (5h ≈ one missed 4-hourly slot + margin). Region/instance discovered via
 # IMDSv2. A silent snapshot failure is the standard way backups die — this pushes.
 ExecStart=/bin/bash -c '\
   TOK=$(curl -sX PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 60"); \
   REGION=$(curl -s -H "X-aws-ec2-metadata-token: $TOK" http://169.254.169.254/latest/meta-data/placement/region); \
   LATEST=$(aws ec2 describe-snapshots --region "$REGION" --owner-ids self \
-    --filters Name=tag:csm-backup,Values=true --query "max_by(Snapshots,&StartTime).StartTime" --output text); \
-  if [ "$LATEST" = "None" ] || [ -z "$LATEST" ]; then claude0 notify "EBS snapshots: none found for csm-backup volumes"; exit 0; fi; \
+    --filters Name=tag:claude0-backup,Values=true --query "max_by(Snapshots,&StartTime).StartTime" --output text); \
+  if [ "$LATEST" = "None" ] || [ -z "$LATEST" ]; then claude0 notify "EBS snapshots: none found for claude0-backup volumes"; exit 0; fi; \
   AGE=$(( $(date +%%s) - $(date -d "$LATEST" +%%s) )); \
   if [ "$AGE" -gt 18000 ]; then claude0 notify "EBS snapshots stale: newest is $((AGE/3600))h old"; fi'

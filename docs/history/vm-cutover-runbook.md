@@ -1,5 +1,9 @@
 # Cutover runbook — Mac → Linux VM
 
+> **Historical record** of the 2026-08 Mac→VM cutover. Provisioning a host today is
+> `claude0 setup --role host` ([ADR 22](../adr/0022-per-machine-roles.md)); the
+> scripts and dotfiles steps below no longer exist.
+
 Ordered, one sitting (~2h active). The Mac keeps working until phase F, so nothing
 is burned before the VM is proven. State dispositions come from the migration
 table in the plan (copy vs regenerate vs discard); decisions: ADRs 14–17.

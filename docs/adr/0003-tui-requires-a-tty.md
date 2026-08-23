@@ -5,8 +5,8 @@ Status: accepted
 
 ## Context
 
-The TUI and the monitor share mutable state in `~/.config/csm/state.json` — attention flags
-that drive the ⚡ window prefix and `csm next`.
+The TUI and the monitor share mutable state in `~/.config/claude0/state.json` — attention flags
+that drive the ⚡ window prefix and `claude0 next`.
 
 A TUI process can outlive the terminal that started it. `bun --watch` respawns the app on
 file change, and a closed terminal leaves those respawns running headless. Such a process
@@ -21,4 +21,4 @@ Refuse to start without a TTY: check `process.stdout.isTTY` at entry and exit.
 
 - An orphaned background TUI dies at startup instead of corrupting shared state.
 - The TUI cannot be driven headlessly — automated checks use the CLI subcommands
-  (`csm list`, `csm status`) instead, which are read-mostly by design.
+  (`claude0 list`, `claude0 status`) instead, which are read-mostly by design.

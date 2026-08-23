@@ -68,5 +68,5 @@ review screen from the live pane).
 - The empirical findings above are version-pinned to 2.1.217 — if a future Claude
   reintroduces a widget timer, the hold still covers the away case; if picker copy
   changes, `chatRowKey` degrades to Escape.
-- A held question is one idle `csm question-hook` process for up to 4h; dead-pid
+- A held question is one idle `claude0 question-hook` process for up to 4h; dead-pid
   reaping (existing) cleans markers if it's killed.

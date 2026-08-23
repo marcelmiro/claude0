@@ -1110,9 +1110,9 @@ export async function setup(roleFlag?: string, opts: SetupOptions = {}): Promise
     } catch {}
   }
 
-  // Host provisioning (the deploy/provision.sh port) runs last on both exit
-  // paths so the guided auth checklist is setup's final output — doctor's TODO
-  // list. CLAUDE0_HOME is the test seam: tests must never spawn sudo/apt/curl.
+  // Host provisioning runs last on both exit paths so the guided auth
+  // checklist is setup's final output — doctor's TODO list. CLAUDE0_HOME is
+  // the test seam: tests must never spawn sudo/apt/curl.
   const provisionHost = async () => {
     if (role !== "host" || process.platform !== "linux" || process.env.CLAUDE0_HOME) return;
     const { runHostProvisioning } = await import("./core/provision");

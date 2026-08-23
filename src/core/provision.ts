@@ -1,6 +1,6 @@
 /**
- * Host provisioning (role=host on linux) — the native port of deploy/provision.sh,
- * run by `claude0 setup`. Split as pure planning over a probed system state
+ * Host provisioning (role=host on linux), run by `claude0 setup`. Split as
+ * pure planning over a probed system state
  * (`planProvision`, unit-testable without root) and a thin executor; the only
  * privileged interaction is one upfront `sudo -v`, after which the sudo-scoped
  * steps run first so a credential timeout can't half-apply a step.
@@ -38,7 +38,6 @@ export const PRODUCT_UNITS = [
 ] as const;
 
 export const SYSCTL_FILE = "/etc/sysctl.d/99-claude0-inotify.conf";
-export const OLD_SYSCTL_FILE = "/etc/sysctl.d/99-csm-inotify.conf";
 // Per-UID and shared by every Claude session; exhaustion is a hard ENOSPC crash
 // with no graceful degradation. max_user_instances (default 128) breaks first.
 const SYSCTL_CONTENT = `fs.inotify.max_user_watches = 1048576
@@ -104,7 +103,6 @@ export interface SystemState {
   zshPath: string | null;
   loginShell: string | null;
   sysctlFilePresent: boolean;
-  oldSysctlFilePresent: boolean;
   swapActive: boolean;
   fstabHasSwap: boolean;
   /** null = timedatectl unavailable */
@@ -197,7 +195,6 @@ export async function probeSystemState(ctx: ProvisionContext): Promise<SystemSta
     zshPath: Bun.which("zsh"),
     loginShell,
     sysctlFilePresent: existsSync(SYSCTL_FILE),
-    oldSysctlFilePresent: existsSync(OLD_SYSCTL_FILE),
     swapActive: swaps !== null && /^\/swapfile /m.test(swaps),
     fstabHasSwap: fstab !== null && /^\/swapfile/m.test(fstab),
     timezone,
@@ -250,14 +247,14 @@ const sudoTee = (path: string, content: string): Command => ({
 });
 
 /**
- * The ordered step list with run/skip verdicts and exact commands. Enumeration
- * follows provision.sh's numbering; execution order batches by privilege (sudo
- * block first) so a sudo credential timeout can't half-apply a step.
+ * The ordered step list with run/skip verdicts and exact commands, batched by
+ * privilege (sudo block first) so a sudo credential timeout can't half-apply a
+ * step.
  */
 export function planProvision(state: SystemState, ctx: ProvisionContext): ProvisionStep[] {
   const steps: ProvisionStep[] = [];
 
-  // 1. packages
+  // packages
   steps.push(
     state.missingPackages.length === 0
       ? done("packages", "sudo", "packages already present")
@@ -267,7 +264,7 @@ export function planProvision(state: SystemState, ctx: ProvisionContext): Provis
         ]),
   );
 
-  // 1c. login shell — zsh lands at /usr/bin/zsh when the packages step above installs it.
+  // login shell — zsh lands at /usr/bin/zsh when the packages step above installs it.
   const zshBin = state.zshPath ?? "/usr/bin/zsh";
   steps.push(
     state.loginShell === zshBin
@@ -277,21 +274,19 @@ export function planProvision(state: SystemState, ctx: ProvisionContext): Provis
         ]),
   );
 
-  // 2. inotify sysctl (renamed from the legacy csm file, which is removed when found)
-  if (state.sysctlFilePresent && !state.oldSysctlFilePresent) {
+  // inotify sysctl
+  if (state.sysctlFilePresent) {
     steps.push(done("sysctl", "sudo", "inotify sysctl already present"));
   } else {
-    const commands: Command[] = [];
-    if (!state.sysctlFilePresent) commands.push(sudoTee(SYSCTL_FILE, SYSCTL_CONTENT));
-    if (state.oldSysctlFilePresent) commands.push({ argv: ["sudo", "rm", "-f", OLD_SYSCTL_FILE] });
-    commands.push({ argv: ["sudo", "sysctl", "--system"], quiet: true, allowFailure: true });
-    const message = state.sysctlFilePresent
-      ? `removing legacy ${OLD_SYSCTL_FILE}`
-      : `writing ${SYSCTL_FILE}${state.oldSysctlFilePresent ? ` (replacing legacy ${OLD_SYSCTL_FILE})` : ""}`;
-    steps.push(run("sysctl", "sudo", message, commands));
+    steps.push(
+      run("sysctl", "sudo", `writing ${SYSCTL_FILE}`, [
+        sudoTee(SYSCTL_FILE, SYSCTL_CONTENT),
+        { argv: ["sudo", "sysctl", "--system"], quiet: true, allowFailure: true },
+      ]),
+    );
   }
 
-  // 3. swap — a swapless box livelocks under memory pressure instead of degrading.
+  // swap — a swapless box livelocks under memory pressure instead of degrading.
   if (state.swapActive) {
     steps.push(done("swap", "sudo", "swapfile already active"));
   } else if (!state.systemd) {
@@ -307,7 +302,7 @@ export function planProvision(state: SystemState, ctx: ProvisionContext): Provis
     steps.push(run("swap", "sudo", `creating ${ctx.swapGb}G swapfile`, commands));
   }
 
-  // 4. timezone — the 24h archive window and staleness heuristics are wall-clock sensitive.
+  // timezone — the 24h archive window and staleness heuristics are wall-clock sensitive.
   if (!state.systemd || state.timezone === null) {
     steps.push(blocked("timezone", "sudo", "no timedatectl/systemd — skipping timezone"));
   } else if (state.timezone === ctx.tz) {
@@ -320,7 +315,7 @@ export function planProvision(state: SystemState, ctx: ProvisionContext): Provis
     );
   }
 
-  // 5. journald cap
+  // journald cap
   if (state.journaldCapPresent) {
     steps.push(done("journald", "sudo", "journald cap already present"));
   } else {
@@ -332,7 +327,7 @@ export function planProvision(state: SystemState, ctx: ProvisionContext): Provis
     steps.push(run("journald", "sudo", "capping journald at 500M", commands));
   }
 
-  // 6. needrestart list-only — since 24.04 it auto-restarts services after
+  // needrestart list-only — since 24.04 it auto-restarts services after
   // unattended-upgrades and can reach into user managers.
   steps.push(
     state.needrestartDirPresent && !state.needrestartConfPresent
@@ -340,7 +335,7 @@ export function planProvision(state: SystemState, ctx: ProvisionContext): Provis
       : done("needrestart", "sudo", "needrestart config present or needrestart not installed"),
   );
 
-  // 7. AppArmor profile for bubblewrap
+  // AppArmor profile for bubblewrap
   if (state.apparmorDirPresent && !state.apparmorProfilePresent) {
     const commands: Command[] = [sudoTee(APPARMOR_FILE, APPARMOR_CONTENT)];
     if (state.apparmorParserPresent) commands.push({ argv: ["sudo", "apparmor_parser", "-r", APPARMOR_FILE], allowFailure: true });
@@ -349,7 +344,7 @@ export function planProvision(state: SystemState, ctx: ProvisionContext): Provis
     steps.push(done("apparmor", "sudo", "bwrap AppArmor profile present or apparmor absent"));
   }
 
-  // 8. linger — without it logind kills the whole tmux server when the last SSH
+  // linger — without it logind kills the whole tmux server when the last SSH
   // session closes: the single config that silently destroys the setup.
   if (!state.systemd) {
     steps.push(blocked("linger", "sudo", "no systemd — skipping linger"));
@@ -359,7 +354,7 @@ export function planProvision(state: SystemState, ctx: ProvisionContext): Provis
     steps.push(run("linger", "sudo", `enabling linger for ${ctx.user}`, [{ argv: ["sudo", "loginctl", "enable-linger", ctx.user] }]));
   }
 
-  // 10. tailscale — install when missing; join is a guided stop, serve when logged in.
+  // tailscale — install when missing; join is a guided stop, serve when logged in.
   steps.push(
     state.tailscalePresent
       ? done("tailscale-install", "sudo", "tailscale already installed")
@@ -383,7 +378,7 @@ export function planProvision(state: SystemState, ctx: ProvisionContext): Provis
 
   // --- user scope ---
 
-  // 1a/1b. bun + claude via the official installers. Auth is a guided stop, never
+  // bun + claude via the official installers. Auth is a guided stop, never
   // attempted non-interactively.
   steps.push(
     state.bunPresent
@@ -400,7 +395,7 @@ export function planProvision(state: SystemState, ctx: ProvisionContext): Provis
         ]),
   );
 
-  // 8a. product units — installed from the repo, enabled independently: one
+  // product units — installed from the repo, enabled independently: one
   // missing/broken unit must not silently leave tmux disabled while the rest
   // succeed (this happened on the first VM cutover).
   if (!state.systemd) {
@@ -430,7 +425,7 @@ export function planProvision(state: SystemState, ctx: ProvisionContext): Provis
     );
   }
 
-  // 8b. bridge token — minted once, consumed by claude0-bridge.service via
+  // bridge token — minted once, consumed by claude0-bridge.service via
   // EnvironmentFile. TS-native action so the token never appears in the plan.
   if (!state.systemd) {
     steps.push(blocked("bridge-token", "user", "no systemd — skipping bridge token"));
@@ -446,7 +441,7 @@ export function planProvision(state: SystemState, ctx: ProvisionContext): Provis
   return steps;
 }
 
-/** 43 alphanumeric chars, same shape provision.sh minted from /dev/urandom. */
+/** 43 alphanumeric chars from a CSPRNG (matches the entropy of previously issued tokens). */
 export function generateBridgeToken(): string {
   let token = "";
   while (token.length < 43) {
@@ -527,7 +522,7 @@ async function runCommand(command: Command): Promise<number> {
 }
 
 /**
- * Run the planned steps in order, provision.sh's set -e semantics: a failed
+ * Run the planned steps in order with set -e semantics: a failed
  * required command aborts with the command named; allowFailure commands print
  * their failNote and continue.
  */

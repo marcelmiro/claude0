@@ -5,7 +5,7 @@
 I traced the full user journey for approving a single waiting session:
 
 ```
-1. Open CSM                               (popup appears)
+1. Open Claude0                               (popup appears)
 2. j/k to find waiting session            (navigate list)
 3. Eyes scan preview...                    (conversation history fills the pane)
 4. Scroll preview to find attention block  (it's at the BOTTOM, past all history)
@@ -36,14 +36,14 @@ I traced the full user journey for approving a single waiting session:
 
 7. **Status bar doesn't adapt.** The bottom bar always shows the same keys regardless of whether you're looking at a waiting session or an idle one. In context, the most important keys (y to approve) aren't shown.
 
-8. **Critical: Edit diffs are invisible.** The most common approval type is Edit. In the terminal, Claude shows old_string → new_string. In CSM's preview, only the filename is shown. That's like asking "approve this PR?" while only showing the branch name. The actual change — what you're agreeing to — is hidden. Same for Write (no content shown) and Bash (no description shown).
+8. **Critical: Edit diffs are invisible.** The most common approval type is Edit. In the terminal, Claude shows old_string → new_string. In Claude0's preview, only the filename is shown. That's like asking "approve this PR?" while only showing the branch name. The actual change — what you're agreeing to — is hidden. Same for Write (no content shown) and Bash (no description shown).
 
 ## What a 10/10 looks like
 
 The flow for approving 3 waiting sessions:
 
 ```
-1. Open CSM                    (first waiting session auto-selected)
+1. Open Claude0                    (first waiting session auto-selected)
 2. Preview shows: "⏸ Bash: $ npm install"
    Status bar shows: "y approve · Y always"
 3. Press y                     (approved! cursor auto-advances to next waiting)
@@ -81,7 +81,7 @@ When `session.status === "waiting"`, flip the preview: **decision at top, histor
 
 **Tool approval (Bash):**
 ```
-  csm/main
+  claude0/main
 
   ⏸ Approve Bash
   ──────────────────────
@@ -98,7 +98,7 @@ Shows: description (why) + command (what). Both fields exist in the JSONL.
 
 **Tool approval (Edit) — with inline diff:**
 ```
-  csm/main
+  claude0/main
 
   ⏸ Approve Edit
   ──────────────────────
@@ -117,7 +117,7 @@ Shows: file path + old_string/new_string as a diff. Red (C.red) for removed line
 
 **Tool approval (Write) — with content preview:**
 ```
-  csm/main
+  claude0/main
 
   ⏸ Approve Write (new file)
   ──────────────────────
@@ -125,7 +125,7 @@ Shows: file path + old_string/new_string as a diff. Red (C.red) for removed line
 
   import { homedir } from "os";
   export function getConfigPath() {
-    return `${homedir()}/.config/csm`;
+    return `${homedir()}/.config/claude0`;
   }
   … 120 more lines
 
@@ -136,7 +136,7 @@ Shows: file path + first ~8 lines of content. The JSONL has the full `content` f
 
 **AskUserQuestion:**
 ```
-  csm/main
+  claude0/main
 
   ⏸ Question: Which file?
   ──────────────────────
@@ -153,7 +153,7 @@ Already good — question + options from JSONL.
 
 **Generic waiting (no JSONL match):**
 ```
-  csm/main
+  claude0/main
 
   ⏸ Waiting for input
 
@@ -242,7 +242,7 @@ To power the contextual status bar and preview without re-reading JSONL on every
 
 ### Verification
 
-1. Open CSM with 2+ waiting sessions
+1. Open Claude0 with 2+ waiting sessions
 2. First waiting session auto-selected → preview shows decision block prominently
 3. Status bar shows "y approve · Y always"
 4. Press `y` → session status flips to ⦿, cursor auto-advances to next waiting session

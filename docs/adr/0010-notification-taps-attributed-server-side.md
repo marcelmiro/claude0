@@ -46,7 +46,7 @@ home-screen icon and it reads `1 shown tags=[f7a84d86-…]`.
 Attribute the tap from two signals the page can actually obtain on a warm resume:
 
 - **What was pushed** comes from the **bridge**, not the worker. `sendWebPush` appends to a
-  per-device ledger (`~/.config/csm/pushed/<deviceId>.json`) once the push service accepts the
+  per-device ledger (`~/.config/claude0/pushed/<deviceId>.json`) once the push service accepts the
   push; the page reads `GET /push/recent?device=…`, delete-on-read. The sender already knows
   what it sent, and a network read has no cross-context storage semantics to get wrong.
 - **What was tapped** comes from the shade. A recorded push whose notification has since

@@ -34,7 +34,7 @@ delivers the alert and the deep link opens Safari.
 - **Transport:** hosted **ntfy.sh** — HTTP POST to a topic; the ntfy iOS app
   subscribes. No APNs, no Apple Developer account, no App Store.
 - **Contentless payload (decided — doc 00):** carry only a non-sensitive label +
-  a deep link (`sessionId` → app route) — e.g. *"`csm/fix-auth` needs
+  a deep link (`sessionId` → app route) — e.g. *"`claude0/fix-auth` needs
   permission"* / *"`api` has a question"* / *"… turn complete"*. **Never** include
   the tool input, diff, command, or question text; the app fetches those from the
   bridge **over Tailscale** when you tap. The push traverses ntfy.sh + Apple APNs
@@ -72,34 +72,34 @@ boundary earns its keep. **No behavior change** — reviewable purely as a move.
 ### Layout (proposed — Bun workspaces)
 
 ```
-csm/                          # repo root
+claude0/                          # repo root
   package.json                # { "workspaces": ["packages/*", "apps/*"] }
   packages/
     core/                     # extracted from src/core/* — headless, no blessed
-      package.json            # name: @csm/core
+      package.json            # name: @claude0/core
     cli/                      # the existing TUI + subcommands
-      package.json            # name: @csm/cli, bin: csm  → depends on @csm/core
+      package.json            # name: @claude0/cli, bin: claude0  → depends on @claude0/core
     bridge/                   # moved from src/bridge/
-      package.json            # name: @csm/bridge  → depends on @csm/core
+      package.json            # name: @claude0/bridge  → depends on @claude0/core
   apps/
     mobile/                   # moved from the MVP web-page assets
-      package.json            # name: @csm/mobile
+      package.json            # name: @claude0/mobile
 ```
 
 ### Migration steps (keep it non-breaking)
 
 1. Introduce Bun workspaces at the root; create `packages/core` and move
-   `src/core/*` into it as `@csm/core`. Update imports (`../core/x` → `@csm/core`).
+   `src/core/*` into it as `@claude0/core`. Update imports (`../core/x` → `@claude0/core`).
 2. Move the TUI (`src/index.ts`, `src/cli.ts`, `src/monitor.ts`, `src/ui/*`,
-   `bin/csm.ts`) into `packages/cli`; move `src/bridge/*` into `packages/bridge`;
-   move the mobile assets into `apps/mobile`. All depend on `@csm/core`.
+   `bin/claude0.ts`) into `packages/cli`; move `src/bridge/*` into `packages/bridge`;
+   move the mobile assets into `apps/mobile`. All depend on `@claude0/core`.
 3. Verify `bun run start`, `bun run status`, all subcommands, the bridge, and the
    test suite still pass unchanged — this ships with **zero behavior change**.
 
 > Default to plain Bun workspaces (low-dep ethos); don't add Turborepo/nx unless a
 > concrete need appears.
 
-**Acceptance:** all existing CSM commands, the bridge, and tests pass unchanged
+**Acceptance:** all existing Claude0 commands, the bridge, and tests pass unchanged
 after the split. (Gate C1.)
 
 ---
@@ -109,10 +109,10 @@ after the split. (Gate C1.)
 When "the Mac must be awake and on a network" stops being good enough, move the
 substrate to an always-on Linux EC2 instance running the same stack.
 
-- Always-on EC2 instance running tmux + zsh + `claude` + CSM + the bridge (under a
+- Always-on EC2 instance running tmux + zsh + `claude` + Claude0 + the bridge (under a
   process manager / systemd service / tmux window).
 - Tailscale on EC2 and iPhone; bridge bound to the tailnet address (fail-closed).
-- `csm setup` installs the hooks on this box.
+- `claude0 setup` installs the hooks on this box.
 - **macOS → Linux port surface:** the port stays a config change *only if* Darwin-
   only calls (`pbcopy`, `caffeinate`, Ghostty, `ps`/TTY quirks) were kept out of
   `core/`/`bridge/` from day one (doc 00). Audit for any that crept in.

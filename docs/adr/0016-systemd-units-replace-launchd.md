@@ -7,7 +7,7 @@ Status: accepted
 
 On the Mac, keeping the stack alive was a pile of workarounds: `caffeinate` so the
 laptop wouldn't sleep, a launchd plist or `nohup … & disown` for the bridge, and a
-token-recovery trick (`ps eww | grep CSM_BRIDGE_TOKEN`) because the token lived
+token-recovery trick (`ps eww | grep CLAUDE0_BRIDGE_TOKEN`) because the token lived
 only in a process's environment. On an always-on Linux VM those pressures invert:
 the host never sleeps, but *everything* must survive reboots and SSH logouts with
 nobody watching.
@@ -25,19 +25,19 @@ nobody watching.
   spelunking. Bridge restarts are `Restart=always` with `RestartSec=5s` and
   `StartLimitIntervalSec=300`: the systemd defaults (100ms × 5-in-10s) give up
   permanently after five fast crashes, e.g. a port-in-use loop.
-- **Restore pairing**: `tmux.service` `ExecStop` runs `csm save-sessions` before
+- **Restore pairing**: `tmux.service` `ExecStop` runs `claude0 save-sessions` before
   `kill-server`; `ExecStartPost` runs resurrect's restore script (NOT continuum's
   restore-on-server-start, which races the forking handshake under systemd —
   tmux-continuum #110 — and killed the server), whose post-restore hook then runs
-  `csm restore-sessions` to resume each pane's Claude session by id.
+  `claude0 restore-sessions` to resume each pane's Claude session by id.
   `@resurrect-processes` must NOT include claude — resurrect's `ps`-derived
-  restore spawns a *fresh* claude while csm's `--resume` starts the real one: two
+  restore spawns a *fresh* claude while claude0's `--resume` starts the real one: two
   processes fighting over one transcript.
 
 ## Consequences
 
 - The CLAUDE.md "bridge restarts" procedure becomes
-  `systemctl --user restart csm-bridge` on the VM; the nohup/token-recovery dance
+  `systemctl --user restart claude0-bridge` on the VM; the nohup/token-recovery dance
   applies only to a darwin-hosted bridge.
 - User units get no login-shell PATH, and `environment.d` is only read when the
   user manager starts — a file written mid-provisioning is invisible until reboot

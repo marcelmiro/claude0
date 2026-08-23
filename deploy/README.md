@@ -1,12 +1,13 @@
 # deploy/ — Claude0 on an always-on Linux host
 
-Provisioning for running the whole Claude0 stack (tmux + Claude Code sessions + the
-portkey bridge) on a headless Ubuntu 24.04 VM, with the Mac and iPhone as thin
-clients over Tailscale. The cutover itself (state copy, auth, PWA reinstall) is
-`RUNBOOK.md`; decision records are ADRs 14–17.
+Notes and personal AWS ops for running the whole Claude0 stack (tmux + Claude
+Code sessions + the portkey bridge) on a headless Ubuntu 24.04 VM, with the Mac
+and iPhone as thin clients over Tailscale. The 2026-08 cutover record is
+archived at `../docs/history/vm-cutover-runbook.md`; decision records are ADRs
+14–17 and 22–23.
 
-Host provisioning is native: **`claude0 setup --role host`** performs everything
-`provision.sh` used to (packages, inotify sysctl, swap, TZ, journald cap,
+Host provisioning is native: **`claude0 setup --role host`** performs the full
+host provisioning (packages, inotify sysctl, swap, TZ, journald cap,
 needrestart list-only, bubblewrap AppArmor profile, linger, user units, bridge
 token, Tailscale) in one idempotent pass with one sudo authorization, then prints
 a guided checklist for the interactive auth steps. `claude0 doctor` is the
@@ -21,8 +22,8 @@ read-only audit.
 | `../config/units/claude0-monitor.service` | User unit: fallback monitor tick + resurrect autosave while no tmux client is attached (status-right — and continuum riding it — only runs for attached clients). |
 | `../config/units/claude0-daemon.service` | User unit: the inbox daemon (snooze wakes, discovery snapshots, sidebar renderer) — systemd twin of darwin's `com.claude0.daemon` launchd agent. Off-darwin the wake alert is a broadcast Web Push (no banner tier on a headless host). |
 | `../config/tmux.conf` | Claude0-owned, cross-platform tmux integration installed by `claude0 setup`. Personal tmux settings remain separate. |
-| `aws/dlm-policies.sh` | DLM snapshot schedules (4-hourly/3d + daily/14d on `csm-backup=true` volumes) + budget-stop guardrail pointer. CLI-only — the console can't do sub-daily. |
-| `aws/snapshot-check.{service,timer}` | Hourly staleness probe: newest `csm-backup` snapshot older than 5h → `claude0 notify` pushes to the phone. Personal ops — not installed by `claude0 setup`; copy to `~/.config/systemd/user/` and enable by hand. Needs the aws CLI and an instance role with `ec2:DescribeSnapshots`. |
+| `aws/dlm-policies.sh` | DLM snapshot schedules (4-hourly/3d + daily/14d on `claude0-backup=true` volumes) + budget-stop guardrail pointer. CLI-only — the console can't do sub-daily. |
+| `aws/snapshot-check.{service,timer}` | Hourly staleness probe: newest `claude0-backup` snapshot older than 5h → `claude0 notify` pushes to the phone. Personal ops — not installed by `claude0 setup`; copy to `~/.config/systemd/user/` and enable by hand. Needs the aws CLI and an instance role with `ec2:DescribeSnapshots`. |
 
 ## Usage
 
@@ -54,11 +55,10 @@ Prerequisites setup checks but cannot create:
 - **Interactive auth**: `claude` login and `gh auth login` are guided stops —
   setup prints the exact commands instead of attempting them non-interactively.
 
-The Linux host installs the explicit `common + linux` Stow profiles from the
-personal dotfiles repository. This imports the same tmux presentation, bindings,
-clipboard behavior, and TPM-managed plugins as macOS without linking macOS app
-configuration. `claude0 setup` owns and updates only its application fragments under
-`~/.config/claude0/`.
+Claude0 requires no dotfiles: setup installs everything it needs (fragments,
+launcher, tmux-resurrect) under `~/.config/claude0/`, and personal dotfiles are
+never required, replaced, or templated
+([ADR 23](../docs/adr/0023-dotfiles-independence.md)).
 
 Mac-to-VM paste is terminal input, not a Linux clipboard operation: use `Cmd+V`
 in Ghostty. VM-to-Mac copy (including Claude0's Space→c) uses OSC 52. Ghostty needs

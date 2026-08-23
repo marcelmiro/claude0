@@ -14,7 +14,7 @@ Status: superseded by ADR 17; the home-path constraint itself was retired 2026-0
 ## Context
 
 Claude Code encodes the **absolute** cwd into its transcript directory names
-(`~/.claude/projects/-Users-throxy-Documents-csm/…`), and CSM state references the
+(`~/.claude/projects/<encoded-cwd>/…`), and Claude0 state references the
 same paths (`repoPaths`, name cache keys, resurrect cwds). Moving the setup to a
 Linux host whose home is `/home/<user>` would rename every encoded directory,
 orphaning every copied transcript: sessions stop resolving, resume tails frozen
@@ -50,5 +50,5 @@ Mac byte-for-byte, and no re-encoding pass exists to get wrong.
   copy in either direction, and one missed directory silently breaks one session.
   Kept only as the documented fallback if a host ever forbids the home layout.
 - **Symlink** `/Users/throxy → /home/throxy`: tools that realpath (lsof's output
-  matching in CSM does, deliberately) see the `/home` form, so the two encodings
+  matching in Claude0 does, deliberately) see the `/home` form, so the two encodings
   drift apart inside one host — worse than either clean layout.

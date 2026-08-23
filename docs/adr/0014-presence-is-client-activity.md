@@ -14,7 +14,7 @@ or use "a tmux client is attached" as a proxy. Each has a deliberate,
 site-specific failure polarity (monitor: probe error ⇒ present; hold release:
 error ⇒ absent; hook gates: error ⇒ present).
 
-On a Linux host (CSM moved to an always-on VM, Mac and phone as thin clients)
+On a Linux host (Claude0 moved to an always-on VM, Mac and phone as thin clients)
 both mechanisms break *silently*:
 
 - There is no frontmost app. The osascript path's catch makes the monitor
@@ -38,7 +38,7 @@ is unchanged.
 
 The macOS-native notification tier (terminal-notifier/osascript, tier 3) is
 **not ported**: on the VM you are either tmux-attached (⚡ prefixes, status-right,
-`csm next` cover the desk) or away (tier-4 web push covers the phone). The tier
+`claude0 next` cover the desk) or away (tier-4 web push covers the phone). The tier
 is gated behind `process.platform === "darwin"` instead.
 
 ## Consequences

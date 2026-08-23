@@ -9,19 +9,19 @@
 
 ## Goal
 
-Replace CSM's **viewport-scraping** sensing/input layer with **hook events +
+Replace Claude0's **viewport-scraping** sensing/input layer with **hook events +
 JSONL transcript**, keeping the substrate identical (real interactive `claude` in
-tmux). Output is a CSM that (a) reports status correctly regardless of scroll
+tmux). Output is a Claude0 that (a) reports status correctly regardless of scroll
 position, (b) reads conversation/pending prompts as structured data, and (c)
 exposes a clean headless `core/` API that Impl #3's bridge will consume. Internal
-to CSM — **no mobile app**. Stops at the dogfood gate (doc 00).
+to Claude0 — **no mobile app**. Stops at the dogfood gate (doc 00).
 
 ## Definition of done (measurable)
 
 - The two RED contract tests flip green: `src/core/event-status.test.ts` (7
   tests) and `src/core/transcript.test.ts` (6 tests). `status.test.ts`
   (scraper-bug characterization) and the Gate-A guard stay green.
-- `csm list` / TUI status is correct through a full tool-run **+ scroll-up** with
+- `claude0 list` / TUI status is correct through a full tool-run **+ scroll-up** with
   no flip to `ready`.
 - A tool approval can be granted from **outside** the TUI via the `approval.ts`
   IPC; the session proceeds; timeout falls through to the desk TUI; the attached

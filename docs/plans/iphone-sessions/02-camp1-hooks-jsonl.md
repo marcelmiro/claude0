@@ -11,18 +11,18 @@
 
 ## Goal
 
-Migrate CSM's sensing and input layers from **viewport scraping** to
+Migrate Claude0's sensing and input layers from **viewport scraping** to
 **hook events + JSONL transcript**, while keeping the substrate exactly as it is
 today: real interactive `claude` sessions running in tmux that you can also SSH
 into from the Mac.
 
-This implementation is **internal to CSM**. It ships no mobile app. Its output is
-(a) a CSM that reports status reliably regardless of scroll position, (b) a clean
+This implementation is **internal to Claude0**. It ships no mobile app. Its output is
+(a) a Claude0 that reports status reliably regardless of scroll position, (b) a clean
 structured view of each session's conversation and pending prompts, and (c) an
 internal API surface that Implementation 3's bridge will consume.
 
 > **Dogfood checkpoint (Resolved decisions, doc 00): STOP here.** This is the
-> point to *stop and use CSM through real Mac coding sessions* until the
+> point to *stop and use Claude0 through real Mac coding sessions* until the
 > scraper→JSONL migration is boringly reliable — before any bridge/app work. Do
 > not start Implementation 3 until status no longer flips on scroll-up,
 > transcript-driven preview/answers are correct, and desk approval via the IPC
@@ -38,12 +38,12 @@ approvals come from a blocking hook; free-text input still uses `send-keys`.
 
 | Reused as-is | New | Demoted |
 |--------------|-----|---------|
-| `core/sessions.ts`, `core/process.ts`, `core/state.ts`, `core/tmux.ts` (send-keys/capture), `core/notifications.ts` (transition logic), `csm setup` hook plumbing | `core/event-status.ts`, `core/transcript.ts`, `core/hook-events.ts` (event log read/write), `core/approval.ts` (IPC) + new hook scripts | `core/status.ts` viewport regex → fallback only |
+| `core/sessions.ts`, `core/process.ts`, `core/state.ts`, `core/tmux.ts` (send-keys/capture), `core/notifications.ts` (transition logic), `claude0 setup` hook plumbing | `core/event-status.ts`, `core/transcript.ts`, `core/hook-events.ts` (event log read/write), `core/approval.ts` (IPC) + new hook scripts | `core/status.ts` viewport regex → fallback only |
 
 ## Sub-phases
 
 Each sub-phase is independently shippable and testable. Phases 1b.0–1b.1 already
-fix the scroll-up bug for CSM itself, before any mobile work.
+fix the scroll-up bug for Claude0 itself, before any mobile work.
 
 ### 1b.0 — Schema pinning (shared with impl #1)
 
@@ -56,14 +56,14 @@ this is closed** — everything downstream parses against these shapes.
 The headline fix. Status becomes a pure function of the session's recent hook
 events.
 
-- **Extend `csm setup`** to install hooks beyond `SessionStart`:
+- **Extend `claude0 setup`** to install hooks beyond `SessionStart`:
   `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification`, `Stop`,
   `SubagentStop`. Keep it idempotent (it already is) and preserve any existing
   user hooks.
-- **Hook script** (`~/.config/csm/hooks/event.sh` or per-event scripts): append a
+- **Hook script** (`~/.config/claude0/hooks/event.sh` or per-event scripts): append a
   normalized event record to a per-session log:
   ```
-  ~/.config/csm/events/<sessionId>.jsonl
+  ~/.config/claude0/events/<sessionId>.jsonl
   ```
   Each line: `{ ts, sessionId, cwd, event, notification_type?, tool_name?, ... }`.
   Keep the writer trivial and fast (hooks are on the hot path; a slow hook delays
@@ -71,7 +71,7 @@ events.
 - **`core/hook-events.ts`**: read + tail the per-session event log; expose
   "latest events for session X."
 - **`core/event-status.ts`**: derive `SessionStatus` from the last event edge
-  (see Contract A in impl #1 for the truth table). Map to CSM's existing
+  (see Contract A in impl #1 for the truth table). Map to Claude0's existing
   `"running" | "waiting" | "ready" | "idle" | "archived"`.
 - **Wire into discovery**: in `core/sessions.ts`, prefer `event-status` when an
   event log exists for the session; fall back to `status.ts` scraping when it
@@ -79,11 +79,11 @@ events.
   source was used (for debugging and the drift canary).
 - **Validate** against the impl #1 contract tests — especially the scroll-up
   regression — and by diffing event-status vs scraper-status across live
-  sessions in `csm list`.
+  sessions in `claude0 list`.
 
 **Edge cases to handle:**
 - Session started before hooks installed → no event log → scraper fallback.
-- `state ↔ window` desync (already a known problem from `csm next`): reconcile
+- `state ↔ window` desync (already a known problem from `claude0 next`): reconcile
   the event log against live panes on each refresh; an event log with no live
   pane = archived.
 - Hooks fire edges, not a continuous heartbeat. "running" is inferred from
@@ -108,7 +108,7 @@ events.
   - any open `AskUserQuestion` `{ question, options:[{label, description}] }`.
 - Must tolerate a partially-written final line (transcript is appended live) and
   unknown keys (forward-compat with Claude versions).
-- Resolve the `encoded-cwd` → project-dir mapping (CSM already locates session
+- Resolve the `encoded-cwd` → project-dir mapping (Claude0 already locates session
   index files; reuse that path logic).
 - Validate against impl #1 Contract B fixtures.
 
@@ -127,9 +127,9 @@ avoids the `send-keys` y/n race the research flagged as fragile):
      blocking unconditionally would add seconds of lag to *every desk approval*.
      This branch is what preserves the desk UX.)
    - **Detached (you're away) → block-and-poll.** The hook writes the request to
-     `~/.config/csm/pending/<sessionId>.json` and **blocks**, polling for a
+     `~/.config/claude0/pending/<sessionId>.json` and **blocks**, polling for a
      decision file (ccgram uses this file-IPC pattern).
-3. A consumer (CSM TUI now; the bridge later) reads pending requests and writes
+3. A consumer (Claude0 TUI now; the bridge later) reads pending requests and writes
    the decision; hook returns the Claude Code permission decision
    (`{ permissionDecision: "allow" | "deny", ... }`).
 4. **Timeout fallback:** if no decision arrives within a *long* timeout, the hook
@@ -184,7 +184,7 @@ Implementation 3 builds the HTTP/SSE bridge directly on these — it should add
 ## Acceptance criteria
 
 - Impl #1 Contract A & B tests pass; the scroll-up regression test is green.
-- `csm list` / TUI status matches reality through a full tool-run + scroll-up
+- `claude0 list` / TUI status matches reality through a full tool-run + scroll-up
   cycle with no flicker to "ready."
 - A tool permission request can be approved from outside the TUI (via the
   `approval.ts` IPC) and the session proceeds; timeout falls through to the TUI.

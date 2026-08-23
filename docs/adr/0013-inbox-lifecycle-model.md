@@ -12,14 +12,14 @@ The load-bearing rules, each a real trade-off:
 
 Rejected: a free-standing work-item/task object (first step toward a second, worse Linear — the escape hatch for idea-without-a-session is a Linear ticket that links to sessions); priority/relevance scoring (no natural signal at 10–20 self-spawned sessions; an opaque ranking that can't be trusted forces a full rescan and is net negative — pinned repos plus oldest-blocked-first is the whole ordering); authored read/unread (derived status self-updates, so the only non-derivable fact is the deferral decision, which snooze already is).
 
-Rollout: model + Mac verbs + tmux sidebar prototype first (the Mac is ~90% of usage and the popup TUI failed for being modal — an inbox must not require deciding to look); portkey's rich Inbox UI second; the popup TUI likely obsoleted rather than upgraded. The sidebar is additive: alt+bracket window cycling is untouched (and improves by subtraction as parked panes die); sidebar keybindings and the per-window-pane seam are explicitly prototype-territory, not committed here. A separate-terminal-window dashboard was rejected because CSM's dependency contract is tmux + Bun only.
+Rollout: model + Mac verbs + tmux sidebar prototype first (the Mac is ~90% of usage and the popup TUI failed for being modal — an inbox must not require deciding to look); portkey's rich Inbox UI second; the popup TUI likely obsoleted rather than upgraded. The sidebar is additive: alt+bracket window cycling is untouched (and improves by subtraction as parked panes die); sidebar keybindings and the per-window-pane seam are explicitly prototype-territory, not committed here. A separate-terminal-window dashboard was rejected because Claude0's dependency contract is tmux + Bun only.
 
 ## Follow-up (required to fully launch): session provenance
 
 Two workflows create parent→child session relationships that today live only in the user's head (approximated by placing tmux windows adjacent): **forks** (parallel related work) and **handoffs** (fresh unbiased context for a delegated subtask, with the intent to return to the orchestrator once it lands). The inbox should group linked sessions and close the "go back to the orchestrator" loop. Deferred past the prototype week because its payoff is a wake rule *into* the disposition model, which must exist first.
 
 - **Capture at creation, never infer post-hoc.** Forks are free: `forkSession` and the TUI `f` key mint the child id themselves and just record the link. Handoffs need one line of cooperation from the handoff skill (stamp the parent session id into the doc, or drop a pending-link record that discovery resolves when a session cites that doc). Post-hoc inference is the fragile version — first prompts compact away, docs get deleted, and a fork's JSONL is a pre-seeded copy of the parent's, so content similarity is useless.
-- **Storage: one file per child** (`~/.config/csm/links/<childId>.json` → `{parent, kind: fork|handoff, createdAt}`), matching the `verdicts/` per-file pattern to avoid shared-JSON write races. One level of depth is modeled; chains render as chains.
+- **Storage: one file per child** (`~/.config/claude0/links/<childId>.json` → `{parent, kind: fork|handoff, createdAt}`), matching the `verdicts/` per-file pattern to avoid shared-JSON write races. One level of depth is modeled; chains render as chains.
 - **Grouping:** children nest under their parent with a `↳`, exactly as worktrees nest under their base repo. Replaces the tmux-adjacency habit with something that survives window reordering.
 - **Wake rule (handoffs only):** handing off leaves the orchestrator *blocked on the child*; when the child is **archived** (the done verb — the natural end of divide-and-conquer), the parent wakes into Needs you with a "child finished" reason, same derived-wake shape as a snooze wake. Forks get grouping only — neither side waits on the other — which is why `kind` exists. Rejected: auto-switching to the parent or auto-feeding the child's result into it; waking into Needs you is enough, the human decides when to context-switch.
 - **Phase 1 forward-compat hook (the only part to build now):** the `blocked` disposition's note field must be able to hold a session ref, not just free text.
@@ -28,7 +28,7 @@ Two workflows create parent→child session relationships that today live only i
 
 Two days of living in the prototype against real sessions settled the open questions and revised one original rule. What follows is decided; the prototype (`prototype/inbox-sidebar/`, branch `inbox`, throwaway) is the evidence, not the implementation.
 
-**North star — Claude0.** The product thesis crystallized: CSM's aim is inbox zero for agent sessions. "Needs you" is not a dashboard section, it is *the inbox*, and the game is clearing it — every verb (reply, snooze, block, done) is a way of getting a row out of it, and an empty Needs you means you are genuinely free. This framing (working name: **Claude0**) should drive prioritization: anything that makes clearing feel fast and trustworthy is core; anything else is chrome.
+**North star — Claude0.** The product thesis crystallized: Claude0's aim is inbox zero for agent sessions. "Needs you" is not a dashboard section, it is *the inbox*, and the game is clearing it — every verb (reply, snooze, block, done) is a way of getting a row out of it, and an empty Needs you means you are genuinely free. This framing — where the name **Claude0** comes from — should drive prioritization: anything that makes clearing feel fast and trustworthy is core; anything else is chrome.
 
 **The original rule stands: every disposition (and done) kills the pane** — we briefly revised this to let snooze keep its pane, then reverted: what makes killing safe for the most common verb is that **a snooze wake auto-reopens the pane** (detached `claude -r` in a `⚡`-named window, no focus steal — day snoozes fire at local midnight, so the morning window bar *is* the morning inbox). Snooze means "it literally comes back", which is stronger trust than a list entry, and the window-bar shrink applies to all parked states, not just the long-lived ones. The pane↔row relationship is **one-directional**: live pane ⇒ inbox row, but rows outlive panes (parked, recent, restored-from-done), and re-engaging a pane-less row resumes it on demand (`claude -r` in a new window, directory via `resolveRestoreTarget` — deleted worktrees land in the base repo with the transcript consolidated). Undo-done deliberately does *not* resurrect the pane; only re-engagement does.
 
@@ -44,7 +44,7 @@ Two days of living in the prototype against real sessions settled the open quest
 
 **Visual language.** Glyphs are the measured-1-cell set only (emoji are double-width in tmux, single-width to blessed — repaints corrupt); status lives in section color tiers (white attention / mint activity / dim parked+done); peach appears only as signal (reason glyphs `! ? ↺`, stale ages), never as paint. Rows: two-line (name + dim repo/PR) in Needs you and Running, one-line elsewhere. `☾` = snoozed, `✗` = blocked, `⧗` = script-wait.
 
-**Known gaps production must close (in rollout order):** durable state under `~/.config/csm` (the prototype's `/tmp` state file triples as store/IPC/cache and dies on reboot — disqualifying); the single-renderer chassis; transition-gated Needs you; then the transcript-blind activity cases — a session whose work happens outside its own transcript (background-job child sessions, desktop-app sessions with no pane) reads as stale/invisible today and belongs in the same family as `⧗` and provenance: "activity the pane's transcript can't see."
+**Known gaps production must close (in rollout order):** durable state under `~/.config/claude0` (the prototype's `/tmp` state file triples as store/IPC/cache and dies on reboot — disqualifying); the single-renderer chassis; transition-gated Needs you; then the transcript-blind activity cases — a session whose work happens outside its own transcript (background-job child sessions, desktop-app sessions with no pane) reads as stale/invisible today and belongs in the same family as `⧗` and provenance: "activity the pane's transcript can't see."
 
 ## Addendum 2: settled by the prototype week (2026-08-08 → 11)
 
@@ -62,13 +62,13 @@ A week of daily-driving revised two earlier calls and settled the rest of the in
 
 **Fork places beside the parent** (`new-window -a` at the parent's window), matching the TUI's fork placement — related work stays adjacent until provenance grouping replaces the adjacency habit.
 
-**Wake duty belongs to a launchd-kept-alive daemon, not the status-right monitor.** The monitor is a fresh process per `status-right` tick, and tmux evaluates the status line only while a client is attached — a midnight wake with no terminal open would silently not fire. The daemon (installed idempotently by `csm setup`) owns the wake pass: due snooze with no live pane → detached `claude -r` with an in-pane wake banner, mark auto-resumed, write the wake event. It is also the model's **single snapshot producer** (renderers and verbs never write discovery state) — the same long-lived process the single-renderer chassis needs anyway. The status-right monitor keeps prefixes and window naming; consolidating its discovery into the daemon is deliberate follow-up work, not part of the wake cutover.
+**Wake duty belongs to a launchd-kept-alive daemon, not the status-right monitor.** The monitor is a fresh process per `status-right` tick, and tmux evaluates the status line only while a client is attached — a midnight wake with no terminal open would silently not fire. The daemon (installed idempotently by `claude0 setup`) owns the wake pass: due snooze with no live pane → detached `claude -r` with an in-pane wake banner, mark auto-resumed, write the wake event. It is also the model's **single snapshot producer** (renderers and verbs never write discovery state) — the same long-lived process the single-renderer chassis needs anyway. The status-right monitor keeps prefixes and window naming; consolidating its discovery into the daemon is deliberate follow-up work, not part of the wake cutover.
 
 **The wake attention stamp must wait for detected status `ready`.** Claude's boot spinner reads as `running`, and the monitor's carry-over clears attention for running sessions ("user already interacted") — the first live wake lost its ⚡ to exactly this. Stamp only once the prompt is live.
 
-**Wake notifications: banner now, push deferred.** A wake raises the macOS banner and the ⚡/status-right/`csm next` tiers. Web Push does *not* fire — refining this ADR's "push routed to the device that set the snooze": until an inbox surface exists in portkey, every snooze is Mac-set and a push tier is dead code. The recorded design for when that surface lands: route to the setter device when the snooze was set from portkey; for Mac-set snoozes, broadcast to subscribed devices whose SSE liveness is stale (a scheduled wake is an alarm the user set, not ambient noise).
+**Wake notifications: banner now, push deferred.** A wake raises the macOS banner and the ⚡/status-right/`claude0 next` tiers. Web Push does *not* fire — refining this ADR's "push routed to the device that set the snooze": until an inbox surface exists in portkey, every snooze is Mac-set and a push tier is dead code. The recorded design for when that surface lands: route to the setter device when the snooze was set from portkey; for Mac-set snoozes, broadcast to subscribed devices whose SSE liveness is stale (a scheduled wake is an alarm the user set, not ambient noise).
 
-**Self-heal is part of the contract.** A per-pane chassis dies with the single renderer, but what the week proved must survive productionization as `csm setup`-installed pieces: autostart on client attach (marker-gated so an explicit hide wins), reclamation of resurrect-restored corpse panes, and per-window heal of missing/mispositioned/mis-sized sidebars. A sidebar that only works until the next reboot reads as broken, not as a prototype.
+**Self-heal is part of the contract.** A per-pane chassis dies with the single renderer, but what the week proved must survive productionization as `claude0 setup`-installed pieces: autostart on client attach (marker-gated so an explicit hide wins), reclamation of resurrect-restored corpse panes, and per-window heal of missing/mispositioned/mis-sized sidebars. A sidebar that only works until the next reboot reads as broken, not as a prototype.
 
 ## Addendum 3: shipped semantics + direction (2026-08-12)
 
@@ -95,7 +95,7 @@ persistent counter that looks like another live-session state.
 **The sidebar is the popup TUI's replacement, not a companion.** Confirmed
 (this ADR's rollout section guessed "likely obsoleted"): triage logic lives
 in ONE surface. Rejected on those grounds: verbs in the TUI space-menu
-(dead surface) and standalone CLI verbs (`csm snooze <fuzzy>` — clutter;
+(dead surface) and standalone CLI verbs (`claude0 snooze <fuzzy>` — clutter;
 if provenance work needs a programmatic verb entry point, it ships as that
 feature's plumbing, not as a user command).
 
@@ -137,7 +137,7 @@ its socket died).
 
 Settled against ADR 15/16's single-host cutover, built ahead of it:
 
-- **One host owns the inbox.** The daemon becomes `csm-daemon.service` on the
+- **One host owns the inbox.** The daemon becomes `claude0-daemon.service` on the
   VM (provision-installed, BindsTo=tmux.service); the Mac launchd agent is
   booted out at cutover as a runbook teardown step. Two daemons against two
   tmux servers would mean two divergent inboxes — a multi-host inbox was
@@ -149,11 +149,11 @@ Settled against ADR 15/16's single-host cutover, built ahead of it:
 - **Off-darwin wake alert = broadcast Web Push.** The banner tier cannot
   exist on a headless host; the wake pass broadcasts to every subscribed
   device there (a snooze set days ago has no meaningful driving device —
-  same reasoning as `csm notify` ops alerts). This replaces an impossible
+  same reasoning as `claude0 notify` ops alerts). This replaces an impossible
   tier rather than un-deferring the general wake push of addendum 2, which
   still waits for the portkey inbox.
 - **Unit ownership stays split by platform**: provision.sh owns systemd
-  units (like bridge/monitor), `csm setup` owns launchd and no-ops off-darwin.
+  units (like bridge/monitor), `claude0 setup` owns launchd and no-ops off-darwin.
 
 ## Addendum 6: the portkey inbox (2026-08-18, grilled)
 

@@ -26,7 +26,7 @@ Replace ntfy with Web Push, scoped to the two installed iOS PWAs (the Mac keeps 
 notifications):
 
 - **Device identity.** Each client mints a persistent `deviceId` (localStorage), sent as
-  `x-csm-device` on every request and `?device=` on the SSE stream. Source markers record it;
+  `x-claude0-device` on every request and `?device=` on the SSE stream. Source markers record it;
   pushes go only to that device via its own subscription (`push-subscriptions.json`).
 - **Per-device liveness.** `consumers/<deviceId>` markers (SSE connect + 15s heartbeat)
   suppress the push while the originating device is watching live. A `sendBeacon` goodbye on

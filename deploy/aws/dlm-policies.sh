@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # EBS snapshot lifecycle for the dev VM, via DLM (the console can't do sub-daily —
 # the 4-hourly cadence needs the CLI). Two schedules on volumes tagged
-# csm-backup=true: 4-hourly kept 3 days (uncommitted-work granularity) and daily
+# claude0-backup=true: 4-hourly kept 3 days (uncommitted-work granularity) and daily
 # kept 14 days. Idempotent: skips policies whose description already exists.
 #
 #   ./dlm-policies.sh [--region eu-central-1]
@@ -52,7 +52,7 @@ create_policy() {
 {
   "PolicyType": "EBS_SNAPSHOT_MANAGEMENT",
   "ResourceTypes": ["VOLUME"],
-  "TargetTags": [{"Key": "csm-backup", "Value": "true"}],
+  "TargetTags": [{"Key": "claude0-backup", "Value": "true"}],
   "Schedules": [{
     "Name": "$desc",
     "CreateRule": {"Interval": $interval, "IntervalUnit": "$unit", "Times": [$times]},
@@ -70,12 +70,12 @@ JSON
 }
 
 # 4-hourly × 18 slots = 3 days of uncommitted-work granularity.
-create_policy "csm-4hourly-3d" 4 HOURS 18 '"09:00"'
+create_policy "claude0-4hourly-3d" 4 HOURS 18 '"09:00"'
 # Daily × 14 — the deeper undo ladder.
-create_policy "csm-daily-14d" 24 HOURS 14 '"03:00"'
+create_policy "claude0-daily-14d" 24 HOURS 14 '"03:00"'
 
 note "policies: $(aws dlm get-lifecycle-policies --region "$REGION" --query 'Policies[].Description' --output text)"
-note "remember: tag the root volume csm-backup=true, and measure FullSnapshotSizeInBytes deltas for a day before considering hourly (build caches inflate incrementals)."
+note "remember: tag the root volume claude0-backup=true, and measure FullSnapshotSizeInBytes deltas for a day before considering hourly (build caches inflate incrementals)."
 
 # ── Budget guardrail ───────────────────────────────────────────────────────────
 # Requires a one-time budgets action role; if absent, print the console pointer

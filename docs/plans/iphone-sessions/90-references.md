@@ -23,7 +23,7 @@ Hooks run a script with a JSON payload on stdin. All payloads include
 
 **Most important facts for this project:**
 - `Notification` distinguishes "needs tool permission" from "idle waiting for
-  input" via `notification_type`. This is the exact signal CSM currently scrapes
+  input" via `notification_type`. This is the exact signal Claude0 currently scrapes
   for — delivered cleanly by Claude itself.
 - `PreToolUse` can **block and decide** the permission — the basis for the
   blocking-hook approval IPC (doc 02 §1b.3). **Verify** that a blocking decision
@@ -40,7 +40,7 @@ Docs: https://code.claude.com/docs/en/sessions
   "Claude wants to run X" from structured data. **Verify shape during pinning.**
 - `AskUserQuestion` is a tool, so its question + options are structured
   `tool_input` in the transcript → render real buttons, not scraped `☐`.
-- CSM already tail-reads this for *archived* sessions; doc 02 §1b.2 generalizes it
+- Claude0 already tail-reads this for *archived* sessions; doc 02 §1b.2 generalizes it
   to live sessions.
 
 > ⚠️ The research agent reported some transcript line shapes (e.g. `user_message`
@@ -64,7 +64,7 @@ https://platform.claude.com/docs/en/agent-sdk/overview
   callback, resume, programmatic hooks.
 
 **Why not chosen:** Camp 2 means the app *owns* the process and rebuilds the whole
-UX; it discards CSM and the "real sessions I can SSH into" model. One-shot `-p`
+UX; it discards Claude0 and the "real sessions I can SSH into" model. One-shot `-p`
 cannot do interactive approval at all (must pre-approve or auto-decide). See
 `00-overview.md`.
 
@@ -113,7 +113,7 @@ remote/notification tools — and even the best of those (ccgram) reaches for
 **For us:** we deliberately stay Camp 1 because the goal is to observe *real*
 sessions and keep the existing tmux/zsh/claude setup — but we adopt the ccgram
 upgrade (hooks + JSONL, viewport as fallback) instead of the scrappy
-viewport-scraping CSM uses today.
+viewport-scraping Claude0 uses today.
 
 ### Pitfalls the projects hit (heed these)
 1. Viewport scraping is brittle — spinner glyphs, prompt strings, ANSI/chrome,
@@ -129,7 +129,7 @@ viewport-scraping CSM uses today.
 5. Session continuity: capture Claude's own `session_id`; don't invent IDs.
 6. Hook freshness/desync — hooks reflect only state since they fired; guard with
    transcript mtime / live-pane reconciliation (we already know this from
-   `csm next` state↔window desync).
+   `claude0 next` state↔window desync).
 
 ## Doc source list
 - Hooks: https://code.claude.com/docs/en/hooks , https://code.claude.com/docs/en/hooks-guide

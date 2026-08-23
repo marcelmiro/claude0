@@ -1,6 +1,6 @@
 # Data Model — Impl #2 (Camp 1)
 
-Persistence here is **file-state under `~/.config/csm/`**, not a database. The
+Persistence here is **file-state under `~/.config/claude0/`**, not a database. The
 "schema" is a set of on-disk file formats and their lifecycle. Decision: the new
 event log is **additive, separate, and bounded** — it does not touch the existing
 truncate-on-read `hook-events` pane-map file (see [`decisions.md`](./decisions.md) ADR-1).
@@ -18,10 +18,10 @@ erDiagram
 
 | File | Owner | Lifecycle | Read semantics |
 |------|-------|-----------|----------------|
-| `~/.config/csm/hook-events` | SessionStart hook (EXISTING) | append by hook, **truncate after read** | `processHookEvents()` — unchanged |
-| `~/.config/csm/events/<sessionId>.jsonl` | event hooks (NEW) | append **raw payload** by hook, **atomic trim to last N** | `readEvents()` — **read without truncation** |
-| `~/.config/csm/pending/<sessionId>.json` | blocking PreToolUse hook (NEW) | written when detached+blocking; removed on decision/timeout | `listPendingApprovals()` |
-| `~/.config/csm/decisions/<sessionId>.json` | consumer (TUI/bridge) (NEW) | written to resolve a pending; consumed+removed by hook | hook poll loop |
+| `~/.config/claude0/hook-events` | SessionStart hook (EXISTING) | append by hook, **truncate after read** | `processHookEvents()` — unchanged |
+| `~/.config/claude0/events/<sessionId>.jsonl` | event hooks (NEW) | append **raw payload** by hook, **atomic trim to last N** | `readEvents()` — **read without truncation** |
+| `~/.config/claude0/pending/<sessionId>.json` | blocking PreToolUse hook (NEW) | written when detached+blocking; removed on decision/timeout | `listPendingApprovals()` |
+| `~/.config/claude0/decisions/<sessionId>.json` | consumer (TUI/bridge) (NEW) | written to resolve a pending; consumed+removed by hook | hook poll loop |
 | `~/.claude/projects/<enc-cwd>/<id>.jsonl` | Claude Code (read-only) | Claude appends | `parseTranscript()` tail-read |
 
 The event log and the `hook-events` pane-map are **deliberately separate**:
@@ -96,10 +96,10 @@ incompatible with the pane-map's consume-and-truncate contract.
 No DDL, no locks, no downtime. The migration is **install new hooks + create dirs
 lazily**, ordered:
 
-1. **`csm setup` extension** (Inc3): register the six event hooks (`PreToolUse`,
+1. **`claude0 setup` extension** (Inc3): register the six event hooks (`PreToolUse`,
    `PostToolUse`, `UserPromptSubmit`, `Notification`, `Stop`, `SubagentStop`)
    alongside the existing `SessionStart` hook in `~/.claude/settings.json`. Bump
-   `HOOK_VERSION`; idempotent (re-run replaces only CSM-managed entries, preserves
+   `HOOK_VERSION`; idempotent (re-run replaces only Claude0-managed entries, preserves
    user hooks). Set per-hook `timeout` (default 600s) on the blocking PreToolUse.
 2. **Dirs created on first write** by the hook script (`mkdir -p events pending
    decisions`). No pre-provisioning.
@@ -133,12 +133,12 @@ its log; a stale log for a dead session is garbage-collected (Inc7 rotation).
 
 Per-increment, no data loss:
 
-- **Inc3/Inc4:** revert `csm setup` (lower `HOOK_VERSION` / `csm setup` re-run
+- **Inc3/Inc4:** revert `claude0 setup` (lower `HOOK_VERSION` / `claude0 setup` re-run
   removes the new hooks) → no new event records → discovery finds no logs →
-  scraper resumes for all sessions. Optionally `rm -rf ~/.config/csm/events`.
+  scraper resumes for all sessions. Optionally `rm -rf ~/.config/claude0/events`.
 - **Inc6 (approval):** the blocking hook **exits neutral when detached if no
   decision arrives** (600s timeout) and **exits neutral immediately when
   attached** — so removing the hook or the consumer never strands a session; the
-  desk TUI prompt always remains the floor. `rm -rf ~/.config/csm/{pending,decisions}`.
+  desk TUI prompt always remains the floor. `rm -rf ~/.config/claude0/{pending,decisions}`.
 - **Inc7:** monitor/notifications revert to viewport-driven transitions (the
   current behavior) by reverting the reconcile commit; no persisted state to undo.

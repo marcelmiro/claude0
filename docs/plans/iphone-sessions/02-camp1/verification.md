@@ -8,7 +8,7 @@ scroll-up regression (V1) is the scenario that defines the project.
 GIVEN a live claude session running a long Bash tool inside tmux
 WHEN  I scroll the pane up (so the spinner leaves the viewport and
       "Jump to bottom (ctrl+End) ↓" is shown)
-THEN  `csm list` and the TUI still report the session as `running`
+THEN  `claude0 list` and the TUI still report the session as `running`
 AND   it NEVER flips to `ready` until a real Stop/idle edge arrives
 ```
 Automated mirror: `bun test src/core/event-status.test.ts` (scroll-up regression
@@ -16,7 +16,7 @@ block) green; `status.test.ts` still pins the scraper bug as the documented cont
 
 ## V2 — Status truth table through a real turn · after Inc4
 ```
-GIVEN hooks installed (`csm setup`) and an event log for the session
+GIVEN hooks installed (`claude0 setup`) and an event log for the session
 WHEN  I submit a prompt, let a tool run, approve it, and let the turn finish
 THEN  status transitions running → (waiting at the permission prompt) → running →
       ready, matching Contract A, with no flicker, regardless of scroll position
@@ -62,7 +62,7 @@ AND   no keystrokes are sent to the pane
 ## V6 — Pre-hook sessions fall back to scraper · after Inc4
 ```
 GIVEN a session started BEFORE the event hooks were installed (no event log)
-WHEN  CSM discovers it
+WHEN  Claude0 discovers it
 THEN  it still appears with a status derived from `status.ts` scraping
 AND   nothing errors; `statusSource` reports `scraper`
 ```
@@ -89,7 +89,7 @@ AND   the core/ import-boundary guard (Inc7) bans blessed/ui imports under core/
 ## Dogfood gate (doc 00) — human judgment, before any Impl #3
 ```
 GIVEN Inc4+Inc5+Inc6+Inc7 landed
-WHEN  I use CSM through real Mac coding sessions for several days
+WHEN  I use Claude0 through real Mac coding sessions for several days
 THEN  status never flips on scroll-up, transcript-driven preview/answers are
       correct, and desk approval via the IPC works in daily use
 ONLY THEN is Implementation #3 (bridge + app) unblocked.

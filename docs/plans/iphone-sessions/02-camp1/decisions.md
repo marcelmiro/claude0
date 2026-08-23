@@ -9,7 +9,7 @@ the **raw hook payload verbatim, one JSON object per line** (no normalization).
 Read without truncation; trimmed to the last 200 lines **only when over budget**
 (`wc -l > 200`) via **atomic rename** (`.tmp` + `mv -f`) to survive the ~3s
 concurrent readers — the common path stays a bare append (the A7-measured ~5ms). Leave the existing
-`~/.config/csm/hook-events` pane-map file and `processHookEvents()` (truncate-on-
+`~/.config/claude0/hook-events` pane-map file and `processHookEvents()` (truncate-on-
 read) completely untouched.
 **Why raw verbatim:** the contract test `event-status.test.ts` casts the committed
 fixtures (`hooks/*.json`) `as HookEvent` and feeds them straight to `deriveStatus`
@@ -31,7 +31,7 @@ pane-map depend on the event log.
 **Decision:** Discovery uses `deriveStatus` only when `events/<sessionId>.jsonl`
 exists; otherwise `status.ts` scraper. No global flag.
 **Why:** Makes rollout and rollback **per-session and gradual** — pre-hook
-sessions and mixed fleets always remain valid, and reverting `csm setup` cleanly
+sessions and mixed fleets always remain valid, and reverting `claude0 setup` cleanly
 returns everything to the scraper. This is the backwards-compat shim (data-model §6).
 **Accepted risk:** during transition, two sessions can use different status
 sources; surfaced via `statusSource` for debugging.
@@ -67,7 +67,7 @@ auto-approved tools) before Impl #3's bridge/phone approval is considered
 successful or pushed.** Tracked in Open questions below.
 
 ## ADR-3b — One command per hook event; PreToolUse is a single combined handler
-**Decision:** `csm setup` registers exactly **one** command per event type. The
+**Decision:** `claude0 setup` registers exactly **one** command per event type. The
 five non-blocking events share `event.sh` (log + exit). `PreToolUse` gets its own
 `pretooluse.sh`: Inc3 makes it log-then-`exit 0`; Inc6 extends the **same** script
 to add attach-aware approval after the log append.
@@ -197,4 +197,4 @@ the headline bug would only be half-fixed. (User gate: in scope.)
   (generated hook + stubbed tmux: read-only/bypass → neutral, `Bash`/default →
   still block-polls and honors an allow decision) and a live detached-tmux repro
   (`Read|Grep|Task|Bash+bypass` → neutral; `Bash`/default → blocks). Run
-  `csm setup` to deploy v6.
+  `claude0 setup` to deploy v6.
