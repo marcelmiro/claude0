@@ -38,12 +38,14 @@ smoke-tests), so watch the output — a skip on a real VM is a problem.
 
 Prerequisites the script checks but cannot create:
 
-- **The user's home must be `/Users/<name>`** (created at launch: `sudo mkdir -p
-  /Users && sudo useradd -m -d /Users/<name> -s /usr/bin/zsh <name>` — useradd does
-  NOT create the `/Users` parent itself). Claude Code encodes the absolute cwd into
-  transcript directory names; matching the Mac's `/Users/...` layout byte-for-byte
-  is what lets copied sessions resume. Use the same short account name on both hosts
-  (ADR 17).
+- **Any home path works.** Claude Code encodes the absolute cwd into transcript
+  directory names, so `~/.claude` state copied from a host with a *different* home
+  needs a rename pass before sessions resume — matching homes byte-for-byte just
+  makes that step a no-op (ADR 15, retired). `scripts/migrate-dev-layout.ts` is the
+  existing rename machinery (manifest-driven `sourceHome` → `targetHome`), built for
+  a same-host account rename: for a cross-host move, run `preflight` on the source
+  host with real `--source-root`/`--target-root` values, copy state, then `apply` on
+  the target (its home must already equal the manifest's `targetHome`).
 - **Tailscale join** is interactive by design: `sudo tailscale up --ssh
   --hostname=<name> --authkey=<key>`. Use a **pre-tagged auth key** — tagging after
   join does not disable key expiry, and an expired node key strands the box.

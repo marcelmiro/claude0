@@ -245,9 +245,20 @@ export interface TmuxKeys {
   sidebarToggle: string;
 }
 
+/**
+ * What a machine does in a claude0 deployment: "local" holds both roles on one
+ * machine (the default), "host" owns tmux/sessions/daemon/bridge/inbox, "client"
+ * is the human-facing terminal attaching to a remote host.
+ */
+export type DeploymentRole = "local" | "host" | "client";
+
 export interface Config {
   $schema?: string;
   schemaVersion: 1;
+  /** Absent ⇒ role inferred at point of use (resolveRole); set explicitly to pin it */
+  deployment?: {
+    role: DeploymentRole;
+  };
   repositories: {
     roots: string[];          // dirs to scan 1-level deep for canonical git repos
     priority: string[];       // repo names pinned at top of lists

@@ -1,6 +1,6 @@
 import { homedir } from "os";
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
-import type { Config, TmuxKeys } from "../types";
+import type { Config, DeploymentRole, TmuxKeys } from "../types";
 
 // CLAUDE0_HOME overrides the home root (tests point it at a temp dir; bun's
 // os.homedir() ignores a runtime-set $HOME, so an env seam is the reliable hook).
@@ -97,9 +97,23 @@ function onlyKeys(value: Record<string, unknown>, allowed: string[], path: strin
 /** Validate the complete v1 file. Config mistakes are surfaced, never silently defaulted. */
 export function validateConfig(value: unknown): Config {
   if (!isObject(value)) throw new Error("config must be a JSON object");
-  onlyKeys(value, ["$schema", "schemaVersion", "repositories", "terminal", "ui", "notifications", "tmux"], "config");
+  onlyKeys(value, ["$schema", "schemaVersion", "deployment", "repositories", "terminal", "ui", "notifications", "tmux"], "config");
   if (value.schemaVersion !== 1) throw new Error(`schemaVersion must be 1 (received ${String(value.schemaVersion)})`);
   if (value.$schema !== undefined && typeof value.$schema !== "string") throw new Error("$schema must be a string");
+
+  // Optional on purpose, and deliberately NOT in DEFAULT_CONFIG: the missing-key
+  // merge would stamp role "local" onto a machine whose real role is inferred
+  // differently. Absent ⇒ resolveRole infers at point of use.
+  let deployment: Config["deployment"];
+  if (value.deployment !== undefined) {
+    if (!isObject(value.deployment)) throw new Error("deployment must be an object");
+    onlyKeys(value.deployment, ["role"], "deployment");
+    const role = value.deployment.role;
+    if (role !== "local" && role !== "host" && role !== "client") {
+      throw new Error('deployment.role must be "local", "host" or "client"');
+    }
+    deployment = { role };
+  }
 
   if (!isObject(value.repositories)) throw new Error("repositories must be an object");
   onlyKeys(value.repositories, ["roots", "priority"], "repositories");
@@ -177,6 +191,7 @@ export function validateConfig(value: unknown): Config {
   return {
     ...(value.$schema === undefined ? {} : { $schema: value.$schema }),
     schemaVersion: 1,
+    ...(deployment === undefined ? {} : { deployment }),
     repositories: { roots, priority },
     terminal: {
       defaultTarget: value.terminal.defaultTarget,
@@ -247,6 +262,21 @@ export function tmuxKeys(config: Config | null): TmuxKeys {
     sidebarFocus: user.sidebarFocus ?? defaults.sidebarFocus,
     sidebarToggle: user.sidebarToggle ?? defaults.sidebarToggle,
   };
+}
+
+/**
+ * This machine's deployment role: the configured value when present, otherwise
+ * inferred — linux runs the host; a Mac pointed at a remote terminal is the
+ * client at the desk; anything else is the single-machine local deployment.
+ * The inference is a point-of-use default (never merged into config.json);
+ * writing `deployment.role` explicitly freezes it.
+ */
+export function resolveRole(config: Config | null, platform: NodeJS.Platform = process.platform): DeploymentRole {
+  const configured = config?.deployment?.role;
+  if (configured !== undefined) return configured;
+  if (platform === "linux") return "host";
+  if (platform === "darwin" && config?.terminal.defaultTarget === "remote") return "client";
+  return "local";
 }
 
 /** Parse JSON separately so syntax diagnostics can be tested without mutating user state. */

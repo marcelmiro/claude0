@@ -25,16 +25,6 @@ have() { command -v "$1" >/dev/null 2>&1; }
 note() { printf '\033[36m[provision]\033[0m %s\n' "$*"; }
 skip() { printf '\033[33m[provision skip]\033[0m %s\n' "$*"; }
 
-# ── 0. Home-directory parity check ─────────────────────────────────────────────
-# Claude Code encodes the ABSOLUTE cwd into ~/.claude/projects/<encoded>/ dir names,
-# so transcripts copied from the Mac only resolve if $HOME matches its /Users/<user>
-# form byte-for-byte. The user must be created that way at launch (useradd -m -d
-# /Users/<name>); this can only be verified after the fact.
-case "$HOME" in
-  /Users/*) note "home-directory parity OK ($HOME)" ;;
-  *) skip "HOME is $HOME, not /Users/<name> — copied Claude transcripts will not resolve; see deploy/RUNBOOK.md for the rename-pass fallback" ;;
-esac
-
 # ── 1. Packages ────────────────────────────────────────────────────────────────
 # lsof: background-script liveness probes. bubblewrap+socat: Claude Code's Linux
 # sandbox — WITHOUT them it silently runs unsandboxed while autoAllowBashIfSandboxed

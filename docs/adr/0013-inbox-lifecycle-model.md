@@ -144,8 +144,8 @@ Settled against ADR 15/16's single-host cutover, built ahead of it:
   refused as speculative design.
 - **`inbox.db` rides the state copy** (WAL checkpointed first, daemon
   stopped): a snooze pending at cutover is a promise and must wake on the VM.
-  Repo paths inside stay valid via /Users parity; the snapshot table
-  self-rebuilds on the first discovery tick.
+  Repo paths inside stayed valid via /Users parity (retired since — see
+  ADR 15); the snapshot table self-rebuilds on the first discovery tick.
 - **Off-darwin wake alert = broadcast Web Push.** The banner tier cannot
   exist on a headless host; the wake pass broadcasts to every subscribed
   device there (a snooze set days ago has no meaningful driving device —

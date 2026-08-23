@@ -12,7 +12,7 @@ import { detectStatus, type SessionStatus } from "./core/status";
 import { eventSourcedStatus } from "./core/hook-events";
 import { nativeStatus, resolveStatus } from "./core/session-state";
 import { reapDeadSessionFiles } from "./core/approval";
-import { loadConfig } from "./core/config";
+import { loadConfig, configCache } from "./core/config";
 import { debugLog } from "./core/debug";
 import { loadState, saveState, computeAggregate, buildSessionStates, loadPaneSessions, savePaneSessions, processHookEvents } from "./core/state";
 import { detectTransitions, dispatchNotifications, dispatchHeldApprovalPushes, syncWindowPrefix, ATTENTION_PREFIX, RUNNING_PREFIX, SCRIPT_PREFIX, stripAllPrefixes, desiredPrefix, buildBaseName, abbreviateRepo, NAME_SEPARATOR } from "./core/notifications";
@@ -156,7 +156,12 @@ function formatStatus(aggregate: AggregateStatus): string {
 
 async function main(): Promise<void> {
   const [config, state, paneSessionMap, nameCache] = await Promise.all([
-    loadConfig(),
+    // An invalid config must not kill the monitor tick — status-right would go
+    // blank until the file is fixed. Degrade to defaults and say so on stderr.
+    loadConfig().catch((error: unknown) => {
+      console.error(`claude0 status: ${error instanceof Error ? error.message : String(error)} — using defaults`);
+      return configCache();
+    }),
     loadState(),
     loadPaneSessions(),
     loadNameCache(),

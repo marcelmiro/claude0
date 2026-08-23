@@ -1,7 +1,15 @@
 # 15. The Linux VM user's home is /Users/throxy
 
 Date: 2026-08-09
-Status: superseded by ADR 17
+Status: superseded by ADR 17; the home-path constraint itself was retired 2026-08-23
+
+> **Retirement note (2026-08-23):** nothing in claude0 depends on the `/Users`
+> prefix — any `$HOME` works, and provision/doctor no longer check it. The
+> constraint only ever mattered at migration boundaries: moving `~/.claude`
+> state between hosts with different homes requires the rename pass
+> (`scripts/migrate-dev-layout.ts`, manifest-driven `sourceHome` → `targetHome`),
+> which was rejected below as a *recurring* cost but is the supported path for a
+> one-time move.
 
 ## Context
 

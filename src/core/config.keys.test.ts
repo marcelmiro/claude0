@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_CONFIG, parseTmuxKey, tmuxKeyProblem, tmuxKeys, validateConfig } from "./config";
+import { DEFAULT_CONFIG, parseTmuxKey, resolveRole, tmuxKeyProblem, tmuxKeys, validateConfig } from "./config";
 import type { Config } from "../types";
 
 function base(): Config {
@@ -99,5 +99,38 @@ describe("tmux.keys", () => {
     expect(keys.next).toBe("prefix C-a");
     expect(keys.sidebarFocus).toBe("M-s");
     expect(tmuxKeys(null).popup).toBe("prefix a");
+  });
+});
+
+describe("deployment.role", () => {
+  test("round-trips through validateConfig and rejects bad values", () => {
+    const cfg = base();
+    cfg.deployment = { role: "host" };
+    expect(validateConfig(cfg).deployment).toEqual({ role: "host" });
+    (cfg.deployment as { role: unknown }).role = "server";
+    expect(() => validateConfig(cfg)).toThrow("deployment.role");
+    (cfg as unknown as { deployment: unknown }).deployment = { role: "host", extra: 1 };
+    expect(() => validateConfig(cfg)).toThrow("deployment contains unknown");
+  });
+
+  test("resolveRole: configured value wins over inference", () => {
+    const cfg = base();
+    cfg.deployment = { role: "client" };
+    expect(resolveRole(cfg, "linux")).toBe("client");
+  });
+
+  test("resolveRole inference: linux is the host", () => {
+    expect(resolveRole(base(), "linux")).toBe("host");
+  });
+
+  test("resolveRole inference: a Mac pointed at a remote terminal is the client", () => {
+    const cfg = base();
+    cfg.terminal.defaultTarget = "remote";
+    expect(resolveRole(cfg, "darwin")).toBe("client");
+  });
+
+  test("resolveRole inference: everything else is local", () => {
+    expect(resolveRole(base(), "darwin")).toBe("local");
+    expect(resolveRole(null, "darwin")).toBe("local");
   });
 });

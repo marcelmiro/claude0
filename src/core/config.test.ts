@@ -71,3 +71,13 @@ test("ensureUserConfig leaves an invalid file untouched (throws before the back-
   await expect(ensureUserConfig()).rejects.toThrow("unknown key: statusMonitor");
   expect(readFileSync(PATHS.config, "utf8")).toBe(invalid);
 });
+
+test("deployment is never back-filled by the missing-key merge — only setup writes it", async () => {
+  await ensureUserConfig();
+  expect(JSON.parse(readFileSync(PATHS.config, "utf8")).deployment).toBeUndefined();
+  // A present role survives the merge untouched.
+  const withRole = { ...JSON.parse(readFileSync(PATHS.config, "utf8")), deployment: { role: "host" } };
+  writeFileSync(PATHS.config, JSON.stringify(withRole, null, 2));
+  await ensureUserConfig();
+  expect(JSON.parse(readFileSync(PATHS.config, "utf8")).deployment).toEqual({ role: "host" });
+});

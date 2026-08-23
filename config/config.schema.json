@@ -8,6 +8,17 @@
   "properties": {
     "$schema": { "type": "string" },
     "schemaVersion": { "const": 1 },
+    "deployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role"],
+      "properties": {
+        "role": {
+          "enum": ["local", "host", "client"],
+          "description": "What this machine does: \"local\" = host+client on one machine (default), \"host\" = owns tmux/sessions/daemon/bridge/inbox, \"client\" = human-facing terminal attaching to a remote host. Absent ⇒ inferred from platform and terminal.defaultTarget; set explicitly to pin it."
+        }
+      }
+    },
     "repositories": {
       "type": "object",
       "additionalProperties": false,

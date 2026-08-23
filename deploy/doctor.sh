@@ -34,10 +34,6 @@ case "$(uname -s)" in
   Linux) pass "host is Linux ($(uname -m))" ;;
   *) fail "host is $(uname -s), not Linux" ;;
 esac
-case "$HOME" in
-  /Users/*) pass "home-directory parity: $HOME" ;;
-  *) fail "HOME is $HOME; copied Claude sessions expect /Users/<name>" ;;
-esac
 
 for cmd in tmux mosh-server zsh git gh jq curl bun claude0 claude bwrap socat lsof; do
   if command -v "$cmd" >/dev/null 2>&1; then

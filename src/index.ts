@@ -8,7 +8,7 @@ import { discoverSessions, groupSessions, seedPaneSessionCache } from "./core/se
 import { readPreviewMessages, type PendingToolCall, type PendingQuestion } from "./core/jsonl-reader";
 import { switchToPane, getMainSession, killPane, sendKeys, sendKeysSequential, sendTextAndEnter, answerQuestion } from "./core/tmux";
 import { loadNameCache, getSessionName, generateAIName, saveNameCache, normalizeName, slugify, type NameCache } from "./core/names";
-import { loadConfig, DEFAULT_CONFIG } from "./core/config";
+import { loadConfig, configCache, DEFAULT_CONFIG } from "./core/config";
 import { loadState, saveState, loadPaneSessions } from "./core/state";
 import { listPendingApprovals, decideApproval, decideQuestion, buildAnswersMap } from "./core/approval";
 import { syncWindowPrefix, buildBaseName, abbreviateRepo } from "./core/notifications";
@@ -1615,10 +1615,18 @@ listBox.setContent(
 updateStatusBar();
 screen.render();
 
-// Load name cache + notification config + pane sessions, then start refresh loop
-Promise.all([loadNameCache(), loadConfig(), loadPaneSessions()]).then(([cache, config, paneSessions]) => {
+// Load name cache + notification config + pane sessions, then start refresh loop.
+// An invalid config degrades to defaults instead of crashing the TUI (an unhandled
+// rejection here would kill the process before the first paint).
+let configError: string | null = null;
+const loadConfigOrDefaults = loadConfig().catch((error: unknown) => {
+  configError = error instanceof Error ? error.message : String(error);
+  return configCache();
+});
+Promise.all([loadNameCache(), loadConfigOrDefaults, loadPaneSessions()]).then(([cache, config, paneSessions]) => {
   nameCache = cache;
   notifConfig = config;
+  if (configError) flashStatusMessage(`{${C.red}-fg}Config invalid — using defaults{/${C.red}-fg}`, 5000);
   // Seed pane→sessionId cache from disk (persisted by monitor)
   seedPaneSessionCache(paneSessions);
   // Nudge: flash a message if the SessionStart hook is missing or outdated
