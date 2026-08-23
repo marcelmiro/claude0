@@ -25,8 +25,11 @@ const pendingDir = `${TEST_HOME}/.config/claude0/pending`;
 beforeAll(async () => {
   // TEST_HOME persists between runs and `setup()` only rewrites a script when the
   // installed HOOK_VERSION is older — so without this the suite can assert against a
-  // stale script from a previous run and miss an edit to the template.
+  // stale script from a previous run and miss an edit to the template. The config
+  // goes too: a leftover client role (written by cli.test.ts's client-setup tests)
+  // would make setup() skip the fresh hook install entirely.
   rmSync(hookPath, { force: true });
+  rmSync(`${TEST_HOME}/.config/claude0/config.json`, { force: true });
   await setup(); // writes the real pretooluse.sh under TEST_HOME/.config/claude0/hooks
 
   // Stub `tmux`. Default is a detached session: a session name exists

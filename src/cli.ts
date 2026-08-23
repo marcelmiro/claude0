@@ -18,7 +18,8 @@ import { detectStatus } from "./core/status";
 import { eventSourcedStatus } from "./core/hook-events";
 import { nativeStatus, resolveStatus } from "./core/session-state";
 import { loadNameCache, slugify } from "./core/names";
-import { PATHS, loadConfig, ensureUserConfig, parseTmuxKey, tmuxKeys } from "./core/config";
+import { PATHS, loadConfig, saveConfig, ensureUserConfig, parseTmuxKey, tmuxKeys, resolveRole } from "./core/config";
+import type { DeploymentRole } from "./types";
 import { PRESENCE_WINDOW_S } from "./core/presence";
 import { pickSavedCwd, resolveRestoreTarget } from "./core/resurrect";
 import { pickRepoPath } from "./core/sessions";
@@ -851,7 +852,67 @@ async function getInstalledHookVersion(hookPath: string): Promise<number> {
  * times — rewrites outdated scripts and adds only missing registrations, so a
  * second run is a no-op and user hooks are preserved.
  */
-export async function setup(): Promise<void> {
+const ROLES: readonly DeploymentRole[] = ["local", "host", "client"];
+
+async function promptLine(question: string): Promise<string> {
+  const readline = await import("node:readline/promises");
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return (await rl.question(question)).trim();
+  } finally {
+    rl.close();
+  }
+}
+
+/** Interactive prompts are for real runs only: tests (CLAUDE0_HOME) may run under a pty. */
+function canPrompt(): boolean {
+  return !process.env.CLAUDE0_HOME && Boolean(process.stdin.isTTY) && Boolean(process.stdout.isTTY);
+}
+
+/**
+ * Resolve this machine's deployment role: flag > configured value > inference.
+ * An inferred host/client is confirmed at a TTY before anything installs — a
+ * wrong guess installs (or retires) daemons; inferred "local" is the silent
+ * zero-question default. Explicit and non-local resolutions are written to
+ * config to pin them; an inferred "local" is deliberately NOT written, so a
+ * machine later pointed at a remote host re-infers client and retires its
+ * daemon instead of trusting a frozen default.
+ */
+export async function resolveSetupRole(
+  flag: string | undefined,
+  platform: NodeJS.Platform = process.platform,
+): Promise<DeploymentRole> {
+  const config = await loadConfig();
+  let role: DeploymentRole;
+  if (flag !== undefined) {
+    if (!ROLES.includes(flag as DeploymentRole)) {
+      throw new Error(`--role must be local, host or client (received "${flag}")`);
+    }
+    role = flag as DeploymentRole;
+  } else {
+    role = resolveRole(config, platform);
+    if (config.deployment?.role === undefined && role !== "local" && canPrompt()) {
+      const what =
+        role === "host"
+          ? "the host (owns tmux, sessions, daemon, bridge, inbox)"
+          : "a client of a remote host (terminal + alerts only)";
+      const answer = (await promptLine(`Set up this machine as ${what}? [Y/n] `)).toLowerCase();
+      if (answer !== "" && answer !== "y" && answer !== "yes") {
+        throw new Error("setup aborted — re-run with --role local|host|client to choose explicitly");
+      }
+    }
+  }
+  if (role === "host" && platform === "darwin") {
+    throw new Error('role "host" requires a linux/systemd machine — a Mac holding host duties is role "local"');
+  }
+  const pin = flag !== undefined || role !== "local";
+  if (pin && config.deployment?.role !== role) {
+    await saveConfig({ ...config, deployment: { role } });
+  }
+  return role;
+}
+
+export async function setup(roleFlag?: string): Promise<void> {
   const { homedir } = await import("os");
   const home = process.env.CLAUDE0_HOME ?? homedir(); // CLAUDE0_HOME: test seam (see config.ts)
   const settingsPath = `${home}/.claude/settings.json`;
@@ -859,6 +920,21 @@ export async function setup(): Promise<void> {
   const scriptPath = (name: string) => `${hookDir}/${name}`;
 
   const configCreated = await ensureUserConfig();
+  const role = await resolveSetupRole(roleFlag);
+
+  // A client is nothing without its host: ask once, or say where to set it.
+  if (role === "client") {
+    const config = await loadConfig();
+    if (!config.terminal.remoteHost) {
+      if (canPrompt()) {
+        const host = await promptLine("Remote host to attach to (tailscale/ssh name): ");
+        if (host) await saveConfig({ ...config, terminal: { ...config.terminal, remoteHost: host } });
+        else console.log(`No host set — set terminal.remoteHost in ${PATHS.config} before using \`claude0 terminal\`.`);
+      } else {
+        console.log(`Set terminal.remoteHost in ${PATHS.config} to finish client setup.`);
+      }
+    }
+  }
 
   const integrationChanged = await installTerminalIntegration(home);
 
@@ -879,11 +955,34 @@ export async function setup(): Promise<void> {
     content: (await Bun.file(`${import.meta.dir}/../config/hooks/${name}`).text())
       .replace("__HOOK_VERSION__", String(HOOK_VERSION)),
   })));
+  // Scripts an existing registration points at must stay real even on a client:
+  // a registered hook whose script vanished would exit 127 on every Claude event,
+  // and a client's never-install-fresh rule would otherwise leave it that way.
+  // Matching reuses the registration loop's home-independent path suffix so the
+  // two sites can't drift apart on the command format.
+  const registeredCommands: string[] = [];
+  for (const entries of Object.values(settings.hooks as Record<string, unknown>)) {
+    if (!Array.isArray(entries)) continue;
+    for (const entry of entries) {
+      const hooks = (entry as { hooks?: unknown }).hooks;
+      if (!Array.isArray(hooks)) continue;
+      for (const hook of hooks) {
+        const command = (hook as { command?: unknown }).command;
+        if (typeof command === "string") registeredCommands.push(command);
+      }
+    }
+  }
+  const scriptRegistered = (name: string) => registeredCommands.some((c) => c.includes(`/.config/claude0/hooks/${name}`));
+
   let scriptsWritten = 0;
   let scriptsUpdated = false;
   for (const { name, content } of [...HOOK_SCRIPTS, ...fileHookScripts]) {
     const path = scriptPath(name);
     const installed = await getInstalledHookVersion(path);
+    // A client never installs hooks fresh — sessions live on the host. But hooks
+    // already present or still registered (a host-era install, or occasional
+    // local sessions) are kept current: a stale hook is worse than an absent one.
+    if (role === "client" && installed === 0 && !scriptRegistered(name)) continue;
     if (installed < HOOK_VERSION) {
       await Bun.write(path, content);
       await Bun.$`chmod +x ${path}`.quiet();
@@ -913,6 +1012,7 @@ export async function setup(): Promise<void> {
     // absolute path would break the portable form a shared settings.json uses.
     const commandOk = (cmd: string) => cmd.startsWith('bash "') && cmd.endsWith(`${pathSuffix}"`);
     if (!existing) {
+      if (role === "client") continue; // never register fresh on a client — reconcile existing only
       const hook: Record<string, unknown> = { type: "command", command: desiredCommand };
       if (timeout !== undefined) hook.timeout = timeout;
       const entry: Record<string, unknown> = { hooks: [hook] };
@@ -940,19 +1040,22 @@ export async function setup(): Promise<void> {
     await Bun.write(settingsPath, JSON.stringify(settings, null, 2) + "\n");
   }
 
-  const daemonResult = await installDaemonAgent(home);
+  const daemonResult = await installDaemonAgent(home, role);
 
   // Sidebar default-on: the renderer stands up only while this marker exists,
   // and nothing else creates it — a
   // fresh machine would run an invisible inbox engine, with no M-S binding
   // installed to turn it on. M-S visibility rides its own hidden marker.
-  try {
-    const autostart = `${PATHS.dir}/inbox-sidebar-autostart-default`;
-    if (!(await Bun.file(autostart).exists())) {
-      await Bun.$`mkdir -p ${PATHS.dir}`.quiet();
-      await Bun.write(autostart, "");
-    }
-  } catch {}
+  // Client machines run no daemon, so the marker would be inert — skip it.
+  if (role !== "client") {
+    try {
+      const autostart = `${PATHS.dir}/inbox-sidebar-autostart-default`;
+      if (!(await Bun.file(autostart).exists())) {
+        await Bun.$`mkdir -p ${PATHS.dir}`.quiet();
+        await Bun.write(autostart, "");
+      }
+    } catch {}
+  }
 
   if (!scriptsWritten && !settingsChanged && daemonResult === "unchanged" && integrationChanged.length === 0 && !configCreated) {
     console.log("Claude0 hooks and terminal integration already configured.");
@@ -976,7 +1079,11 @@ export async function setup(): Promise<void> {
   if (daemonResult !== "unchanged") {
     console.log(`Inbox daemon ${daemonResult} (launchd: com.claude0.daemon — snooze wakes fire without a terminal open).`);
   }
-  console.log("\nNew Claude Code sessions will now emit status/transcript events.");
+  console.log(
+    role === "client"
+      ? "\nClient setup complete — `claude0 terminal` attaches to the remote host."
+      : "\nNew Claude Code sessions will now emit status/transcript events.",
+  );
 }
 
 /**
@@ -986,25 +1093,24 @@ export async function setup(): Promise<void> {
  * pins the bun binary and the claude0 entry script that ran this setup, plus a
  * PATH that reaches tmux — launchd's default PATH doesn't include homebrew.
  */
-async function installDaemonAgent(home: string): Promise<"installed" | "updated" | "unchanged"> {
+async function installDaemonAgent(home: string, role: DeploymentRole): Promise<"installed" | "updated" | "unchanged"> {
   // launchd is darwin-only. On the Linux VM host the daemon runs as the
   // claude0-daemon.service user unit, installed by deploy/provision.sh like the
   // other units — setup must not scatter launchd artifacts there.
   if (process.platform !== "darwin") return "unchanged";
-  // One host owns the inbox. terminal.defaultTarget "remote" means this
-  // machine is a client of a remote tmux host — that host runs the daemon,
-  // and a local one would produce a second, divergent inbox (and its own
-  // snooze wakes). Skip the install, and retire any agent a pre-remote
-  // setup run left behind.
-  const { loadConfig } = await import("./core/config");
-  const config = await loadConfig().catch(() => null);
-  if (config?.terminal?.defaultTarget === "remote") {
+  // One host owns the inbox. A darwin machine runs the launchd daemon only
+  // when it holds both roles (local); a client's host runs the daemon, and a
+  // local one would produce a second, divergent inbox (and its own snooze
+  // wakes). Skip the install, and retire any agent a pre-role setup left.
+  if (role !== "local") {
+    const plistPath = `${home}/Library/LaunchAgents/com.claude0.daemon.plist`;
+    const hadAgent = await Bun.file(plistPath).exists();
     if (!process.env.CLAUDE0_HOME) {
       const uid = process.getuid?.() ?? 501;
       await Bun.$`launchctl bootout gui/${uid}/com.claude0.daemon`.quiet().nothrow();
     }
-    rmSync(`${home}/Library/LaunchAgents/com.claude0.daemon.plist`, { force: true });
-    console.log("Inbox daemon not installed: terminal.defaultTarget is \"remote\" — the remote host owns the inbox.");
+    rmSync(plistPath, { force: true });
+    if (hadAgent) console.log(`Inbox daemon retired: this machine's role is "${role}" — the host owns the inbox.`);
     return "unchanged";
   }
   const { resolve } = await import("node:path");

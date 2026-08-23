@@ -324,3 +324,83 @@ test("setup() creates the sidebar autostart marker on a fresh machine", async ()
   await setup();
   expect(await Bun.file(marker).exists()).toBe(true);
 });
+
+test("setup rejects an unknown --role value", async () => {
+  await expect(setup("server")).rejects.toThrow("--role must be local, host or client");
+});
+
+test("setup pins explicit and non-local roles, never an inferred local", async () => {
+  await setup();
+  const config = JSON.parse(readFileSync(`${TEST_HOME}/.config/claude0/config.json`, "utf8"));
+  // linux infers host and pins it; darwin infers local, which stays unpinned so a
+  // later remote-target config re-infers client instead of trusting a frozen default.
+  expect(config.deployment).toEqual(process.platform === "darwin" ? undefined : { role: "host" });
+});
+
+test("role host refuses on darwin regardless of the machine running the tests", async () => {
+  const { resolveSetupRole } = await import("./cli");
+  await expect(resolveSetupRole("host", "darwin")).rejects.toThrow("requires a linux/systemd machine");
+  await expect(resolveSetupRole(undefined, "darwin")).resolves.toBe("local");
+});
+
+test("client setup installs no hooks, no daemon, no sidebar marker — but keeps the terminal layer", async () => {
+  await setup("client");
+  const { PATHS } = await import("./core/config");
+
+  // Terminal layer present.
+  expect(existsSync(`${TEST_HOME}/.local/bin/claude0`)).toBe(true);
+  expect(existsSync(`${TEST_HOME}/.config/claude0/terminal-launcher`)).toBe(true);
+
+  // No fresh hooks: scripts absent, settings carry only the user's own hook.
+  expect(existsSync(`${TEST_HOME}/.config/claude0/hooks/session-start.sh`)).toBe(false);
+  const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+  const commands = Object.values(settings.hooks ?? {})
+    .flat()
+    .flatMap((entry: any) => entry.hooks ?? [])
+    .map((h: any) => h.command);
+  expect(commands).toEqual(["/usr/local/bin/my-own-hook"]);
+
+  // No daemon plist, no sidebar autostart marker.
+  expect(existsSync(`${TEST_HOME}/Library/LaunchAgents/com.claude0.daemon.plist`)).toBe(false);
+  expect(existsSync(`${PATHS.dir}/inbox-sidebar-autostart-default`)).toBe(false);
+
+  const config = JSON.parse(readFileSync(PATHS.config, "utf8"));
+  expect(config.deployment).toEqual({ role: "client" });
+});
+
+test("client setup upgrades hooks already present instead of leaving them stale", async () => {
+  await setup(); // full install (local/host) puts the hooks in place
+  const hookPath = `${TEST_HOME}/.config/claude0/hooks/session-start.sh`;
+  const current = readFileSync(hookPath, "utf8");
+  writeFileSync(hookPath, current.replace(/^# HOOK_VERSION=\d+/m, "# HOOK_VERSION=1"));
+
+  await setup("client");
+  expect(readFileSync(hookPath, "utf8")).toBe(current);
+});
+
+test("client setup retires a previously installed daemon plist", async () => {
+  if (process.platform !== "darwin") return; // retire lives behind the launchd (darwin) gate
+  const plistPath = `${TEST_HOME}/Library/LaunchAgents/com.claude0.daemon.plist`;
+  mkdirSync(`${TEST_HOME}/Library/LaunchAgents`, { recursive: true });
+  writeFileSync(plistPath, "<plist/>");
+  await setup("client");
+  expect(existsSync(plistPath)).toBe(false);
+});
+
+test("client setup restores a registered hook script that vanished", async () => {
+  // A registration exists (portable $HOME form) but the script file is gone —
+  // the client's never-install-fresh rule must not leave it exiting 127 forever.
+  writeFileSync(
+    settingsPath,
+    JSON.stringify({
+      hooks: {
+        SessionStart: [
+          { hooks: [{ type: "command", command: 'bash "$HOME/.config/claude0/hooks/session-start.sh"' }] },
+        ],
+      },
+    }),
+  );
+  await setup("client");
+  const script = readFileSync(`${TEST_HOME}/.config/claude0/hooks/session-start.sh`, "utf8");
+  expect(script).toContain(`# HOOK_VERSION=`);
+});

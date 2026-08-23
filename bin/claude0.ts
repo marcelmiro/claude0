@@ -15,7 +15,7 @@ function help() {
     \x1b[36mlist\x1b[0m                Print sessions with status, repo, and context %
     \x1b[36mswitch <name>\x1b[0m       Fuzzy-match a session by name and switch to it
     \x1b[36mnotify <message>\x1b[0m    Web-push a message to every subscribed device
-    \x1b[36msetup\x1b[0m               Install Claude0 commands, hooks, and terminal integration
+    \x1b[36msetup\x1b[0m               Install Claude0 for this machine's role (--role local|host|client)
     \x1b[36mconfig\x1b[0m              Print the absolute user config path
     \x1b[36mterminal [command]\x1b[0m  Manage local/remote terminal attachment
     \x1b[36msave-sessions\x1b[0m       Snapshot pane→session map for tmux-resurrect
@@ -89,9 +89,18 @@ switch (cmd) {
   case "switch":
     await import("../src/cli").then((m) => m.switchTo(process.argv[3]));
     break;
-  case "setup":
-    await import("../src/cli").then((m) => m.setup());
+  case "setup": {
+    // "--role client" and "--role=client"; a missing value becomes "" so the
+    // validator errors instead of silently falling back to inference.
+    let role: string | undefined;
+    for (let i = 3; i < process.argv.length; i++) {
+      const arg = process.argv[i]!;
+      if (arg === "--role") role = process.argv[i + 1] ?? "";
+      else if (arg.startsWith("--role=")) role = arg.slice("--role=".length);
+    }
+    await import("../src/cli").then((m) => m.setup(role));
     break;
+  }
   case "config": {
     const { PATHS, ensureUserConfig } = await import("../src/core/config");
     await ensureUserConfig();
