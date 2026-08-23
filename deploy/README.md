@@ -19,7 +19,7 @@ read-only audit.
 |---|---|
 | `../config/units/tmux.service` | User unit: tmux server at boot (linger), `claude0 save-sessions` on stop. |
 | `../config/units/claude0-bridge.service` | User unit: the bridge, `Restart=always` with spaced retries, token via 0600 `EnvironmentFile`. |
-| `../config/units/claude0-monitor.service` | User unit: fallback monitor tick + resurrect autosave while no tmux client is attached (status-right — and continuum riding it — only runs for attached clients). |
+| `../config/units/claude0-monitor.service` | User unit: fallback monitor tick while no tmux client is attached (status-right only runs for attached clients) + unconditional 15-min resurrect autosave — the host's only periodic saver. |
 | `../config/units/claude0-daemon.service` | User unit: the inbox daemon (snooze wakes, discovery snapshots, sidebar renderer) — systemd twin of darwin's `com.claude0.daemon` launchd agent. Off-darwin the wake alert is a broadcast Web Push (no banner tier on a headless host). |
 | `../config/tmux.conf` | Claude0-owned, cross-platform tmux integration installed by `claude0 setup`. Personal tmux settings remain separate. |
 | `aws/dlm-policies.sh` | DLM snapshot schedules (4-hourly/3d + daily/14d on `claude0-backup=true` volumes) + budget-stop guardrail pointer. CLI-only — the console can't do sub-daily. |
