@@ -10,8 +10,7 @@ Host provisioning is native: **`claude0 setup --role host`** performs everything
 needrestart list-only, bubblewrap AppArmor profile, linger, user units, bridge
 token, Tailscale) in one idempotent pass with one sudo authorization, then prints
 a guided checklist for the interactive auth steps. `claude0 doctor` is the
-read-only audit. `provision.sh`/`doctor.sh` remain only until the native path is
-validated on the live host, and are deprecated.
+read-only audit.
 
 ## Contents
 
@@ -22,8 +21,6 @@ validated on the live host, and are deprecated.
 | `../config/units/claude0-monitor.service` | User unit: fallback monitor tick + resurrect autosave while no tmux client is attached (status-right — and continuum riding it — only runs for attached clients). |
 | `../config/units/claude0-daemon.service` | User unit: the inbox daemon (snooze wakes, discovery snapshots, sidebar renderer) — systemd twin of darwin's `com.claude0.daemon` launchd agent. Off-darwin the wake alert is a broadcast Web Push (no banner tier on a headless host). |
 | `../config/tmux.conf` | Claude0-owned, cross-platform tmux integration installed by `claude0 setup`. Personal tmux settings remain separate. |
-| `provision.sh` | **Deprecated** — the shell predecessor of `claude0 setup --role host`. Deleted once the native run is doctor-green on the live host. |
-| `doctor.sh` | **Deprecated** — the shell predecessor of `claude0 doctor`. Same deletion gate. |
 | `aws/dlm-policies.sh` | DLM snapshot schedules (4-hourly/3d + daily/14d on `csm-backup=true` volumes) + budget-stop guardrail pointer. CLI-only — the console can't do sub-daily. |
 | `aws/snapshot-check.{service,timer}` | Hourly staleness probe: newest `csm-backup` snapshot older than 5h → `claude0 notify` pushes to the phone. Personal ops — not installed by `claude0 setup`; copy to `~/.config/systemd/user/` and enable by hand. Needs the aws CLI and an instance role with `ec2:DescribeSnapshots`. |
 
@@ -66,8 +63,7 @@ configuration. `claude0 setup` owns and updates only its application fragments u
 Mac-to-VM paste is terminal input, not a Linux clipboard operation: use `Cmd+V`
 in Ghostty. VM-to-Mac copy (including Claude0's Space→c) uses OSC 52. Ghostty needs
 `clipboard-read = allow` and `clipboard-write = allow`; tmux advertises both
-`clipboard` and `bpaste` client features when the chain is healthy. `doctor.sh`
-checks the remote half and prints the attached client's capabilities. Ghostty's
+`clipboard` and `bpaste` client features when the chain is healthy. Ghostty's
 explicit `super+v=paste_from_clipboard` binding makes the host-to-VM path behave
 like a local terminal; no remote clipboard service or tmux prefix is involved.
 

@@ -123,10 +123,9 @@ git clone git@github.com:marcelmiro/dotfiles.git ~/.dotfiles
 ~/.dotfiles/bin/setup-linux
 
 cd ~/dev/claude0
-./deploy/provision.sh --tz Europe/Madrid --swap-gb 16
-claude0 setup
+claude0 setup --role host --tz Europe/Madrid --swap-gb 16
 ~/.dotfiles/doctor
-./deploy/doctor.sh
+claude0 doctor
 ```
 
 See [deploy/README.md](deploy/README.md) for prerequisites and
