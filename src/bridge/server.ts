@@ -118,6 +118,9 @@ const STATIC: Record<string, string> = {
   "/wake-format.js": "../../shared/wake-format.js",
   // Stream-event apply logic (versioned state push), shared with its test suite.
   "/sync.js": "../../shared/sync.js",
+  // Tunnel-wake recovery decisions (burst retry + fetch timeouts), shared with
+  // its test suite — served unbuilt.
+  "/reconnect.js": "../../shared/reconnect.js",
   "/manifest.json": "manifest.json",
   "/icon-512.png": "icon-512.png",
   "/apple-touch-icon.png": "apple-touch-icon.png",
@@ -1767,6 +1770,32 @@ export function startBridge(): ReturnType<typeof Bun.serve> {
   } catch {
     setInterval(() => void checkUnread(), 3000);
   }
+
+  // Follow the inbox store: the daemon commits a fresh snapshot every 3s, and a
+  // section flip (a just-sent session turning Running, a Mac-side verb) otherwise
+  // sits unpushed until an unrelated trigger — the next hook event could be a whole
+  // turn away. PRAGMA data_version is a free read that bumps on another
+  // connection's commit, so poll it and re-project on change. Gated on connected
+  // clients (phones close their stream on background), with the baseline reset
+  // while idle so a reconnect doesn't kick for changes it already received via the
+  // on-connect snapshot. pushSessions dedupes, so unchanged recomputes stay off
+  // the wire.
+  let lastInboxVersion: number | null = null;
+  setInterval(() => {
+    if (stream.clientCount() === 0) {
+      lastInboxVersion = null;
+      return;
+    }
+    try {
+      const store = getInboxStore();
+      if (!store) return;
+      const v = store.dataVersion();
+      if (lastInboxVersion !== null && v !== lastInboxVersion) kickSessionsPush();
+      lastInboxVersion = v;
+    } catch {
+      // db mid-replace or briefly locked — the next tick retries
+    }
+  }, 1000);
 
   const server = Bun.serve({
     hostname: host,

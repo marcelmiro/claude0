@@ -8,3 +8,5 @@ export function overlayResolved(
   serverStatus: string,
   now: number,
 ): boolean;
+
+export function displaySection(section: string, status: string, pendingScripts: number | undefined): string;

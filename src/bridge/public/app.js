@@ -16,7 +16,10 @@ import { formatWakeIn } from "/wake-format.js";
 import { tapTarget } from "/tap-target.js";
 // Stream-event apply logic (versioned state push), served unbuilt and covered by
 // shared/sync.test.ts.
-import { applyTranscriptEvent, overlayResolved } from "/sync.js";
+import { applyTranscriptEvent, overlayResolved, displaySection } from "/sync.js";
+// Tunnel-wake recovery decisions (burst retry + fetch timeouts), served unbuilt
+// and covered by shared/reconnect.test.ts.
+import { burstAction, withTimeout } from "/reconnect.js";
 
 const html = htm.bind(h);
 
@@ -35,15 +38,23 @@ const DEVICE_ID = (() => {
     return crypto.randomUUID(); // private mode — a per-load id still routes correctly
   }
 })();
-// Every request carries the device header — patched once here rather than
-// threading a wrapper through every call site. Headers() normalizes whatever
-// shape the call site passed (plain object, Headers, or none). The SSE URL uses
-// a query param instead (EventSource can't set headers).
+// Every request carries the device header AND a default abort timeout — patched
+// once here rather than threading a wrapper through every call site. Headers()
+// normalizes whatever shape the call site passed (plain object, Headers, or
+// none). The SSE URL uses a query param instead (EventSource can't set headers).
+// The timeout exists because a waking Tailscale tunnel black-holes traffic: an
+// untimed fetch then hangs for the platform default (60s+ on iOS), pinning stale
+// UI long past the point retrying would have worked. Call sites that are
+// legitimately slow (endpoints shelling out to git/gh, session launches, image
+// uploads) pass their own longer signal, which wins.
+const API_TIMEOUT_MS = 12_000;
+const SLOW_API_TIMEOUT_MS = 30_000;
+const slowTimeout = () => AbortSignal.timeout(SLOW_API_TIMEOUT_MS);
 const rawFetch = window.fetch.bind(window);
 window.fetch = (input, init = {}) => {
   const headers = new Headers(init.headers || {});
   headers.set("x-claude0-device", DEVICE_ID);
-  return rawFetch(input, { ...init, headers });
+  return rawFetch(input, withTimeout({ ...init, headers }, API_TIMEOUT_MS));
 };
 
 // Render assistant markdown the way the native terminal does: real paragraphs, list
@@ -586,6 +597,10 @@ const refreshTranscriptSoon = coalesce(refreshTranscript);
 // watchdog below reads it; every EventSource callback stamps it.
 let lastStreamActivity = Date.now();
 const stampStream = () => (lastStreamActivity = Date.now());
+// Last time a stream actually OPENED — the foreground burst's success signal.
+// Distinct from lastStreamActivity, which the watchdog also stamps on its own
+// rebuild attempts; the burst must only stand down on a real connection.
+let lastOpenAt = 0;
 
 // Tell the bridge which session this device has open (null = none). The server
 // answers with a forced transcript snapshot over the stream and keeps pushing
@@ -621,6 +636,7 @@ function connectStream() {
   // dropped it while the socket was down.
   es.onopen = () => {
     stampStream();
+    lastOpenAt = Date.now();
     connected.value = true;
     if (selectedId.value) openSubscription(selectedId.value);
     if (openSubagent.value) refreshSubagent();
@@ -825,6 +841,7 @@ async function action(path, body) {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
+      signal: slowTimeout(), // fork/send block server-side until the pane confirms
     });
     let data = {};
     try {
@@ -851,6 +868,7 @@ async function actionJson(path, body) {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
+      signal: slowTimeout(), // /config waits for Claude's own confirmation line
     });
     let data = {};
     try {
@@ -873,7 +891,7 @@ async function actionJson(path, body) {
 // the browser set the multipart boundary (no JSON content-type header).
 async function actionForm(path, formData) {
   try {
-    const r = await fetch(path, { method: "POST", body: formData });
+    const r = await fetch(path, { method: "POST", body: formData, signal: slowTimeout() });
     let data = {};
     try {
       data = await r.json();
@@ -1069,7 +1087,7 @@ async function refreshHistory(opts = {}) {
   if (historyRepo.value) params.set("repo", historyRepo.value);
   if (opts.before) params.set("before", String(opts.before));
   try {
-    const r = await fetch(`/history?${params}`);
+    const r = await fetch(`/history?${params}`, { signal: slowTimeout() });
     if (!r.ok) return;
     const data = await r.json();
     if (seq !== historySeq) return; // a newer query/page fetch superseded this one
@@ -1144,6 +1162,7 @@ async function launchSession(repo) {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ path: repo.path, name: repo.name }),
+      signal: slowTimeout(), // blocks until the new pane's prompt is live
     });
     const data = await r.json().catch(() => ({}));
     if (r.ok && data.ok !== false) {
@@ -1168,7 +1187,8 @@ async function restoreSession() {
   restoring.value = true;
   flash.value = "";
   try {
-    const r = await fetch(`/sessions/${encodeURIComponent(id)}/restore`, { method: "POST" });
+    // Blocks until Claude's prompt is live (~7-12s) — needs the slow tier.
+    const r = await fetch(`/sessions/${encodeURIComponent(id)}/restore`, { method: "POST", signal: slowTimeout() });
     const data = await r.json().catch(() => ({}));
     if (r.ok && data.ok !== false) {
       await refreshSessions();
@@ -1599,9 +1619,14 @@ function List() {
     if (el && listScrollTop > 0) el.scrollTop = listScrollTop; // browser clamps a too-large offset
   }, []);
   // Inbox (ADR 0013): rows arrive pre-ordered and pre-sectioned from the server
-  // (`inbox.section` per row, payload order = the store's sort) — the client only groups
-  // by section tag. Empty sections are omitted; rows without `inbox` (idle panes,
-  // History-bound archived) don't show here.
+  // (`inbox.section` per row, payload order = the store's sort) — the client groups
+  // by DISPLAYED section: the server tag rerouted between needs-you and running when
+  // the row's effective status contradicts it (`displaySection` in shared/sync.js).
+  // Status is the fresher fact — the optimistic overlay right after a verb, then the
+  // bridge's live capture — while the section tag trails the daemon's 3s snapshot,
+  // so a just-sent session files under Running immediately instead of sitting in
+  // Needs You until the next snapshot push. Empty sections are omitted; rows
+  // without `inbox` (idle panes, History-bound archived) don't show here.
   const SECTIONS = [
     ["needs-you", "needs you"],
     ["running", "running"],
@@ -1609,9 +1634,9 @@ function List() {
     ["done", "recently done"],
   ];
   const inboxGroups = SECTIONS.map(([key, title]) => {
-    // rows arrive pre-ordered from the server: deriveSections owns the
-    // needs-you band sort (question/approval first), shared with the sidebar
-    const rows = all.filter((s) => s.inbox && s.inbox.section === key);
+    // rows keep the server's order within their displayed section: deriveSections owns
+    // the needs-you band sort (question/approval first), shared with the sidebar
+    const rows = all.filter((s) => s.inbox && displaySection(s.inbox.section, s.status, s.pendingScripts) === key);
     return { key, title, rows };
   }).filter((g) => g.rows.length > 0);
   const renderInboxRow = (s) => {
@@ -1638,9 +1663,12 @@ function List() {
     // RUNNING carries nothing, ⏳ earns its place by contradicting the section
     // ("looks running, the AI is actually done"). Marks stack (⚡ is the "have I
     // seen it" axis); the only dot left is the pending alarm.
+    // A running session can't be waiting on an answer/approve — a lingering
+    // `pending` is snapshot staleness (the verb that started the turn consumed it).
+    const pending = s.status === "running" ? null : s.pending;
     const mark = parked
       ? html`<span class="markglyph">${blocked ? "✗" : "☾"}</span>`
-      : s.pending
+      : pending
         ? html`<span class="markdot" style=${dotStyle(s)}></span>`
         : null;
     const zap = s.unread && html`<span class="zapmark" title="unread">⚡</span>`;
@@ -1660,9 +1688,9 @@ function List() {
           >
           ${sub && html`<span class="sub">${sub}</span>`}
         </span>
-        ${s.pending &&
-        html`<span class="pendingbadge ${s.pending === "question" ? "q" : "a"}"
-          >${s.pending === "question" ? "answer" : "approve"}</span
+        ${pending &&
+        html`<span class="pendingbadge ${pending === "question" ? "q" : "a"}"
+          >${pending === "question" ? "answer" : "approve"}</span
         >`}
         <span class="age">${formatTimeAgo(new Date(ib.since).toISOString(), { now: tick.value })}</span>
       </button>`;
@@ -3836,7 +3864,7 @@ function ChangesCard() {
     let stale = false;
     (async () => {
       try {
-        const r = await fetch(`/sessions/${encodeURIComponent(sid)}/changes`);
+        const r = await fetch(`/sessions/${encodeURIComponent(sid)}/changes`, { signal: slowTimeout() });
         if (!r.ok) return;
         const d = await r.json();
         boundedSet(changesDataCache, sid, d);
@@ -3923,7 +3951,7 @@ function DiffView() {
       try {
         const range = from ? `&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}` : "";
         const q = `path=${encodeURIComponent(path)}${orig ? `&orig=${encodeURIComponent(orig)}` : ""}${range}`;
-        const r = await fetch(`/sessions/${encodeURIComponent(sid)}/diff?${q}`);
+        const r = await fetch(`/sessions/${encodeURIComponent(sid)}/diff?${q}`, { signal: slowTimeout() });
         // A failed REQUEST is not a git answer: keep the two apart so an unreachable bridge
         // never renders as "this file has no changes".
         const d = r.ok ? await r.json() : { error: true };
@@ -4027,7 +4055,7 @@ function usePullRequest(sid) {
     let stale = false;
     (async () => {
       try {
-        const r = await fetch(`/sessions/${encodeURIComponent(sid)}/pr`);
+        const r = await fetch(`/sessions/${encodeURIComponent(sid)}/pr`, { signal: slowTimeout() });
         if (!r.ok) return;
         const fresh = await r.json();
         boundedSet(prDataCache, sid, fresh);
@@ -4085,7 +4113,7 @@ function FilesView() {
     let stale = false;
     (async () => {
       try {
-        const r = await fetch(`/sessions/${encodeURIComponent(sid)}/changes`);
+        const r = await fetch(`/sessions/${encodeURIComponent(sid)}/changes`, { signal: slowTimeout() });
         const d = r.ok ? await r.json() : { error: true };
         if (r.ok) boundedSet(changesDataCache, sid, d);
         if (!stale) setData(d);
@@ -4249,9 +4277,41 @@ async function dismissNotifications() {
   }
 }
 
+// Foreground burst: for the first 30s after a resync, a stream that hasn't
+// demonstrably opened is rebuilt every 4s. A waking Tailscale tunnel can
+// black-hole traffic with no error delivered — the EventSource just sits
+// CONNECTING — and the steady-state watchdog retries at most once per 40s,
+// which reads as a frozen app. Decision logic is pure (shared/reconnect.js);
+// this owns only the timer. resync() also stamps lastStreamActivity so the
+// watchdog stays quiet for its full 40s window while the burst owns recovery
+// — two uncoordinated timers would tear down each other's half-connected
+// EventSource during exactly the window this exists to cover.
+let burstTimer = null;
+let burstStartedAt = 0;
+function stopBurst() {
+  clearInterval(burstTimer);
+  burstTimer = null;
+}
+function startBurst() {
+  stopBurst();
+  burstStartedAt = Date.now();
+  burstTimer = setInterval(() => {
+    const act = burstAction({
+      burstStartedAt,
+      lastOpenAt,
+      hidden: document.visibilityState !== "visible",
+      now: Date.now(),
+    });
+    if (act === "stop") return stopBurst();
+    connectStream();
+  }, 4_000);
+}
+
 function resync() {
   if (!authed.value) return;
   tick.value = Date.now(); // ages froze while the tab was hidden — catch them up first
+  stampStream(); // hold the 40s watchdog off — the burst owns recovery right now
+  startBurst();
   // Foregrounding is ONE action now: rebuild the stream. The server's on-connect
   // snapshots (sessions + the re-subscribed transcript) replace the old three racing
   // refetches, so the first paint after a wake is already the current world.
@@ -4296,6 +4356,7 @@ function sendGoodbye() {
   // payload re-arms for the open session once fresh data lands.
   for (const t of readTimers.values()) clearTimeout(t);
   readTimers.clear();
+  stopBurst(); // the closed stream is deliberate — don't fight it from the background
   if (es) {
     es.close();
     es = null;

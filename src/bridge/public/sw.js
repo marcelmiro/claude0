@@ -1,12 +1,102 @@
-// Service worker: Web Push receiver + notification click routing. No caching —
-// the app is served no-cache on purpose; this worker exists only for push.
+// Service worker: Web Push receiver, notification click routing, and a
+// network-first app-shell fallback. Data endpoints stay uncached; the shell
+// cache exists because the phone's Tailscale tunnel can black-hole traffic for
+// many seconds right after wake, and with no fallback an app open white-screens
+// for the whole navigation timeout (ADR 0021). A reachable bridge always wins —
+// the cache only answers when the network is dead or slower than the race timer.
 // skipWaiting/claim so an updated worker takes over on next launch instead of
 // iOS's lazy default (otherwise stale push handlers linger for days).
 
 const NAV_CACHE = "claude0-nav";
+const SHELL_CACHE = "claude0-shell-v1";
+
+// Everything the shell needs to paint offline: the module graph under app.js
+// plus manifest/icons. Mirrors the server's STATIC allow-map (sw.js is a
+// classic import-free worker, so the list can't be shared — sw.test.ts guards
+// the two against drifting). "/" is handled via request.mode === "navigate".
+const SHELL_PATHS = [
+  "/app.js",
+  "/time-ago.js",
+  "/diff-lines.js",
+  "/tap-target.js",
+  "/wake-format.js",
+  "/sync.js",
+  "/reconnect.js",
+  "/manifest.json",
+  "/icon-512.png",
+  "/apple-touch-icon.png",
+  "/vendor/preact.mjs",
+  "/vendor/hooks.mjs",
+  "/vendor/signals-core.mjs",
+  "/vendor/signals.mjs",
+  "/vendor/htm.mjs",
+  "/vendor/marked.mjs",
+];
 
 self.addEventListener("install", () => self.skipWaiting());
-self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
+self.addEventListener("activate", (event) =>
+  event.waitUntil(
+    (async () => {
+      await self.clients.claim();
+      // Prune superseded shell caches only — NAV_CACHE is the tap-stash and
+      // must survive worker updates.
+      try {
+        for (const key of await caches.keys()) {
+          if (key.startsWith("claude0-shell-") && key !== SHELL_CACHE) await caches.delete(key);
+        }
+      } catch {
+        /* pruning is best-effort — a stale cache wastes bytes, nothing else */
+      }
+    })(),
+  ),
+);
+
+// How long the network gets before the cached shell answers instead. Short on
+// purpose: past this the tunnel is either dead or slow enough that a cached
+// paint + the app's own reconnect banner beat a blank screen. Overridable so
+// tests don't sleep through the real timer.
+const NET_TIMEOUT_MS = self.__shellTimeoutMs || 3500;
+
+self.addEventListener("fetch", (event) => {
+  const req = event.request;
+  if (req.method !== "GET") return;
+  const url = new URL(req.url);
+  if (url.origin !== self.location.origin) return;
+  const isNav = req.mode === "navigate";
+  if (!isNav && !SHELL_PATHS.includes(url.pathname)) return; // API, /stream, /auth: untouched
+  const cacheKey = isNav ? "/" : url.pathname;
+
+  // Network-first: fetch always starts, and a 200 always refreshes the cache —
+  // even when the race below already answered from cache (waitUntil keeps the
+  // worker alive for the late write, so the NEXT launch gets the fresh copy).
+  const network = fetch(req).then(async (res) => {
+    if (res.status === 200) {
+      const copy = res.clone();
+      const cache = await caches.open(SHELL_CACHE);
+      await cache.put(cacheKey, copy);
+    }
+    return res;
+  });
+  event.waitUntil(network.catch(() => {}));
+
+  event.respondWith(
+    (async () => {
+      const winner = await Promise.race([
+        network.catch(() => null), // network error → try cache
+        new Promise((resolve) => setTimeout(() => resolve("timeout"), NET_TIMEOUT_MS)),
+      ]);
+      if (winner && winner !== "timeout") return winner;
+      let cached;
+      try {
+        cached = await (await caches.open(SHELL_CACHE)).match(cacheKey);
+      } catch {
+        /* cache unavailable — fall through to the network's own outcome */
+      }
+      if (cached) return cached;
+      return network; // no fallback: surface whatever the network does, as before
+    })(),
+  );
+});
 
 self.addEventListener("push", (event) => {
   // iOS drops the subscription if a push shows nothing — always show, even on a

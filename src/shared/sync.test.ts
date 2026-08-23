@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { applyTranscriptEvent, overlayResolved } from "./sync.js";
+import { applyTranscriptEvent, overlayResolved, displaySection } from "./sync.js";
 
 const turn = (text: string) => ({ role: "user", content: [{ type: "text", text }] });
 
@@ -92,4 +92,31 @@ test("ready overlay (interrupt) retires once the server leaves running", () => {
   expect(overlayResolved(o, "running", 500)).toBe(false);
   expect(overlayResolved(o, "ready", 500)).toBe(true);
   expect(overlayResolved(o, "waiting", 500)).toBe(true);
+});
+
+// --- displaySection ----------------------------------------------------------
+
+test("a needs-you row whose status is running renders under Running", () => {
+  expect(displaySection("needs-you", "running", 0)).toBe("running");
+});
+
+test("a needs-you prompt-sitter or approval stays put", () => {
+  expect(displaySection("needs-you", "ready", 0)).toBe("needs-you");
+  expect(displaySection("needs-you", "waiting", 0)).toBe("needs-you");
+});
+
+test("a running row whose turn already ended renders under Needs You", () => {
+  expect(displaySection("running", "ready", 0)).toBe("needs-you");
+  expect(displaySection("running", "waiting", 0)).toBe("needs-you");
+});
+
+test("script-waiters keep their Running placement (the deliberate ⏳ contradiction)", () => {
+  expect(displaySection("running", "ready", 2)).toBe("running");
+});
+
+test("authored sections are never rerouted", () => {
+  expect(displaySection("parked", "running", 0)).toBe("parked");
+  expect(displaySection("done", "running", 0)).toBe("done");
+  // pane-less projected rows carry non-live statuses — untouched
+  expect(displaySection("needs-you", "archived", 0)).toBe("needs-you");
 });

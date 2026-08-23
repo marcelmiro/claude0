@@ -37,3 +37,20 @@ export function overlayResolved(overlay, serverStatus, now) {
   if (overlay.status === "ready") return serverStatus !== "running";
   return true;
 }
+
+/**
+ * Which inbox section a row RENDERS in, given the server's section and the
+ * row's effective status (status overlays already applied). The two server
+ * facts can disagree: `status` is the bridge's live pane capture, `section`
+ * derives from the daemon's snapshot (a 3s tick behind, plus push latency) —
+ * so between a send and the snapshot catching up, a genuinely-running session
+ * still carries section "needs-you". The fresher fact wins for display only;
+ * the store stays the section brain for everything authored (parked/done are
+ * never rerouted). Script-waiters (turn over, background script live) keep
+ * their Running placement — that contradiction is deliberate (the ⏳ mark).
+ */
+export function displaySection(section, status, pendingScripts) {
+  if (section === "needs-you" && status === "running") return "running";
+  if (section === "running" && (status === "ready" || status === "waiting") && !pendingScripts) return "needs-you";
+  return section;
+}

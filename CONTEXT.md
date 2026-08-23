@@ -22,6 +22,10 @@ _Avoid_: resume (reserved for Claude's own CLI flag), reopen
 **Restore states**:
 *Restorable* — the session's original directory exists; restores in place. *Relocated* — its worktree is gone but the base repo exists; restores in the base repo. *Non-restorable* — base repo or transcript is gone; readable but not restorable.
 
+**Role**:
+What a machine does in a claude0 deployment, declared per-install in its config: *host* (owns tmux, the sessions, the daemon, the bridge, the inbox) or *client* (the human-facing terminal and alert surface — Ghostty, banners, desk presence). The default deployment is one machine holding both roles (local); a remote deployment splits them (Linux host, Mac client). Exactly one machine holds the host role at a time.
+_Avoid_: mode (a deployment is the *pair* of role assignments, not a single switch)
+
 **Inbox**:
 A view over sessions grouped by lifecycle state. An inbox item *is* a session (keyed by its UUID) — there is no free-standing work-item object, and no item without a transcript.
 _Avoid_: work item, task, thread

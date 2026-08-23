@@ -12,35 +12,54 @@ import { test, expect } from "bun:test";
 
 const SW_PATH = `${import.meta.dir}/sw.js`;
 
+const ORIGIN = "https://pk.test";
+
 function makeScope() {
   const listeners = new Map<string, ((ev: unknown) => void)[]>();
-  const store = new Map<string, string>();
   const shown: { title: string; tag: string; data: unknown; close(): void }[] = [];
   const posted: unknown[] = [];
   const opened: string[] = [];
 
+  // Named caches with keys()/delete(), matching the real CacheStorage surface —
+  // the shell-versioning prune in `activate` is untestable against a single
+  // shared store.
+  const cacheStores = new Map<string, Map<string, string>>();
+  const cacheFor = (name: string) => {
+    let s = cacheStores.get(name);
+    if (!s) cacheStores.set(name, (s = new Map()));
+    return s;
+  };
   const caches = {
-    async open() {
+    async open(name: string) {
+      const s = cacheFor(name);
       return {
         async put(k: string, res: Response) {
-          store.set(k, await res.text());
+          s.set(k, await res.text());
         },
         async match(k: string) {
-          const v = store.get(k);
+          const v = s.get(k);
           return v === undefined ? undefined : new Response(v);
         },
         async delete(k: string) {
-          store.delete(k);
+          s.delete(k);
         },
       };
     },
+    async keys() {
+      return [...cacheStores.keys()];
+    },
+    async delete(name: string) {
+      return cacheStores.delete(name);
+    },
   };
+  const store = cacheFor("claude0-nav"); // the tap-stash cache, used by existing tests
 
   const scope = {
     addEventListener(t: string, fn: (ev: unknown) => void) {
       listeners.set(t, [...(listeners.get(t) ?? []), fn]);
     },
     skipWaiting() {},
+    location: { origin: ORIGIN },
     registration: {
       async showNotification(title: string, o: { tag: string; data: unknown }) {
         // Real tag semantics: one notification per tag, latest wins; close() removes
@@ -86,16 +105,37 @@ function makeScope() {
 
   async function dispatch(type: string, ev: Record<string, unknown>) {
     const waits: Promise<unknown>[] = [];
-    ev.waitUntil = (p: Promise<unknown>) => waits.push(p);
+    ev.waitUntil = (p: Promise<unknown>) => waits.push(p.catch(() => {}));
     for (const fn of listeners.get(type) ?? []) fn(ev);
     await Promise.all(waits);
   }
 
-  return { scope, store, shown, posted, opened, dispatch, setWindows };
+  // Fetch-event dispatch: returns what respondWith settled to (undefined when the
+  // handler fell through — the "never intercepted" assertion). waitUntil promises
+  // are NOT awaited here: the background cache update outlives the response on the
+  // timeout path, and awaiting it would deadlock a deliberately-hung network.
+  async function dispatchFetch(request: Record<string, unknown>) {
+    let responded: Promise<Response> | undefined;
+    const ev = {
+      request,
+      respondWith(p: Promise<Response>) {
+        responded = p;
+      },
+      waitUntil(p: Promise<unknown>) {
+        p.catch(() => {});
+      },
+    };
+    for (const fn of listeners.get("fetch") ?? []) fn(ev);
+    return responded === undefined ? undefined : await responded;
+  }
+
+  return { scope, store, cacheFor, shown, posted, opened, dispatch, dispatchFetch, setWindows };
 }
 
-async function loadWorker() {
+async function loadWorker(opts: { fetch?: (req: unknown) => Promise<Response>; shellTimeoutMs?: number } = {}) {
   const h = makeScope();
+  // Shrink the shell network-race timer so hung-network tests don't sleep 3.5s.
+  (h.scope as Record<string, unknown>).__shellTimeoutMs = opts.shellTimeoutMs ?? 20;
   const src = await Bun.file(SW_PATH).text();
   // sw.js is a classic worker — no imports — so evaluating it with `self` bound is faithful.
   // An ESM `import` here would be a parse error on device and silently leave the OLD worker
@@ -105,7 +145,7 @@ async function loadWorker() {
     h.scope.caches,
     h.scope.navigator,
     Response,
-    async () => new Response("{}"),
+    opts.fetch ?? (async () => new Response("{}")),
   );
   return h;
 }
@@ -200,4 +240,86 @@ test("stashes even when a window already exists and the message may be dropped",
   expect(JSON.parse(h.store.get("pending")!).sessionId).toBe("s2");
   expect(h.posted).toEqual([{ type: "open-session", sessionId: "s2" }]);
   expect(h.opened).toEqual([]);
+});
+
+// --- app-shell fetch handler (network-first, cached fallback — ADR 0021) ---
+
+const SHELL = "claude0-shell-v1";
+const get = (path: string, mode = "no-cors") => ({ method: "GET", url: `${ORIGIN}${path}`, mode });
+const hang = () => new Promise<Response>(() => {});
+
+test("a shell asset served from the network lands in the shell cache", async () => {
+  const h = await loadWorker({ fetch: async () => new Response("fresh app js") });
+  const res = await h.dispatchFetch(get("/app.js"));
+
+  expect(await res!.text()).toBe("fresh app js");
+  // The cache write rides the network promise — give the microtask a beat.
+  await Bun.sleep(1);
+  expect(h.cacheFor(SHELL).get("/app.js")).toBe("fresh app js");
+});
+
+test("a network hung past the race timer serves the cached copy", async () => {
+  const h = await loadWorker({ fetch: hang });
+  h.cacheFor(SHELL).set("/app.js", "cached app js");
+
+  const res = await h.dispatchFetch(get("/app.js"));
+  expect(await res!.text()).toBe("cached app js");
+});
+
+test("a navigation with a dead network falls back to the cached shell page", async () => {
+  const h = await loadWorker({ fetch: async () => Promise.reject(new Error("tunnel dead")) });
+  h.cacheFor(SHELL).set("/", "<html>shell</html>");
+
+  const res = await h.dispatchFetch(get("/anything", "navigate"));
+  expect(await res!.text()).toBe("<html>shell</html>");
+});
+
+test("API paths are never intercepted", async () => {
+  const h = await loadWorker({ fetch: hang });
+  expect(await h.dispatchFetch(get("/sessions"))).toBeUndefined();
+  expect(await h.dispatchFetch(get("/stream?device=d1"))).toBeUndefined();
+  expect(await h.dispatchFetch({ method: "POST", url: `${ORIGIN}/auth`, mode: "cors" })).toBeUndefined();
+  // Cross-origin shell-shaped path: still not ours.
+  expect(await h.dispatchFetch({ method: "GET", url: "https://other.test/app.js", mode: "no-cors" })).toBeUndefined();
+});
+
+test("non-200 responses are served but never cached", async () => {
+  const h = await loadWorker({ fetch: async () => new Response("nope", { status: 404 }) });
+  const res = await h.dispatchFetch(get("/app.js"));
+
+  expect(res!.status).toBe(404);
+  await Bun.sleep(1);
+  expect(h.cacheFor(SHELL).has("/app.js")).toBe(false);
+});
+
+test("activate prunes old shell caches but keeps the tap-stash", async () => {
+  const h = await loadWorker();
+  h.cacheFor("claude0-shell-v0").set("/app.js", "ancient");
+  h.store.set("pending", "{}");
+  await h.dispatch("activate", {});
+
+  const names = await h.scope.caches.keys();
+  expect(names).not.toContain("claude0-shell-v0");
+  expect(names).toContain("claude0-nav");
+});
+
+// The sw.js allowlist can't share a constant with the server's STATIC map (classic
+// import-free worker), so this test IS the sync mechanism: a path added to STATIC
+// but not to SHELL_PATHS would silently defeat the offline shell for that file.
+test("SHELL_PATHS mirrors the server's STATIC allow-map", async () => {
+  const server = await Bun.file(`${import.meta.dir}/../server.ts`).text();
+  const sw = await Bun.file(SW_PATH).text();
+  const staticBlock = server.match(/const STATIC[^=]*= \{([\s\S]*?)\n\};/)![1]!;
+  const staticPaths = [...staticBlock.matchAll(/"(\/[^"]*)":/g)].map((m) => m[1]!);
+  const shellPaths = [...sw.match(/const SHELL_PATHS = \[([\s\S]*?)\];/)![1]!.matchAll(/"(\/[^"]*)"/g)].map(
+    (m) => m[1]!,
+  );
+
+  expect(staticPaths.length).toBeGreaterThan(10); // regex actually found the map
+  for (const p of staticPaths) {
+    // "/" is covered by navigation mode; the worker script itself is fetched by
+    // the SW machinery and never passes through its own fetch handler.
+    if (p === "/" || p === "/sw.js") continue;
+    expect(shellPaths).toContain(p);
+  }
 });
