@@ -1,0 +1,27 @@
+# post-checkout hook: set up new worktrees automatically
+# Arguments: $1=prev HEAD, $2=new HEAD, $3=branch flag (1 if branch checkout)
+
+# Get the root of the current working directory (could be main repo or worktree)
+CURRENT_ROOT="$(git rev-parse --show-toplevel)"
+
+# Get the main repo's root (where .git directory lives)
+# Note: --git-common-dir returns relative ".git" in main repo, absolute path in worktrees
+GIT_COMMON_DIR="$(git rev-parse --git-common-dir)"
+MAIN_ROOT="$(cd "$GIT_COMMON_DIR" && pwd -P)"
+MAIN_ROOT="${MAIN_ROOT%/.git}"
+
+# If we're in a worktree (not the main repo), set it up
+if [ "$CURRENT_ROOT" != "$MAIN_ROOT" ]; then
+    echo "Setting up worktree at $CURRENT_ROOT..."
+
+    # Copy root .env if it exists and doesn't already exist in worktree
+    if [ -f "$MAIN_ROOT/.env" ] && [ ! -f "$CURRENT_ROOT/.env" ]; then
+        cp "$MAIN_ROOT/.env" "$CURRENT_ROOT/.env"
+        echo "Copied .env from main repo to worktree"
+    fi
+
+    # Install dependencies
+    echo "Installing dependencies..."
+    cd "$CURRENT_ROOT"
+    bun install
+fi

@@ -7,6 +7,7 @@
     "c0": "./bin/claude0.ts"
   },
   "scripts": {
+    "prepare": "husky",
     "start": "bun run src/index.ts",
     "dev": "bun --watch src/index.ts",
     "status": "bun run src/monitor.ts",
@@ -20,6 +21,7 @@
   "devDependencies": {
     "@types/blessed": "^0.1.25",
     "bun-types": "latest",
+    "husky": "^9.1.7",
     "typescript": "5.9.2"
   }
 }
