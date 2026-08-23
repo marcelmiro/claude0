@@ -36,6 +36,8 @@ beforeEach(() => {
   rmSync(`${TEST_HOME}/.zshrc`, { force: true });
   rmSync(`${TEST_HOME}/.tmux.conf`, { force: true });
   rmSync(`${TEST_HOME}/.config/zsh`, { recursive: true, force: true });
+  rmSync(`${TEST_HOME}/.config/tmux`, { recursive: true, force: true });
+  rmSync(`${TEST_HOME}/.tmux`, { recursive: true, force: true });
   mkdirSync(claudeDir, { recursive: true });
   // Pre-existing user content that setup() must NOT clobber.
   writeFileSync(
@@ -323,6 +325,34 @@ test("setup() creates the sidebar autostart marker on a fresh machine", async ()
   rmSync(marker, { force: true });
   await setup();
   expect(await Bun.file(marker).exists()).toBe(true);
+});
+
+test("setup without a user-managed resurrect renders the claude0-owned run-shell line", async () => {
+  await setup();
+  const fragment = readFileSync(`${configDir}/tmux.conf`, "utf8");
+  expect(fragment).toContain(
+    `run-shell '${TEST_HOME}/.config/claude0/plugins/tmux-resurrect/resurrect.tmux'`,
+  );
+  expect(fragment).not.toContain("{{RESURRECT_LOAD}}");
+  // The clone itself never runs under the test seam — rendering only, no network.
+  expect(existsSync(`${configDir}/plugins`)).toBe(false);
+});
+
+test("a user-managed TPM resurrect suppresses the run-shell line and the clone", async () => {
+  const userCopy = `${TEST_HOME}/.config/tmux/plugins/tmux-resurrect`;
+  mkdirSync(`${userCopy}/scripts`, { recursive: true });
+  writeFileSync(`${userCopy}/scripts/save.sh`, "#!/bin/bash\n");
+
+  await setup();
+  const fragment = readFileSync(`${configDir}/tmux.conf`, "utf8");
+  expect(fragment).not.toContain("resurrect.tmux"); // the TPM copy loads itself
+  expect(fragment).toContain("@resurrect-hook-post-save-all 'claude0 save-sessions'");
+  expect(existsSync(`${configDir}/plugins`)).toBe(false);
+});
+
+test("client setup renders no resurrect run-shell line — a client owns no tmux server", async () => {
+  await setup("client");
+  expect(readFileSync(`${configDir}/tmux.conf`, "utf8")).not.toContain("resurrect.tmux");
 });
 
 test("setup rejects an unknown --role value", async () => {

@@ -14,8 +14,9 @@ ExecStart=/bin/bash -c 'tmux has-session -t main 2>/dev/null || tmux new-session
 # Restore is owned HERE, not by continuum's restore-on-server-start: that path races
 # the forking handshake under systemd (tmux-continuum #110) and killed the server.
 # resurrect recreates the saved layout, then its post-restore hook runs
-# `claude0 restore-sessions` to resume each pane's Claude session.
-ExecStartPost=/bin/bash -c 'sleep 1; %h/.config/tmux/plugins/tmux-resurrect/scripts/restore.sh || true'
+# `claude0 restore-sessions` to resume each pane's Claude session. claude0
+# resolves the plugin install at runtime (user-managed or claude0-owned).
+ExecStartPost=/bin/bash -c 'sleep 1; claude0 resurrect restore || true'
 # Save the pane→session map on the way down so restore-sessions can resume every
 # Claude session after the reboot. claude0 resolves via the unit's own PATH above.
 ExecStop=/bin/bash -c 'claude0 save-sessions; /usr/bin/tmux kill-server'

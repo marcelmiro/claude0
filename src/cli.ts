@@ -7,6 +7,7 @@
  * claude0 switch <name>     — fuzzy-match a session by name and switch to it
  * claude0 save-sessions     — snapshot pane→session mappings for tmux-resurrect
  * claude0 restore-sessions  — restore Claude sessions after tmux-resurrect restore
+ * claude0 resurrect         — run tmux-resurrect's own save/restore script
  */
 
 import { homedir } from "os";
@@ -21,7 +22,7 @@ import { loadNameCache, slugify } from "./core/names";
 import { PATHS, loadConfig, saveConfig, ensureUserConfig, parseTmuxKey, tmuxKeys, resolveRole } from "./core/config";
 import type { DeploymentRole } from "./types";
 import { PRESENCE_WINDOW_S } from "./core/presence";
-import { pickSavedCwd, resolveRestoreTarget } from "./core/resurrect";
+import { pickSavedCwd, resolveRestoreTarget, resolveResurrect, resurrectOptionSet, claude0ResurrectDir, resurrectCommand, cloneResurrectCommands, RESURRECT_COMMIT, daemonSaveCommand, RESURRECT_SAVE_INTERVAL_MS } from "./core/resurrect";
 import { pickRepoPath } from "./core/sessions";
 import { resolveTranscriptPath, latestTranscriptCwd } from "./core/last-turn";
 import { shellQuote } from "./core/launch-command";
@@ -726,6 +727,35 @@ const HOOK_REGISTRATIONS: { event: string; script: string; matcher?: string; tim
   },
 ];
 
+/**
+ * Resurrection is claude0-essential (no dotfiles required), but a user-managed
+ * TPM copy keeps winning byte-identically. Returns the plugin dir the tmux
+ * fragment should load via run-shell, or null when it must emit no run-shell
+ * line (user-managed copy, client role, or a failed clone).
+ */
+async function ensureResurrect(home: string, role: DeploymentRole): Promise<string | null> {
+  if (role === "client") return null; // a client owns no tmux server
+  const resolved = await resolveResurrect(home, await resurrectOptionSet());
+  if (resolved.source === "user" || resolved.source === "user-elsewhere") return null;
+  const dir = claude0ResurrectDir(home);
+  if (resolved.source === "claude0") return dir;
+  if (process.env.CLAUDE0_HOME) return dir; // tests exercise the rendering, never the network
+  try {
+    for (const argv of cloneResurrectCommands(dir)) {
+      const proc = Bun.spawn(argv, { stdout: "ignore", stderr: "ignore" });
+      if ((await proc.exited) !== 0) throw new Error(`${argv.join(" ")} failed`);
+    }
+    console.log(`tmux-resurrect installed: ${dir} (pinned ${RESURRECT_COMMIT.slice(0, 12)})`);
+    return dir;
+  } catch {
+    // Offline or git absent — a run-shell line pointing at nothing would error on
+    // every tmux start, so degrade to no line; the next setup run retries.
+    rmSync(dir, { recursive: true, force: true });
+    console.error("tmux-resurrect clone failed — resurrection disabled until `claude0 setup` reruns.");
+    return null;
+  }
+}
+
 const TMUX_SOURCE_LINE = "if-shell 'test -f ~/.config/claude0/tmux.conf' 'source-file ~/.config/claude0/tmux.conf' ''";
 const ZSH_SOURCE_LINE = '[[ -r "$HOME/.config/claude0/shell.zsh" ]] && source "$HOME/.config/claude0/shell.zsh"';
 
@@ -734,7 +764,7 @@ const ZSH_SOURCE_LINE = '[[ -r "$HOME/.config/claude0/shell.zsh" ]] && source "$
  * tmux/zsh files. Personal config stays personal; setup can update its fragment
  * without rewriting or templating somebody else's dotfiles.
  */
-async function installTerminalIntegration(home: string): Promise<string[]> {
+async function installTerminalIntegration(home: string, resurrectDir: string | null): Promise<string[]> {
   const configDir = `${import.meta.dir}/../config`;
   const files = [
     { source: `${configDir}/tmux.conf`, target: `${home}/.config/claude0/tmux.conf`, executable: false },
@@ -756,6 +786,13 @@ async function installTerminalIntegration(home: string): Promise<string[]> {
     let wanted = await Bun.file(file.source).text();
     if (file.source.endsWith("tmux.conf")) {
       wanted = wanted.replace("{{BIND_POPUP}}", bindFor(keys.popup)).replace("{{BIND_NEXT}}", bindFor(keys.next));
+      // A user-managed (TPM) resurrect already loads itself — a second run-shell
+      // would double-load the plugin, so the line is emitted only for the
+      // claude0-owned clone (see ensureResurrect).
+      wanted = wanted.replace(
+        "{{RESURRECT_LOAD}}\n",
+        resurrectDir === null ? "" : `run-shell '${resurrectDir}/resurrect.tmux'\n`,
+      );
     }
     let existing = "";
     try { existing = await Bun.file(file.target).text(); } catch {}
@@ -936,7 +973,7 @@ export async function setup(roleFlag?: string): Promise<void> {
     }
   }
 
-  const integrationChanged = await installTerminalIntegration(home);
+  const integrationChanged = await installTerminalIntegration(home, await ensureResurrect(home, role));
 
   // Load existing settings (or start fresh)
   let settings: Record<string, any> = {};
@@ -1386,6 +1423,42 @@ export async function restoreSessions(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// claude0 resurrect save|restore  (tmux.service ExecStartPost / monitor unit save)
+// ---------------------------------------------------------------------------
+
+/**
+ * Run tmux-resurrect's own save/restore script from whichever install this
+ * machine has — user-managed (TPM) first, claude0-owned clone as fallback — so
+ * the systemd units don't hardcode a plugin path. The script fires resurrect's
+ * @resurrect-hook-* options itself, which is how `claude0 save-sessions` /
+ * `restore-sessions` (the Claude session map — a separate concern) keep firing.
+ * Exit code passes through.
+ */
+export async function resurrect(action?: string): Promise<void> {
+  if (action !== "save" && action !== "restore") {
+    console.error("usage: claude0 resurrect save|restore");
+    process.exit(2);
+  }
+  const resurrectHome = process.env.CLAUDE0_HOME ?? homedir();
+  const resolved = await resolveResurrect(resurrectHome, await resurrectOptionSet());
+  const { path } = resolved;
+  if (!path) {
+    console.error(
+      resolved.source === "user-elsewhere"
+        ? "tmux-resurrect is configured at a non-standard location claude0 can't invoke."
+        : "tmux-resurrect not found — run `claude0 setup` to install it.",
+    );
+    process.exit(1);
+  }
+  const child = Bun.spawn(resurrectCommand(path, action), {
+    stdin: "inherit",
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+  process.exit(await child.exited);
+}
+
+// ---------------------------------------------------------------------------
 // claude0 question-hook (invoked by pretooluse.sh for an intercepted AskUserQuestion)
 // ---------------------------------------------------------------------------
 
@@ -1554,6 +1627,7 @@ export async function daemon(): Promise<void> {
   runSidebarRenderer();
 
   let tick = 0;
+  let lastResurrectSave = Date.now();
   while (true) {
     try {
       const child = Bun.spawn(
@@ -1577,9 +1651,34 @@ export async function daemon(): Promise<void> {
         // tmux down (server not started yet) or db busy — next pass retries
       }
     }
+    // Periodic tmux-resurrect layout save. On linux the monitor unit owns this
+    // loop; a darwin local install has no unit, so it hangs off the daemon tick
+    // instead — making continuum unnecessary on both platforms.
+    if (Date.now() - lastResurrectSave >= RESURRECT_SAVE_INTERVAL_MS) {
+      lastResurrectSave = Date.now();
+      // not awaited: the option probe talks to tmux, and a wedged server must
+      // not stall discovery and wake passes behind it
+      void periodicResurrectSave();
+    }
     tick++;
     await Bun.sleep(3_000);
   }
+}
+
+/** Best-effort, fire-and-forget save (see daemonSaveCommand). Never throws. */
+async function periodicResurrectSave(): Promise<void> {
+  if (process.env.CLAUDE0_HOME) return; // test seam — never probe or spawn from tests
+  if (process.platform !== "darwin") return; // linux: the monitor unit owns the save loop
+  try {
+    const resolved = await resolveResurrect(homedir(), await resurrectOptionSet());
+    const argv = daemonSaveCommand(resolved, process.platform);
+    if (!argv) return;
+    const child = Bun.spawn(argv, { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+    // a wedged save.sh must not accumulate one orphaned bash per interval
+    const killer = setTimeout(() => child.kill(), 60_000);
+    killer.unref?.();
+    child.exited.finally(() => clearTimeout(killer));
+  } catch {}
 }
 
 // ---------------------------------------------------------------------------

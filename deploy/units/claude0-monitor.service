@@ -12,7 +12,7 @@ Environment=PATH=%h/.bun/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 # same status-right, so it too never fires while detached — the loop mirrors it
 # with a resurrect save every 300 detached ticks (~15 min), keeping the layout and
 # pane→session map fresh for a hard reboot (ExecStop only covers a clean stop).
-ExecStart=/bin/bash -c 'n=0; while true; do if [ -z "$(tmux list-clients 2>/dev/null)" ]; then claude0 status >/dev/null 2>&1; n=$((n+1)); if [ "$n" -ge 300 ]; then n=0; %h/.config/tmux/plugins/tmux-resurrect/scripts/save.sh quiet >/dev/null 2>&1 || true; fi; fi; sleep 3; done'
+ExecStart=/bin/bash -c 'n=0; while true; do if [ -z "$(tmux list-clients 2>/dev/null)" ]; then claude0 status >/dev/null 2>&1; n=$((n+1)); if [ "$n" -ge 300 ]; then n=0; claude0 resurrect save >/dev/null 2>&1 || true; fi; fi; sleep 3; done'
 Restart=always
 RestartSec=5s
 

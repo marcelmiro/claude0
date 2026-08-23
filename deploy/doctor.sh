@@ -86,10 +86,14 @@ fi
 # The repo template carries {{BIND_*}} tokens that `claude0 setup` renders from
 # config.json's tmux.keys — normalize the installed file's bind lines back to
 # tokens before comparing, so a custom binding doesn't read as a stale fragment.
+# The {{RESURRECT_LOAD}} token renders to a run-shell line OR to nothing (user-
+# managed resurrect), so both forms are dropped from both inputs.
 normalize_tmux_fragment() {
   sed -E \
     -e "s/^bind-key (-n )?[^ ]+ (run-shell 'tmux set-environment CLAUDE0_FOCUS_PANE)/{{BIND_POPUP}} \\2/" \
     -e "s/^bind-key (-n )?[^ ]+ (run-shell 'claude0 next')/{{BIND_NEXT}} \\2/" \
+    -e '/^\{\{RESURRECT_LOAD\}\}$/d' \
+    -e "/^run-shell '.*\/resurrect\.tmux'$/d" \
     "$1" 2>/dev/null
 }
 if [ -f "$HOME/.config/claude0/tmux.conf" ] \

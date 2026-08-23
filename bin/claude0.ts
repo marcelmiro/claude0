@@ -20,6 +20,7 @@ function help() {
     \x1b[36mterminal [command]\x1b[0m  Manage local/remote terminal attachment
     \x1b[36msave-sessions\x1b[0m       Snapshot pane→session map for tmux-resurrect
     \x1b[36mrestore-sessions\x1b[0m    Restore Claude sessions after tmux-resurrect restore
+    \x1b[36mresurrect <action>\x1b[0m  Run tmux-resurrect's save|restore script (resolves the install)
     \x1b[36mbridge\x1b[0m              Serve the HTTP/SSE bridge for the mobile web app
     \x1b[36mdaemon\x1b[0m              Inbox daemon: snooze wake pass (launchd runs this)
 
@@ -122,6 +123,9 @@ switch (cmd) {
     break;
   case "restore-sessions":
     await import("../src/cli").then((m) => m.restoreSessions());
+    break;
+  case "resurrect":
+    await import("../src/cli").then((m) => m.resurrect(process.argv[3]));
     break;
   case "question-hook":
     // Internal — invoked by pretooluse.sh to hold+answer an intercepted AskUserQuestion.

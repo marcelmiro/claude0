@@ -41,8 +41,7 @@ else
   note "packages already present"
 fi
 
-# The Linux dotfiles profile is zsh-based. Change the login shell once; it takes
-# effect next login.
+# The host runs zsh as the login shell. Change it once; it takes effect next login.
 zsh_bin=$(command -v zsh)
 login_shell=$(getent passwd "$USER" | cut -d: -f7)
 if [ "$login_shell" != "$zsh_bin" ]; then
@@ -196,24 +195,7 @@ else
   skip "no systemd — skipping linger, user units, bridge token"
 fi
 
-# ── 9. Personal terminal profile prerequisite ──────────────────────────────────
-# Host presentation, bindings, shell behavior, and TPM plugins belong to the
-# explicit Linux profile in the dotfiles repository. Claude0 provisioning must not
-# manufacture a second, divergent terminal environment.
-for profile_file in \
-  "$HOME/.tmux.conf" \
-  "$HOME/.config/tmux/common.conf" \
-  "$HOME/.config/tmux/final.conf" \
-  "$HOME/.config/tmux/plugins/tpm/tpm" \
-  "$HOME/.config/tmux/plugins/tmux-resurrect/resurrect.tmux"; do
-  if [ ! -f "$profile_file" ]; then
-    printf 'missing Linux dotfiles profile file: %s\nRun ~/.dotfiles/install linux first.\n' "$profile_file" >&2
-    exit 1
-  fi
-done
-note "Linux dotfiles terminal profile is installed"
-
-# ── 10. Tailscale ──────────────────────────────────────────────────────────────
+# ── 9. Tailscale ───────────────────────────────────────────────────────────────
 if ! have tailscale; then
   note "installing tailscale"
   curl -fsSL https://tailscale.com/install.sh | sh

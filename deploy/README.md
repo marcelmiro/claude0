@@ -9,13 +9,13 @@ clients over Tailscale. The cutover itself (state copy, auth, PWA reinstall) is
 
 | File | Purpose |
 |---|---|
-| `provision.sh` | Idempotent Claude0 host setup — runtime packages, inotify sysctl, swap, TZ, journald cap, needrestart list-only, bubblewrap AppArmor profile, linger + user units, bridge token, and Tailscale. It requires the Linux dotfiles profile and does not own terminal presentation or plugins. Re-run any time. |
+| `provision.sh` | Idempotent Claude0 host setup — runtime packages, inotify sysctl, swap, TZ, journald cap, needrestart list-only, bubblewrap AppArmor profile, linger + user units, bridge token, and Tailscale. It requires no dotfiles and does not own terminal presentation. Re-run any time. |
 | `units/tmux.service` | User unit: tmux server at boot (linger), `claude0 save-sessions` on stop. |
 | `units/claude0-bridge.service` | User unit: the bridge, `Restart=always` with spaced retries, token via 0600 `EnvironmentFile`. |
 | `units/claude0-monitor.service` | User unit: fallback monitor tick + resurrect autosave while no tmux client is attached (status-right — and continuum riding it — only runs for attached clients). |
 | `units/claude0-daemon.service` | User unit: the inbox daemon (snooze wakes, discovery snapshots, sidebar renderer) — systemd twin of darwin's `com.claude0.daemon` launchd agent. Off-darwin the wake alert is a broadcast Web Push (no banner tier on a headless host). |
 | `../config/tmux.conf` | Claude0-owned, cross-platform tmux integration installed by `claude0 setup`. Personal tmux settings remain separate. |
-| `doctor.sh` | Read-only post-provision audit of Claude0 integration, auth, services, bridge, Tailscale, and host capacity. Run `~/.dotfiles/doctor` for tmux UI, bindings, clipboard, and TPM. |
+| `doctor.sh` | Read-only post-provision audit of Claude0 integration, auth, services, bridge, Tailscale, and host capacity. Personal tmux UI, bindings, and clipboard stay outside its scope. |
 | `aws/dlm-policies.sh` | DLM snapshot schedules (4-hourly/3d + daily/14d on `csm-backup=true` volumes) + budget-stop guardrail pointer. CLI-only — the console can't do sub-daily. |
 | `units/snapshot-check.{service,timer}` | Hourly staleness probe: newest `csm-backup` snapshot older than 5h → `claude0 notify` pushes to the phone. Needs the aws CLI and an instance role with `ec2:DescribeSnapshots`. |
 
