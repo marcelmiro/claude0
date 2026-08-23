@@ -35,8 +35,8 @@ beforeEach(() => {
   rmSync(`${TEST_HOME}/.local/bin/c0`, { force: true });
   rmSync(`${TEST_HOME}/.zshrc`, { force: true });
   rmSync(`${TEST_HOME}/.tmux.conf`, { force: true });
-  rmSync(`${TEST_HOME}/.config/zsh`, { recursive: true, force: true });
   rmSync(`${TEST_HOME}/.config/tmux`, { recursive: true, force: true });
+  rmSync(`${TEST_HOME}/.config/zsh`, { recursive: true, force: true });
   rmSync(`${TEST_HOME}/.tmux`, { recursive: true, force: true });
   mkdirSync(claudeDir, { recursive: true });
   // Pre-existing user content that setup() must NOT clobber.

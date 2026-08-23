@@ -16,6 +16,7 @@ function help() {
     \x1b[36mswitch <name>\x1b[0m       Fuzzy-match a session by name and switch to it
     \x1b[36mnotify <message>\x1b[0m    Web-push a message to every subscribed device
     \x1b[36msetup\x1b[0m               Install Claude0 for this machine's role (--role local|host|client)
+    \x1b[36mdoctor\x1b[0m              Check this machine's Claude0 install for its role (exit 0 = healthy)
     \x1b[36mconfig\x1b[0m              Print the absolute user config path
     \x1b[36mterminal [command]\x1b[0m  Manage local/remote terminal attachment
     \x1b[36msave-sessions\x1b[0m       Snapshot pane→session map for tmux-resurrect
@@ -102,6 +103,9 @@ switch (cmd) {
     await import("../src/cli").then((m) => m.setup(role));
     break;
   }
+  case "doctor":
+    await import("../src/cli").then((m) => m.doctor());
+    break;
   case "config": {
     const { PATHS, ensureUserConfig } = await import("../src/core/config");
     await ensureUserConfig();

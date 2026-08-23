@@ -19,10 +19,11 @@ import { detectStatus } from "./core/status";
 import { eventSourcedStatus } from "./core/hook-events";
 import { nativeStatus, resolveStatus } from "./core/session-state";
 import { loadNameCache, slugify } from "./core/names";
-import { PATHS, loadConfig, saveConfig, ensureUserConfig, parseTmuxKey, tmuxKeys, resolveRole } from "./core/config";
-import type { DeploymentRole } from "./types";
+import { PATHS, loadConfig, saveConfig, ensureUserConfig, tmuxKeys, resolveRole } from "./core/config";
+import { renderTmuxFragment, importAccepted, installedHookVersion, runDoctor } from "./core/doctor";
+import type { Config, DeploymentRole } from "./types";
 import { PRESENCE_WINDOW_S } from "./core/presence";
-import { pickSavedCwd, resolveRestoreTarget, resolveResurrect, resurrectOptionSet, claude0ResurrectDir, resurrectCommand, cloneResurrectCommands, RESURRECT_COMMIT, daemonSaveCommand, RESURRECT_SAVE_INTERVAL_MS } from "./core/resurrect";
+import { pickSavedCwd, resolveRestoreTarget, resolveResurrect, resurrectOptionSet, resurrectRenderDir, resurrectCommand, cloneResurrectCommands, RESURRECT_COMMIT, daemonSaveCommand, RESURRECT_SAVE_INTERVAL_MS } from "./core/resurrect";
 import { pickRepoPath } from "./core/sessions";
 import { resolveTranscriptPath, latestTranscriptCwd } from "./core/last-turn";
 import { shellQuote } from "./core/launch-command";
@@ -691,7 +692,7 @@ exit \$?
 `;
 
 /** Hook scripts Claude0 installs under ~/.config/claude0/hooks. */
-const HOOK_SCRIPTS = [
+export const HOOK_SCRIPTS = [
   { name: "session-start.sh", content: HOOK_SCRIPT },
   { name: "event.sh", content: EVENT_HOOK_SCRIPT },
   { name: "pretooluse.sh", content: PRETOOLUSE_HOOK_SCRIPT },
@@ -734,10 +735,9 @@ const HOOK_REGISTRATIONS: { event: string; script: string; matcher?: string; tim
  * line (user-managed copy, client role, or a failed clone).
  */
 async function ensureResurrect(home: string, role: DeploymentRole): Promise<string | null> {
-  if (role === "client") return null; // a client owns no tmux server
   const resolved = await resolveResurrect(home, await resurrectOptionSet());
-  if (resolved.source === "user" || resolved.source === "user-elsewhere") return null;
-  const dir = claude0ResurrectDir(home);
+  const dir = resurrectRenderDir(resolved, role, home);
+  if (dir === null) return null; // user-managed copy loads itself, or client role
   if (resolved.source === "claude0") return dir;
   if (process.env.CLAUDE0_HOME) return dir; // tests exercise the rendering, never the network
   try {
@@ -773,26 +773,16 @@ async function installTerminalIntegration(home: string, resurrectDir: string | n
   ];
   const changed: string[] = [];
 
-  // Render tmux.keys into the fragment's {{BIND_*}} tokens. A key change lands on
-  // the next setup run (the fragment is re-sourced below when it differs).
+  // Render tmux.keys into the fragment's {{BIND_*}} tokens (shared with doctor's
+  // freshness check so the two can't diverge). A key change lands on the next
+  // setup run (the fragment is re-sourced below when it differs).
   const keys = tmuxKeys(await loadConfig().catch(() => null));
-  const bindFor = (spec: string) => {
-    const parsed = parseTmuxKey(spec);
-    return parsed.table === "prefix" ? `bind-key ${parsed.key}` : `bind-key -n ${parsed.key}`;
-  };
   const staleBinds: string[][] = [];
 
   for (const file of files) {
     let wanted = await Bun.file(file.source).text();
     if (file.source.endsWith("tmux.conf")) {
-      wanted = wanted.replace("{{BIND_POPUP}}", bindFor(keys.popup)).replace("{{BIND_NEXT}}", bindFor(keys.next));
-      // A user-managed (TPM) resurrect already loads itself — a second run-shell
-      // would double-load the plugin, so the line is emitted only for the
-      // claude0-owned clone (see ensureResurrect).
-      wanted = wanted.replace(
-        "{{RESURRECT_LOAD}}\n",
-        resurrectDir === null ? "" : `run-shell '${resurrectDir}/resurrect.tmux'\n`,
-      );
+      wanted = renderTmuxFragment(wanted, keys, resurrectDir);
     }
     let existing = "";
     try { existing = await Bun.file(file.target).text(); } catch {}
@@ -832,8 +822,8 @@ async function installTerminalIntegration(home: string, resurrectDir: string | n
 
   // A dotfiles layer may already source the fragment from a file the entry
   // point includes (e.g. ~/.config/zsh/common.zsh) — appending the import to
-  // the entry point too would source it twice. Detect by fragment path, not
-  // exact line, and look in the aux config dirs as well as the entry file.
+  // the entry point too would source it twice. Acceptance rule shared with
+  // doctor (importAccepted): fragment path, entry file plus aux config dir.
   const imports = [
     { path: `${home}/.tmux.conf`, line: TMUX_SOURCE_LINE, fragment: ".config/claude0/tmux.conf", aux: `${home}/.config/tmux`, label: "tmux import" },
     { path: `${home}/.zshrc`, line: ZSH_SOURCE_LINE, fragment: ".config/claude0/shell.zsh", aux: `${home}/.config/zsh`, label: "zsh import" },
@@ -841,17 +831,7 @@ async function installTerminalIntegration(home: string, resurrectDir: string | n
   for (const entry of imports) {
     let existing = "";
     try { existing = await Bun.file(entry.path).text(); } catch {}
-    let sourced = existing.includes(entry.fragment);
-    if (!sourced) {
-      try {
-        // followSymlinks: a stow-managed aux dir holds only symlinks, which the
-        // scan otherwise skips entirely — the import would be appended twice.
-        for await (const f of new Bun.Glob("*").scan({ cwd: entry.aux, absolute: true, followSymlinks: true })) {
-          if ((await Bun.file(f).text()).includes(entry.fragment)) { sourced = true; break; }
-        }
-      } catch {}
-    }
-    if (!sourced) {
+    if (!(await importAccepted(entry.path, entry.aux, entry.fragment))) {
       const prefix = existing.length === 0 ? "" : existing.endsWith("\n") ? "\n" : "\n\n";
       await Bun.write(entry.path, `${existing}${prefix}# Claude0 integration (managed by claude0 setup)\n${entry.line}\n`);
       changed.push(entry.label);
@@ -869,17 +849,6 @@ async function installTerminalIntegration(home: string, resurrectDir: string | n
   }
 
   return changed;
-}
-
-/** Read the HOOK_VERSION from an installed hook script. Returns 0 if missing or unreadable. */
-async function getInstalledHookVersion(hookPath: string): Promise<number> {
-  try {
-    const content = await Bun.file(hookPath).text();
-    const match = content.match(/^# HOOK_VERSION=(\d+)/m);
-    return match ? parseInt(match[1], 10) : 0;
-  } catch {
-    return 0;
-  }
 }
 
 /**
@@ -1015,7 +984,7 @@ export async function setup(roleFlag?: string): Promise<void> {
   let scriptsUpdated = false;
   for (const { name, content } of [...HOOK_SCRIPTS, ...fileHookScripts]) {
     const path = scriptPath(name);
-    const installed = await getInstalledHookVersion(path);
+    const installed = await installedHookVersion(path);
     // A client never installs hooks fresh — sessions live on the host. But hooks
     // already present or still registered (a host-era install, or occasional
     // local sessions) are kept current: a stale hook is worse than an absent one.
@@ -1216,6 +1185,37 @@ async function installDaemonAgent(home: string, role: DeploymentRole): Promise<"
   }
 
   return changed ? (existing ? "updated" : "installed") : "unchanged";
+}
+
+// ---------------------------------------------------------------------------
+// claude0 doctor
+// ---------------------------------------------------------------------------
+
+/**
+ * Read-only role-aware health check (check logic in core/doctor.ts).
+ * Exit 0 iff no failures; warnings never affect the exit code.
+ */
+export async function doctor(): Promise<void> {
+  // An unloadable config is the config check's finding, not a crash — the role
+  // then falls back to pure inference. Loaded once here; checks read it off ctx.
+  let config: Config | null = null;
+  let configError: string | null = null;
+  try {
+    config = await loadConfig();
+  } catch (error) {
+    configError = error instanceof Error ? error.message : String(error);
+  }
+  process.exitCode = await runDoctor({
+    home: process.env.CLAUDE0_HOME ?? home,
+    role: resolveRole(config),
+    platform: process.platform,
+    templateDir: `${import.meta.dir}/../config`,
+    configPath: PATHS.config,
+    config,
+    configError,
+    hookVersion: HOOK_VERSION,
+    hookScripts: HOOK_SCRIPTS.map((script) => script.name),
+  });
 }
 
 // ---------------------------------------------------------------------------

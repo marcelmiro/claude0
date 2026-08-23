@@ -9,6 +9,7 @@
  */
 
 import { homedir } from "os";
+import type { DeploymentRole } from "../types";
 import { getBaseRepoPath } from "./git";
 import { recoverWorktreeTranscript, isDirectory } from "./recover";
 import { resolveTranscriptPath, latestTranscriptCwd } from "./last-turn";
@@ -132,6 +133,23 @@ export async function resolveResurrect(
   const owned = claude0ResurrectDir(home);
   if (await hasResurrectScripts(owned)) return { source: "claude0", path: owned };
   return { source: "none", path: null };
+}
+
+/**
+ * The plugin dir the tmux fragment's {{RESURRECT_LOAD}} token should render to,
+ * or null for no run-shell line: a user-managed copy loads itself (a second
+ * line would double-load the plugin) and a client owns no tmux server. "none"
+ * still renders the claude0-owned dir — setup clones there. Shared by setup's
+ * renderer and doctor's freshness check so the two can't disagree.
+ */
+export function resurrectRenderDir(
+  resolution: ResurrectResolution,
+  role: DeploymentRole,
+  home: string = homedir(),
+): string | null {
+  if (role === "client") return null;
+  if (resolution.source === "user" || resolution.source === "user-elsewhere") return null;
+  return claude0ResurrectDir(home);
 }
 
 /**
