@@ -1,3 +1,5 @@
 # History depth is Claude's transcript retention — no Claude0 archive store
 
 Session history (search + restore of archived sessions) reads Claude Code's own transcript JSONLs and index files, so its horizon is exactly Claude's `cleanupPeriodDays` retention (raised from the 30-day default to 90 in `~/.claude/settings.json`). We considered a Claude0-owned archive store that snapshots session metadata before Claude deletes transcripts — searchable forever — and rejected it: past-retention sessions would be read-only stubs with no transcript and no restore, which serves neither of history's two jobs (read the conversation, decide to restore). The consequence is permanent: once a transcript ages out, that session is gone from history — deepening the horizon is a settings change, but only from that day forward.
+
+Within that horizon, history shows everything except naming sessions and sidechains. A "junk floor" filter — hiding sessions with no assistant reply — was proposed and rejected: an aborted session is still one the user may want to reread or restore, and a filter that guesses at worth reintroduces silent loss.

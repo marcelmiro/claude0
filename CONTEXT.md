@@ -1,8 +1,20 @@
 # Claude0
 
-Terminal TUI + mobile bridge ("portkey") for managing Claude Code sessions. This glossary pins the canonical terms; `CLAUDE.md` covers architecture and `docs/adr/` covers decisions.
+Terminal TUI + mobile bridge ("portkey") for managing Claude Code sessions. This glossary pins the canonical terms; `CLAUDE.md` is the map (commands, conventions, gotchas) and `docs/adr/` covers decisions and feature mechanism.
 
 ## Language
+
+**Claude0**:
+The product. Formerly named CSM ("Claude Session Manager", rebranded 2026-08) — the old name persists in user speech, old commits, and stale unit names; always write Claude0.
+_Avoid_: CSM, Claude Session Manager
+
+**TUI**:
+The full-screen blessed terminal app (`claude0 tui`, opened via tmux popup) — the desk surface.
+_Avoid_: app, desktop UI, terminal client
+
+**Portkey**:
+The phone web app (installed PWA) served by the bridge. Portkey is the client surface; the *bridge* is the HTTP server process behind it — a change can touch one without the other.
+_Avoid_: mobile app, web app, phone UI, bridge (when the client is meant)
 
 **Session**:
 One Claude Code conversation, identified by its UUID, backed by a transcript JSONL on disk.
@@ -35,16 +47,16 @@ The authored lifecycle state of a session in the Inbox: *snoozed* (carries an `u
 _Avoid_: done (not a state — archiving is the done verb, History is the done pile)
 
 **Parked**:
-The Inbox section holding snoozed and blocked sessions, always expanded (a collapse toggle existed in the prototype, was never used, and was removed). A snoozed session whose wake date arrives leaves Parked and resurfaces in Needs you, marked as returned-from-snooze.
+The Inbox section holding snoozed and blocked sessions, always expanded. A snoozed session whose wake date arrives leaves Parked and resurfaces in Needs you, marked as returned-from-snooze.
 
 **Needs you**:
-The Inbox section for sessions awaiting a human response — every live session sitting at a prompt files here, plus snooze wakes and turns that finished while unattended. The aim is to clear it by actioning each item. An item leaves only by reply/approve (observed as a derived status transition), snooze/blocked, or archive — never by focus, glance, or notification tap. No silent decay. (A transition-gated admission with a neutral "Open" section existed briefly and was retired 2026-08-12.)
+The Inbox section for sessions awaiting a human response — every live session sitting at a prompt files here, plus snooze wakes and turns that finished while unattended. The aim is to clear it by actioning each item. An item leaves only by reply/approve (observed as a derived status transition), snooze/blocked, or archive — never by focus, glance, or notification tap. No silent decay.
 
 **Recently done**:
 Derived-archived sessions from the last 24h, shown muted at the bottom of the Inbox. Purely derived — no authored state.
 
+**Unread**:
+A session with activity the user hasn't viewed yet. Always derived and client-cleared on viewing — never authored state (an authored read/unread flag was rejected; see ADR 13's rejected list).
+
 **Safeguard row**:
 An archived-labeled row kept on the live sessions list because it is pending or unread — covers discovery transiently mislabeling a live blocked session as archived.
-
-**Junk floor** (rejected):
-A proposed filter hiding sessions with no assistant reply. Decided against: History shows everything except naming sessions and sidechains.

@@ -50,9 +50,13 @@ supports every question shape — and fix its real defects instead:
 2. **4h question window** (`QUESTION_HOLD_MS`), split from the 600s approval window and
    registered as a separate matcher-scoped PreToolUse hook so a hung *approval* hook
    stays killable at ~10 min.
-3. **Clarify works un-held**: the phone's "Chat about this" on a fallen-through picker
-   sends the picker's own chat-row digit — read from the rendered capture, pre-flighted
-   against permission prompts and the free-text focus trap, with Escape as the
+3. **Clarify declines, on either path.** The phone's "Chat about this" doesn't pick an
+   option — it declines the question so the agent yields the turn and waits for the
+   typed follow-up. Held: the clarify decision file has the hook deny the tool. Un-held
+   (picker fell through to the desk): send the picker's own chat-row digit — read from
+   the rendered capture, never computed from the question spec, pre-flighted against
+   permission prompts, the free-text focus trap, and a pane not showing the picker at
+   all (refuses `not-presented` rather than fire a key), with Escape as the
    copy-changed fallback. One keystroke, so the atomicity result above applies.
 
 Option answering on a native picker keeps the existing pre-flighted `send-keys`

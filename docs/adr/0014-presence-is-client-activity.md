@@ -58,3 +58,27 @@ is gated behind `process.platform === "darwin"` instead.
   from tmux on every read.
 - **Porting tier 3 to a Linux notifier** (notify-send/ntfy): notifies the VM,
   not the human; the desk surfaces that matter are tmux-side already.
+
+## Addendum (2026-08-24): the tier stack, and who owns window names
+
+The tiers presence gates, for the record. All four fire on status transitions
+(`running→waiting` = blocked, `running→ready` = turnComplete; `detectTransitions`
+in `core/notifications.ts`):
+
+1. status-right counts (`⚡3 🔄2`), 2. the window ⚡ prefix, 3. the darwin-only
+native banner (above), 4. per-device web push
+([ADR 24](0024-web-push-replaces-ntfy.md)). Presence feeds tiers 2–4's
+suppression alongside the takeover/hold/hook sites listed in Context.
+
+Prefix priority is ⚡ > 🔄 > ⏳ > none, centralized in `stripAllPrefixes()` /
+`desiredPrefix()` (`core/notifications.ts`) — build window names through them,
+never by string surgery on a name that may carry a prefix. ⏳ (turn over, but a
+live `run_in_background` script still pending) is deliberately visibility-only:
+it never feeds notifications, attention, `claude0 next`, sort order, or the
+status-right counts, because dead/infinite scripts make "pending" unreliable as
+a signal.
+
+The monitor is the **sole window-naming authority** — it re-syncs base names, AI
+names and prefixes every tick, so a rename made anywhere else survives at most
+one cycle. Attention state crosses processes via `state.json`, not window names:
+the TUI and `claude0 next` clear flags there and the monitor's next tick repaints.

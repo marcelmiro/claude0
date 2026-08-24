@@ -6,7 +6,7 @@ Status: accepted
 ## Context
 
 Tapping a push notification was supposed to deep-link into the session it came from
-([ADR 6](0006-web-push-replaces-ntfy.md)). It didn't. The session list would open, or whatever
+([ADR 24](0024-web-push-replaces-ntfy.md)). It didn't. The session list would open, or whatever
 session happened to be on screen would stay there. The machinery looked right — the worker's
 `notificationclick` stashed the target through the Cache API, posted it to any open window, and
 fell back to `openWindow('/?s=…')` — and it had been verified working at the time it shipped.

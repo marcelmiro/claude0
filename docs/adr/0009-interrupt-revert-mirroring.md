@@ -41,7 +41,10 @@ Portkey mirrors the TUI exactly, keyed off the JSONL signature:
 - **Bare leaf** (revert): the client (which alone knows the sent text — it exists
   nowhere readable after a revert) prefills the composer, hides the dangling leaf from
   the thread (transient, index+text-guarded; it self-heals when the next send forks the
-  branch), and POSTs `/sessions/:id/clear-input` so the pane copy is removed too.
+  branch), and POSTs `/sessions/:id/clear-input` so the pane copy is removed too. The
+  composer is focused inside the Stop tap's gesture handler — iOS raises the keyboard
+  only for a gesture-driven focus, and the revert confirmation resolves ~2s too late to
+  qualify; the prefill then lands in the already-focused box.
 - **Any marker shape** (keep): the message stays in the thread with the interrupt line,
   exactly like the Mac. No restore, no hide.
 

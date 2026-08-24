@@ -54,3 +54,33 @@ nobody watching.
   nothing here.
 - **Letting resurrect restore claude processes** — see Decision; guaranteed
   double-process fight.
+
+## Addendum: restore-path directory decisions (2026-08-24)
+
+Which directory `claude0 restore-sessions` resumes each session in is decided
+by `resolveRestoreTarget` (`core/resurrect.ts`), and the branch *order* is the
+decision:
+
+1. Saved cwd is `$HOME` → a poisoned entry (a restored pane that never got its
+   directory back before the next save ran); recover Claude's own
+   last-recorded cwd from the transcript. This case must come **first**:
+   `$HOME` always exists, so a generic exists-check would shadow exactly the
+   entries this branch repairs.
+2. Saved cwd still on disk → itself.
+3. Gone (usually a deleted worktree) → its base repo, consolidating the
+   transcript into the base project folder first
+   (`recoverWorktreeTranscript`) so the resumed session isn't tailing a
+   frozen copy.
+4. Unresolvable → no `cd` at all, resuming where the pane already is (never
+   regress the pre-existing behavior).
+
+The resume line joins with `;`, not `&&` — a failed `cd` must still leave the
+session resumed. On the save side, `pickSavedCwd` is one-way: a real repo path
+on record is never overwritten by `$HOME`, because the poisoning is otherwise
+self-perpetuating (the next save snapshots the bad cwd). The accepted cost is
+that a session deliberately moved to `$HOME` keeps its stale entry.
+
+Restore also skips panes already running a foreground process, and skips a
+coordinate whose session id was already resumed this pass — one id can sit at
+two coordinates, and resuming it twice is the same two-processes-one-transcript
+fight the `@resurrect-processes` exclusion prevents.

@@ -59,6 +59,23 @@ No action ships with it — no commit, no push, no stash. This stays a reading s
 - The chain costs a handful of extra git subprocesses per `/changes` call, inside the route's
   existing 1s stale-while-revalidate window.
 
+## Addendum (2026-08-24): how the chain is served
+
+- **`tiers` ride the `/changes` payload** (`syncTiers` in `core/repo-files.ts`), so the
+  thread card and the file list can never disagree about how far the work has travelled.
+  The card trades the PR's LOC for `● N not pushed` — the *distinct* union of the two
+  un-landed groups, since a file in both would double-count — or `● never pushed`.
+- **`/diff` honours only a `from`/`to` pair its own chain published** (matched against the
+  cached `/changes` tiers). The endpoints reach git as a revspec, so a caller-supplied pair
+  could otherwise pose as an option (`--output=…`). A pair that no longer matches — the
+  chain moved since the list was fetched — degrades to the branch-vs-base diff rather than
+  erroring.
+- **Routing**: the two ref-to-ref groups go through `rangeDiff`; the uncommitted group goes
+  through `fileDiff` with a start-ref override, because a tier ending at the working tree
+  still needs the untracked fallback and the NFD/NFC pathspec retry — only its start ref
+  moves. Rename resolution is scoped to the tier being diffed: a rename committed but not
+  pushed is a rename in one range and an ordinary file in the next.
+
 ## See also
 
 - [0001 — changed-files is a glance surface](0001-changed-files-is-a-glance-surface.md)

@@ -1,4 +1,4 @@
-# 6. Web Push replaces ntfy — pushes route to the device that drove the turn
+# 24. Web Push replaces ntfy — pushes route to the device that drove the turn
 
 Date: 2026-07-22
 Status: accepted
@@ -26,8 +26,9 @@ Replace ntfy with Web Push, scoped to the two installed iOS PWAs (the Mac keeps 
 notifications):
 
 - **Device identity.** Each client mints a persistent `deviceId` (localStorage), sent as
-  `x-claude0-device` on every request and `?device=` on the SSE stream. Source markers record it;
-  pushes go only to that device via its own subscription (`push-subscriptions.json`).
+  `x-claude0-device` on every request and `?device=` on the SSE stream. Source markers
+  (`source/<sessionId>.json`) record it; pushes go only to that device via its own subscription
+  (`push-subscriptions.json`).
 - **Per-device liveness.** `consumers/<deviceId>` markers (SSE connect + 15s heartbeat)
   suppress the push while the originating device is watching live. A `sendBeacon` goodbye on
   backgrounding unlinks the marker immediately — the client closes its EventSource *first* so a
@@ -50,6 +51,10 @@ notifications):
   hand-rolled on Bun's WebCrypto in `core/web-push.ts`, pinned byte-for-byte by the RFC's own
   §5 test vector. Payloads stay non-sensitive (label + tool category) despite the end-to-end
   encryption — same policy as the ntfy era.
+- **Operator contact.** The VAPID `sub` claim identifies the install's operator to the push
+  services: `notifications.pushContact` when set, else the user's git email (`mailto:` prepended
+  to a bare address). RFC 8292 makes `sub` a SHOULD, so when neither exists it is omitted
+  entirely rather than filled with a placeholder.
 
 `ntfyTopic` and `bridgeUrl` are gone from the config schema and are auto-stripped from
 `config.json` on load (raw-JSON rewrite, unknown keys preserved).

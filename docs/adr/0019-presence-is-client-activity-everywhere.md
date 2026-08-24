@@ -46,3 +46,10 @@ notifications themselves stay darwin-only (unchanged from ADR 14).
   for installed hooks to pick this up (HOOK_VERSION bump handles it).
 - ADR 14's fallback remains available: a Mac-side heartbeat agent, if redundant
   desk pushes annoy in practice.
+
+## Note (2026-08-24): banner tier on a split deployment
+
+With the daemon on a Linux host, the tier-3 darwin banner cannot fire at all —
+notifications reach the desk only via Web Push. A Mac desk client (presence
+report + native banners driven from the host) is the planned replacement; until
+it ships, "notifications stopped working since the migration" is this, not a bug.

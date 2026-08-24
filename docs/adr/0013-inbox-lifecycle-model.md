@@ -236,3 +236,92 @@ window — never kill what demands attention. Explicit re-entry stays `b`
 implementation, `store.replyObserved` (peek + disposition + archive in one
 transaction), shared by discovery's gate and the reaper. Deferred, recorded
 in ideas.txt: `x` dismiss (archive with no RECENT trace).
+
+## Addendum 8: freshness around the 3s snapshot, and process shape (2026-08-24)
+
+Cross-process rules settled while shipping addenda 5–7, recorded because no
+single file can state them:
+
+**Two freshness aids bridge the daemon's 3s snapshot lag.** The section tag is
+authored store-side and trails reality by up to a tick, while a row's effective
+status is overlay-then-live-capture fresh — so the phone *renders* a row under
+the section its status implies when the two disagree (`displaySection` in
+`shared/sync.js`), never rerouting parked/done (those sections are authored by
+verbs, not derivable from status) and keeping `⧗` script-waiters in Running.
+And the bridge polls the store's `data_version` every 1s while stream clients
+are connected, re-projecting and pushing when the daemon's snapshot commits —
+without it a section flip sat unpushed until the next hook event, which for a
+text-only turn is the whole turn away.
+
+**`inboxStale` is a banner, not a blocker.** A snapshot older than 10s (or
+absent) flags the `/sessions` payload; verbs still work, because authored
+facts live in the store and only the activity snapshot is daemon-owned. Rows
+the snapshot misses degrade instead of vanishing: a pane-less parked/done id
+outside discovery's window gets a minimal projected row plus its
+`restoreState`, and a discovery-only newborn (born since the last tick) maps
+directly from status — running → Running, live prompt-sitters → Needs You —
+with a *stable* age anchor (the session's last turn, never a per-recompute
+`now`, which would make every payload differ and self-sustain the
+change-push cycle indefinitely while the daemon is down).
+
+**Snapshot ownership is single-writer with one seeded exception.** Discovery
+owns the snapshot table. The bridge's `seedSnapshotRow` — needed when a verb
+lands on an id discovery has never snapshotted, whose fact would otherwise
+have no row to overlay onto — is insert-if-absent only, and stamps
+`updated_at: 0` so a bridge-side seed can't mask a dead daemon in the
+staleness probe. `saveSnapshot`'s replace keeps fact-holding rows the new set
+doesn't cover, so a verb landing mid-tick survives the wipe. On the wake side,
+`markAutoResumed` is an atomic claim (the UPDATE's WHERE clause is the lock):
+overlapping wake passes, or a stray second daemon, can't double-spawn a pane.
+
+**Process shape follows two measured costs.** Discovery runs as a fresh child
+process per 3s tick (`claude0 daemon --discover-once`): an in-process loop
+leaks ~1.5 MB/s that JSC never returns, so the long-lived daemon only spawns
+and reaps. The sidebar stubs are shell lines (`sh`+`nc`+`cat`, ~1 MB), not
+bun processes (~30 MB each — more than the blessed chassis the renderer
+replaced). The renderer self-installs its tmux wiring on stand-up and every
+~30s rather than via tmux.conf: a tmux server restart is rewired within a
+tick, with no dotfile dependency.
+
+## Addendum 9: snooze mini-form, the `t` unit, and one wake renderer (2026-08-24)
+
+**The digits-then-unit grammar (addendum 2) is superseded by a two-line
+mini-form.** `s` opens it in the sidebar chrome: a unit-block row (`t 8am`,
+`d day`, `h hr` — ordered most-to-least used; Tab cycles, the unit letter
+selects directly) above an amount field with a live resolved-wake preview.
+The amount starts as a dim overwritable placeholder `1` — typing replaces
+it — so a bare Enter is a 1-unit snooze. Enter commits, Esc (hinted `⎋`)
+cancels, stray keys are inert, unfocus cancels. Addendum 2's mistype guard
+(no digits, no commit) is replaced, not dropped: the unit letter no longer
+commits instantly — nothing does until Enter, with the preview showing
+exactly what will be committed.
+
+**`t` is the morning anchor**: 8AM local on the +N calendar day, built from
+local calendar components so a DST shift still yields wall-clock 8AM. The
+phone's day presets (Tomorrow 8AM / 3d / 7d) now share its math
+(`presetWakeAt` delegates to `wakeAt(…, "t")` in `core/inbox-model.ts`), so
+addendum 6's semantics fork narrows to a unit choice on one surface: `h`/`d`
+stay exact relative (1d = 24h), `t` and the phone presets are
+morning-anchored. Earlier addenda's "days at local midnight" no longer
+applies anywhere.
+
+**One absolute-wake renderer.** The form preview, the parked detail line,
+the commit flash, and the phone's new snooze toast (`/snooze` returns
+`wakeAt`) all render through `shared/wake-abs.js`: same local day → time
+only ("9AM"), under 7 days → weekday + time ("Tue 9AM"), 7+ days → dd/MM +
+time ("26/09 9AM"). The format is hard-coded English dd/MM 12-hour by
+decision — Intl was tried and rejected because Bun ignores `LANG` for its
+default locale and ICU builds disagree on locale data (en-GB's hour cycle),
+so locale-sensitive Intl formatting is never relied on in this repo.
+
+**Phone snooze on a running session takes a confirm** — one tap killed an
+in-flight turn; the toast makes the resolved wake visible after any
+one-tap disposal. Parity with the sidebar, which hides snooze on Running
+rows entirely.
+
+Also recorded: a double-click on a sidebar row commits with the session
+*pane* focused ("take me there"), unlike keyboard Enter, which keeps the
+sidebar focused so the next Enter continues the queue (`switchTo` in
+`sidebar/renderer.ts`). And a scope decision from living with the inbox:
+it is an additional way to navigate, not a replacement — the tmux ⚡-prefix
+/ `claude0 next` flow is deliberately kept, not discontinued.
