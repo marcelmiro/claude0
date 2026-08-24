@@ -41,9 +41,12 @@ export interface DoctorCheck {
 }
 
 /** Tools claude0 functionally invokes on every role. */
-/** Tools every role needs on PATH before claude0 is usable; `claude0 setup`
- * pre-flights exactly this list. gh/lsof/nc below only degrade features. */
+/** Tools a session-running machine needs on PATH before claude0 is usable;
+ * `claude0 setup` pre-flights exactly this list. gh/lsof/nc below only
+ * degrade features. A client is only a terminal: no local tmux/claude, but
+ * mosh must exist to reach the host. */
 export const REQUIRED_TOOLS = ["tmux", "git", "bun", "claude"] as const;
+export const CLIENT_TOOLS = ["git", "bun", "mosh"] as const;
 const ESSENTIAL_TOOLS = [...REQUIRED_TOOLS, "gh", "lsof", "nc"] as const;
 /** What the host workload additionally needs. */
 const HOST_TOOLS = ["claude0", "zsh", "curl", "mosh-server", "bwrap", "socat"] as const;
@@ -536,7 +539,7 @@ function daemonAbsentCheck(): DoctorCheck {
 
 export function doctorChecks(ctx: DoctorContext): DoctorCheck[] {
   const checks: DoctorCheck[] = [
-    toolsCheck("essential-tools", ESSENTIAL_TOOLS),
+    toolsCheck("essential-tools", ctx.role === "client" ? CLIENT_TOOLS : ESSENTIAL_TOOLS),
     fragmentsCheck(),
     resurrectCheck(),
     configCheck(),

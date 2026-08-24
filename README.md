@@ -1,34 +1,48 @@
-# Claude0
+# Claude0: inbox zero for coding agents
 
-Claude0 is a tmux-based workspace for running and monitoring multiple Claude Code
-sessions. It supports two independent modes:
+No Claude Code session should sit idle waiting for you to notice it finished
+or got stuck. We treat sessions the way inbox zero treats email: everything is
+either running or resolved. That's the entire idea behind Claude0.
 
-- **Local:** Claude0, tmux, and Claude run on the current computer.
-- **Remote:** a Mac or Linux client uses Mosh to attach to an always-on Linux Claude0
-  host. tmux owns session persistence; the client is only a terminal.
+Parallel sessions are cheap to start and expensive to babysit: each one halts
+the moment it needs an answer, and the only way to know is to go back and
+check. Claude0 watches all of them and brings you the ones that are blocked,
+at your desk or on your phone.
 
-## Prerequisites
+## Features
 
-Claude0 needs [Bun](https://bun.sh), tmux, Git, and
-[Claude Code](https://claude.ai/install.sh) on PATH. Remote mode also requires
-Mosh on the client and host.
+- **Inbox.** Sessions sort by lifecycle: Needs you, Running, Parked,
+  Recently done. You work to keep Needs you empty, acting on each session and
+  moving to the next; that's the 0 in Claude0. Snoozed sessions wake
+  themselves when due; blocked ones wait in Parked with a note.
+- **Notifications.** tmux markers and macOS banners at the
+  desk, Web Push to your phone when you're away. Pushes go only to the device
+  you last messaged the session from.
+- **Phone access.** A web app shows each session's full conversation and lets
+  you approve tools, answer questions, send messages, run bash commands, and
+  read branch diffs.
+- **Session persistence.** Sessions survive tmux restarts and reboots; the
+  layout autosaves every 5 minutes.
+- **Worktree-aware.** New sessions can launch into per-branch git worktrees,
+  and worktree sessions group under their base repo.
 
-Claude0 never installs system packages on a Mac — your package manager is
-yours. On macOS:
-
-```sh
-brew install tmux git
-curl -fsSL https://bun.sh/install | bash
-curl -fsSL https://claude.ai/install.sh | bash
-```
-
-A Linux **host** is the exception: `claude0 setup --role host` provisions its
-own packages (see below). `claude0 setup` warns about any missing required
-tool, and `claude0 doctor` audits the full installation.
+Everything runs on your computer, or on an always-on Linux host with your Mac
+and phone as thin clients (see [Remote mode](#remote-mode)).
 
 ## Install
 
-Clone anywhere and run one command:
+You need [Bun](https://bun.sh), tmux, Git, and
+[Claude Code](https://code.claude.com/docs/en/installation) on PATH. Remote
+mode also needs Mosh on both machines. On macOS:
+
+```sh
+brew install tmux git oven-sh/bun/bun
+brew install --cask claude-code
+```
+
+A brew-managed Claude Code does not update itself; run `brew upgrade`.
+
+Clone anywhere and run setup:
 
 ```sh
 git clone https://github.com/marcelmiro/claude0
@@ -36,77 +50,74 @@ cd claude0
 bun run setup
 ```
 
-`bun run setup` installs dependencies and runs `claude0 setup`, which is
-idempotent and installs everything else:
+Setup is idempotent. It installs the `c0` command (long form: `claude0`),
+Claude Code hooks, tmux and zsh fragments, session persistence, and the inbox
+daemon. It never replaces personal dotfiles. Update later with
+`git pull && bun run setup`.
 
-- the `claude0` and `c0` commands in `~/.local/bin` (symlinks to the checkout)
-- Claude Code lifecycle hooks under `~/.config/claude0/hooks`
-- narrowly scoped tmux/zsh fragments plus one import line in `~/.tmux.conf`
-  and `~/.zshrc`
-- session persistence: tmux-resurrect (pinned clone; a user-managed TPM copy
-  always takes precedence), its save/restore hooks, and a periodic layout save
-  every 5 minutes — no tmux-continuum needed
-- the inbox daemon (launchd on macOS; a systemd user unit on a Linux host)
-
-Personal dotfiles, prompts, and tmux presentation are never replaced or
-templated, and none are required — see
-[ADR 23](docs/adr/0023-dotfiles-independence.md). To update later:
-`git pull && bun run setup`. Verify any install with `claude0 doctor`.
-
-Migrating a pre-`~/dev` installation? See
-[docs/history/migrate-documents-layout.md](docs/history/migrate-documents-layout.md).
-
-## One user config
+## Usage
 
 ```sh
-# Print the absolute path, creating the documented defaults on first use:
-claude0 config
-
-# Edit it with any editor:
-${EDITOR:-vim} "$(claude0 config)"
+c0          # list all commands
+c0 tui      # the session manager (tmux prefix+a)
+c0 config   # print the config file's path, e.g. code $(c0 config)
 ```
 
-Claude0 has one machine-local, schema-backed settings file. Repository discovery,
-terminal attachment, UI, and notification preferences all live in that file; Claude0
-does not maintain hidden sidecar settings. `repositories.roots` defaults to the
-directory the claude0 checkout lives in (repositories stay flat under each root).
-Set `repositories.priority` only when you want selected repos pinned.
+## Remote mode
 
-## Local and remote terminal modes
+The install splits across two machines: a Linux host that runs everything,
+and a client that is only a terminal.
 
-Set `terminal.defaultTarget` and `terminal.remoteHost` in `$(claude0 config)`, then:
+On the remote machine, follow [Install](#install) above, then provision it:
 
 ```sh
-# Explicit invocations do not mutate the default:
-claude0 terminal local
-claude0 terminal remote
-claude0 terminal status
-
-# No argument uses terminal.defaultTarget:
-claude0 terminal
+c0 setup --role host
+c0 doctor
 ```
 
-On macOS, Ghostty invokes the Claude0 command so a failed connection or detach falls
-through to a local login shell:
+Unlike on Mac, the host installs its own packages. Setup cannot log in for
+you; it ends by printing the interactive steps left (`claude`, `gh auth
+login`, `tailscale up`). See [deploy/README.md](deploy/README.md) for
+details, including the `--tz` and `--swap-gb` overrides.
+
+The host needs nothing from your Mac. To replicate an existing local setup
+instead, copy `~/.claude` and `~/.config/claude0` over and clone your repos
+(different home paths need a rename pass first; see
+[deploy/README.md](deploy/README.md)).
+
+Then, on your local machine:
+
+```sh
+c0 setup --role client   # asks for the host, points `c0 terminal` at it
+c0 terminal              # attach over Mosh
+```
+
+If you use Ghostty (or any terminal with a configurable startup command),
+point it at `c0 terminal` so a failed connection or detach falls through to a
+local login shell:
 
 ```text
 /bin/zsh -lc '"$HOME/.local/bin/c0" terminal; exec /bin/zsh -l'
 ```
 
-Remote mode requires Mosh on both machines. Hostname, mode, and session choices
-are fields in the machine-local `~/.config/claude0/config.json`.
-The remote Mosh server keeps a reconnect window of 30 days so ordinary laptop
-sleep, roaming, and travel do not strand an open terminal.
+The host's Mosh server keeps a 30-day reconnect window, so a slept or roaming
+laptop reconnects to the same terminal.
 
-## Provision an always-on Linux host
+### Phone
+
+The host serves the phone app over Tailscale. Grab the login token and the
+URL on the host:
 
 ```sh
-cd ~/dev/claude0
-claude0 setup --role host --tz Europe/Madrid --swap-gb 16
-claude0 doctor
+grep TOKEN ~/.config/claude0/bridge.env | cut -d= -f2
+tailscale serve status   # the app is the https:// line (proxy to port 8473)
 ```
 
-One idempotent pass with a single sudo authorization; interactive auth
-(`claude`, `gh`, `tailscale up`) ends as a printed checklist. See
-[deploy/README.md](deploy/README.md) for prerequisites and the role model in
-[ADR 22](docs/adr/0022-per-machine-roles.md).
+Then on your phone:
+
+1. Install the Tailscale app and log in to the same tailnet as the host.
+2. Open the https URL and paste the token when prompted. You should see your
+   sessions listed.
+3. Add the page to your home screen (Share > Add to Home Screen) and open it
+   from that icon; push notifications only work in the installed app. Allow
+   them from the bell in the navbar when it appears.

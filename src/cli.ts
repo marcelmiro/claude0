@@ -20,7 +20,7 @@ import { eventSourcedStatus } from "./core/hook-events";
 import { nativeStatus, resolveStatus } from "./core/session-state";
 import { loadNameCache, slugify } from "./core/names";
 import { PATHS, DEFAULT_CONFIG, loadConfig, saveConfig, ensureUserConfig, tmuxKeys, resolveRole } from "./core/config";
-import { renderTmuxFragment, renderTerminalLauncher, importAccepted, installedHookVersion, runDoctor, REQUIRED_TOOLS } from "./core/doctor";
+import { renderTmuxFragment, renderTerminalLauncher, importAccepted, installedHookVersion, runDoctor, REQUIRED_TOOLS, CLIENT_TOOLS } from "./core/doctor";
 import type { Config, DeploymentRole } from "./types";
 import { PRESENCE_WINDOW_S } from "./core/presence";
 import { pickSavedCwd, resolveRestoreTarget, resolveResurrect, resurrectOptionSet, resurrectRenderDir, resurrectCommand, cloneResurrectCommands, RESURRECT_COMMIT, daemonSaveCommand, RESURRECT_SAVE_INTERVAL_MS } from "./core/resurrect";
@@ -933,8 +933,10 @@ export interface SetupOptions {
 
 /** The host-provisioning context for this machine (flags win over defaults). */
 async function provisionContext(home: string, opts: SetupOptions) {
-  const { userInfo } = await import("node:os");
-  const swapGb = opts.swapGb === undefined ? 16 : Number(opts.swapGb);
+  const { userInfo, totalmem } = await import("node:os");
+  // Default swap to the machine's RAM size (the no-hibernation server rule):
+  // enough to degrade instead of livelock under pressure, no tuning needed.
+  const swapGb = opts.swapGb === undefined ? Math.max(1, Math.ceil(totalmem() / 2 ** 30)) : Number(opts.swapGb);
   if (!Number.isInteger(swapGb) || swapGb <= 0) {
     throw new Error(`--swap-gb must be a positive integer (received "${opts.swapGb}")`);
   }
@@ -978,26 +980,33 @@ export async function setup(roleFlag?: string, opts: SetupOptions = {}): Promise
   // Missing tools warn but never abort: everything setup writes is inert
   // config that goes live once the tool exists. Host provisioning installs
   // these itself, so the pre-flight would only report what it's about to fix.
-  const missingTools = role === "host" ? [] : REQUIRED_TOOLS.filter((tool) => !Bun.which(tool));
+  const roleTools = role === "client" ? CLIENT_TOOLS : REQUIRED_TOOLS;
+  const missingTools = role === "host" ? [] : roleTools.filter((tool) => !Bun.which(tool));
   const warnMissingTools = () => {
     if (missingTools.length === 0) return;
     console.log(`⚠ Missing required tools: ${missingTools.join(", ")}`);
-    console.log("  Install them (macOS: brew install tmux git; bun: https://bun.sh; claude: https://claude.ai/install.sh), then re-run `claude0 doctor`.");
+    console.log("  Install them with your package manager (macOS: brew — see README), then re-run `claude0 doctor`.");
   };
   warnMissingTools();
 
   // A client is nothing without its host: ask once, or say where to set it.
   if (role === "client") {
     const config = await loadConfig();
-    if (!config.terminal.remoteHost) {
+    let terminal = config.terminal;
+    if (!terminal.remoteHost) {
       if (canPrompt()) {
         const host = await promptLine("Remote host to attach to (tailscale/ssh name): ");
-        if (host) await saveConfig({ ...config, terminal: { ...config.terminal, remoteHost: host } });
+        if (host) terminal = { ...terminal, remoteHost: host };
         else console.log(`No host set — set terminal.remoteHost in ${PATHS.config} before using \`claude0 terminal\`.`);
       } else {
         console.log(`Set terminal.remoteHost in ${PATHS.config} to finish client setup.`);
       }
     }
+    // A client's terminal is the host: bare `claude0 terminal` should attach remotely.
+    if (terminal.remoteHost && terminal.defaultTarget !== "remote") {
+      terminal = { ...terminal, defaultTarget: "remote" };
+    }
+    if (terminal !== config.terminal) await saveConfig({ ...config, terminal });
   }
 
   const integrationChanged = await installTerminalIntegration(home, await ensureResurrect(home, role));
@@ -1162,6 +1171,10 @@ export async function setup(roleFlag?: string, opts: SetupOptions = {}): Promise
       ? "\nClient setup complete — `claude0 terminal` attaches to the remote host."
       : "\nNew Claude Code sessions will now emit status/transcript events.",
   );
+  if (role === "client" && process.platform === "darwin") {
+    console.log("Point your terminal's startup command at claude0 so a failed connection falls back to a local shell, e.g. Ghostty:");
+    console.log(`  /bin/zsh -lc '"$HOME/.local/bin/c0" terminal; exec /bin/zsh -l'`);
+  }
   await provisionHost();
   warnMissingTools();
 }
