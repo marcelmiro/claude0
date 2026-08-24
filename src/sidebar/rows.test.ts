@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { renderView, type ViewState } from "./rows";
-import { plainLen } from "./ansi";
-import type { InboxSession } from "../core/inbox-model";
+import { fmtWakeAbs, plainLen } from "./ansi";
+import { wakeAt, type InboxSession } from "../core/inbox-model";
 
 const NOW = new Date(2026, 7, 11, 14, 30).getTime();
 const M = 60_000;
@@ -18,6 +18,7 @@ function vs(over: Partial<ViewState> = {}): ViewState {
     activePaneId: null,
     snoozeMenuFor: null,
     snoozeDigits: "",
+    snoozeUnit: "t",
     blockNoteFor: null,
     blockNote: "",
     helpVisible: false,
@@ -87,17 +88,55 @@ describe("renderView", () => {
     expect(view.rows[view.rows.length - 1]).toContain("s b e f");
   });
 
-  test("snooze menu and block note chrome take the hint row", () => {
-    const menu = renderView(SAMPLE, vs({ focused: true, selectedId: "n1", snoozeMenuFor: "n1", snoozeDigits: "16" }), DIMS, NOW);
-    expect(menu.rows[menu.rows.length - 1]).toContain("snooze:");
-    expect(menu.rows[menu.rows.length - 1]).toContain("16");
+  test("snooze form: two chrome lines — unit blocks, dim placeholder 1, preview, hints", () => {
+    const view = renderView(SAMPLE, vs({ focused: true, selectedId: "n1", snoozeMenuFor: "n1" }), DIMS, NOW);
+    expect(view.rows.length).toBe(DIMS.height);
+    const units = view.rows[view.rows.length - 2]!;
+    const entry = view.rows[view.rows.length - 1]!;
+    for (const label of ["8am", "day", "hr"]) expect(units).toContain(label);
+    // active unit (default t) carries the selection bg
+    const highlighted = units.slice(units.indexOf("\x1b[48;2;64;64;64m"), units.indexOf("\x1b[49m"));
+    expect(highlighted).toContain("8am");
+    // empty amount renders the overwritable default as dim 1; preview resolves it
+    expect(entry).toContain("\x1b[38;2;80;80;80m1");
+    // caret sits BEFORE the placeholder (insertion point — the 1 is untyped);
+    // right-edge bar ▕ so the ink hugs the placeholder digit
+    expect(entry.indexOf("▕")).toBeLessThan(entry.indexOf("\x1b[38;2;80;80;80m1"));
+    expect(entry).toContain(fmtWakeAbs(wakeAt(NOW, 1, "t"), NOW));
+    expect(entry).toContain("↵ ⎋");
+    expect(plainLen(units)).toBeLessThanOrEqual(DIMS.width);
+    expect(plainLen(entry)).toBeLessThanOrEqual(DIMS.width);
+  });
+
+  test("snooze form: typed digits replace the placeholder and the highlight follows the unit", () => {
+    const view = renderView(
+      SAMPLE,
+      vs({ focused: true, selectedId: "n1", snoozeMenuFor: "n1", snoozeDigits: "3", snoozeUnit: "d" }),
+      DIMS,
+      NOW,
+    );
+    const units = view.rows[view.rows.length - 2]!;
+    const entry = view.rows[view.rows.length - 1]!;
+    const highlighted = units.slice(units.indexOf("\x1b[48;2;64;64;64m"), units.indexOf("\x1b[49m"));
+    expect(highlighted).toContain("day");
+    expect(entry).not.toContain("\x1b[38;2;80;80;80m1"); // no dim placeholder once typed
+    // caret immediately after the typed digits (white 3, then peach caret)
+    expect(entry).toContain("3\x1b[39m\x1b[38;2;255;199;153m▏");
+    // typed digit sits in the placeholder's column: one pad cell replaces the
+    // old caret cell, so the digit doesn't hop left when typing starts
+    expect(entry.replace(/\x1b\[[0-9;]*m/g, "")).toContain("☾  3▏");
+    expect(entry).toContain(fmtWakeAbs(NOW + 3 * 86_400_000, NOW));
+  });
+
+  test("block note chrome takes the hint row", () => {
     const note = renderView(SAMPLE, vs({ focused: true, selectedId: "n1", blockNoteFor: "n1", blockNote: "stripe" }), DIMS, NOW);
     expect(note.rows[note.rows.length - 1]).toContain("stripe");
   });
 
   test("selected parked row gets a detail line with the exact wake", () => {
     const view = renderView(SAMPLE, vs({ focused: true, selectedId: "p1" }), DIMS, NOW);
-    expect(view.rows[view.rows.length - 2]).toContain("until 17:30");
+    // same string the shared formatter produces (locale-dependent), wired via detailFor
+    expect(view.rows[view.rows.length - 2]).toContain(`until ${fmtWakeAbs(NOW + 3 * H, NOW)}`);
   });
 
   test("help overlay replaces content while focused", () => {

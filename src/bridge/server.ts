@@ -116,6 +116,8 @@ const STATIC: Record<string, string> = {
   "/tap-target.js": "../../shared/tap-target.js",
   // Wake countdown, shared with the sidebar (sidebar/ansi.ts) — served unbuilt.
   "/wake-format.js": "../../shared/wake-format.js",
+  // Absolute wake moment (snooze toast), shared with the sidebar — served unbuilt.
+  "/wake-abs.js": "../../shared/wake-abs.js",
   // Stream-event apply logic (versioned state push), shared with its test suite.
   "/sync.js": "../../shared/sync.js",
   // Tunnel-wake recovery decisions (burst retry + fetch timeouts), shared with
@@ -1530,13 +1532,15 @@ async function route(req: Request): Promise<Response> {
     const store = getInboxStore();
     if (!store) return json({ ok: false, reason: "no-store" }, 500);
     const now = Date.now();
-    if (!store.snooze(id, presetWakeAt(now, body.preset), now, deviceOf(req) ?? null)) {
+    const wakeAt = presetWakeAt(now, body.preset);
+    if (!store.snooze(id, wakeAt, now, deviceOf(req) ?? null)) {
       return json({ ok: false, reason: "archived" }, 409);
     }
     seedInboxRow(store, id, now);
     await archiveSession(id).catch(() => {}); // kill the pane; no-pane is fine
     kickSessionsPush(id);
-    return json({ ok: true });
+    // wakeAt lets the client toast the resolved moment without re-deriving it
+    return json({ ok: true, wakeAt });
   }
 
   const block = path.match(/^\/sessions\/([^/]+)\/block$/);

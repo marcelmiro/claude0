@@ -57,13 +57,18 @@ export function localMidnight(ymd: string): number {
 }
 
 /**
- * Wake timestamp for a Mac digits-then-unit snooze: exact relative offsets on
- * both units (1d = 24h from now). Days landed on local midnight until the
- * portkey inbox landed; the user re-confirmed exact-relative as the intended
- * Mac semantics, with the morning-anchored day wake living in presetWakeAt.
+ * Wake timestamp for a snooze-form commit: `h`/`d` are exact relative offsets
+ * (1d = 24h from now — the re-confirmed Mac semantics), `t` is the
+ * morning-anchored day (8AM LOCAL on the +N calendar day — a snooze "for
+ * days" should greet the user in the morning, not at midnight). Built from
+ * local calendar components (not midnight + 8h) so a DST shift between
+ * midnight and 8AM still yields the wall-clock 8AM.
  */
-export function wakeAt(now: number, n: number, unit: "h" | "d"): number {
-  return unit === "h" ? now + n * 3_600_000 : now + n * 86_400_000;
+export function wakeAt(now: number, n: number, unit: "h" | "d" | "t"): number {
+  if (unit === "h") return now + n * 3_600_000;
+  if (unit === "d") return now + n * 86_400_000;
+  const [y, m, d] = addDays(now, n).split("-").map(Number);
+  return new Date(y!, m! - 1, d!, 8).getTime();
 }
 
 export const WAKE_PRESETS = ["1h", "4h", "tomorrow", "3d", "7d"] as const;
@@ -74,18 +79,13 @@ export function isWakePreset(x: string): x is WakePreset {
 }
 
 /**
- * Phone snooze presets: hours are exact; day presets land at 8AM LOCAL on the
- * target calendar day (tomorrow = next day, 3d/7d = +3/+7) — a snooze "for
- * days" should greet the user in the morning, not at midnight. Built from
- * local calendar components (not midnight + 8h) so a DST shift between
- * midnight and 8AM still yields the wall-clock 8AM.
+ * Phone snooze presets: hours are exact; day presets are morning-anchored
+ * (the `t` unit: tomorrow = next day, 3d/7d = +3/+7, all at 8AM local).
  */
 export function presetWakeAt(now: number, preset: WakePreset): number {
-  if (preset === "1h") return now + 3_600_000;
-  if (preset === "4h") return now + 4 * 3_600_000;
-  const days = preset === "tomorrow" ? 1 : preset === "3d" ? 3 : 7;
-  const [y, m, d] = addDays(now, days).split("-").map(Number);
-  return new Date(y!, m! - 1, d!, 8).getTime();
+  if (preset === "1h") return wakeAt(now, 1, "h");
+  if (preset === "4h") return wakeAt(now, 4, "h");
+  return wakeAt(now, preset === "tomorrow" ? 1 : preset === "3d" ? 3 : 7, "t");
 }
 
 /** A snoozed session whose wake moment has passed — a full attention event. */

@@ -12,6 +12,7 @@ import { formatTimeAgo } from "/time-ago.js";
 import { parseDiffLines, narrowIndent } from "/diff-lines.js";
 // Wake countdown — the same module the Mac sidebar renders from (sidebar/ansi.ts).
 import { formatWakeIn } from "/wake-format.js";
+import { formatWakeAbs } from "/wake-abs.js";
 // Notification-tap attribution, served unbuilt and covered by shared/tap-target.test.ts.
 import { tapTarget } from "/tap-target.js";
 // Stream-event apply logic (versioned state push), served unbuilt and covered by
@@ -1396,7 +1397,10 @@ async function snoozeSession(preset) {
   if (!s) return;
   cancelReadTimer(s.id); // a disposed session never gets a deferred read-clear
   if (selectedId.value === s.id) selectedId.value = null;
-  await action(`/sessions/${encodeURIComponent(s.id)}/snooze`, { preset });
+  const data = await actionJson(`/sessions/${encodeURIComponent(s.id)}/snooze`, { preset });
+  // Toast the resolved wake — a one-tap disposal is otherwise invisible (the sheet
+  // closes and the row files under Parked), so a mis-tapped preset would go unnoticed.
+  if (data && data.wakeAt) notify(`Snoozed until ${formatWakeAbs(data.wakeAt, Date.now())}`);
 }
 
 async function blockSession(note) {
@@ -3536,11 +3540,13 @@ function SessionSheet() {
   const s = sessionMenu.value;
   const [confirm, setConfirm] = useState(null); // null | "archive" | "fork" | "snooze" | "block" — the open sub-state
   const [note, setNote] = useState(""); // block-note draft (block sub-state only)
+  const [pendingPreset, setPendingPreset] = useState(null); // snooze sub-state: the preset awaiting confirm
   // The sheet returns null when closed instead of unmounting, so `confirm` would
   // otherwise persist — reset it each time the target changes (open/close/switch).
   useEffect(() => {
     setConfirm(null);
     setNote("");
+    setPendingPreset(null);
   }, [s]);
   if (s == null) return null;
   const close = () => (sessionMenu.value = null);
@@ -3578,7 +3584,20 @@ function SessionSheet() {
                   </div>
                   <button class="accent-fill" onClick=${forkSession}>Fork session</button>
                   <button class="sheetcancel" onClick=${() => setConfirm(null)}>Cancel</button>`
-              : confirm === "block"
+              : confirm === "snooze"
+                ? html`
+                    <div class="sheethint">
+                      Claude is mid-turn — snoozing ends the run and parks the session until it
+                      wakes.
+                    </div>
+                    <button class="accent-fill" onClick=${() => snoozeSession(pendingPreset)}>
+                      Snooze
+                      ${(SNOOZE_PRESETS.find(([p]) => p === pendingPreset) || [])[1] || pendingPreset}
+                    </button>
+                    <button class="sheetcancel" onClick=${() => (setConfirm(null), setPendingPreset(null))}>
+                      Cancel
+                    </button>`
+                : confirm === "block"
                 ? html`
                     <div class="sheethint">
                       Parks the session until you unblock it. The pane ends; the note says what it waits on.
@@ -3601,8 +3620,19 @@ function SessionSheet() {
                     html`<div class="snoozerow">
                       <span class="vg" title="snooze until…">${vicon(VICONS.moon)}</span>
                       ${SNOOZE_PRESETS.map(
+                        // A running session gets a confirm interposed — one tap would
+                        // kill an in-flight turn (parity with the sidebar, which hides
+                        // snooze on Running rows entirely).
                         ([preset, label]) =>
-                          html`<button key=${preset} onClick=${() => snoozeSession(preset)}>${label}</button>`,
+                          html`<button
+                            key=${preset}
+                            onClick=${() =>
+                              s.status === "running"
+                                ? (setPendingPreset(preset), setConfirm("snooze"))
+                                : snoozeSession(preset)}
+                          >
+                            ${label}
+                          </button>`,
                       )}
                     </div>`}
                     ${canPark &&

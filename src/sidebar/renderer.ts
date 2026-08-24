@@ -25,7 +25,8 @@ import { resolveRestoreTarget } from "../core/resurrect";
 import { PATHS, configCache, parseTmuxKey, tmuxKeys } from "../core/config";
 import { SHELL_NAMES } from "../core/tmux";
 import { parseInput, type InputEvent } from "./input";
-import { renderView, type ViewState, type VisibleRow } from "./rows";
+import { renderView, SNOOZE_UNITS, type ViewState, type VisibleRow } from "./rows";
+import { fmtWakeAbs } from "./ansi";
 
 const SHELL_RE = new RegExp(`^(${SHELL_NAMES.join("|")})$`);
 
@@ -86,6 +87,7 @@ function freshWin(windowId: string): WinState {
     activePaneId: null,
     snoozeMenuFor: null,
     snoozeDigits: "",
+    snoozeUnit: "t",
     confirmKillId: null,
     blockNoteFor: null,
     blockNote: "",
@@ -384,14 +386,18 @@ export function runSidebarRenderer(): void {
   }
 
   // Enter and click share this, select-then-commit like the click grammar:
-  // a row in ANOTHER window shows that window with its sidebar focused (the
-  // next Enter there commits); a row in THIS window commits — focus drops
-  // into the session pane itself. A row whose pane died resumes on demand as
+  // a row in ANOTHER window shows that window — Enter with its sidebar
+  // focused (the keyboard flow keeps working the queue from the sidebar; the
+  // next Enter there commits), a click commit with the session PANE focused
+  // (`focusPane` — a double-click means "take me there", and the mouse can
+  // re-enter the sidebar in one click, no M-s round trip). A row in THIS
+  // window commits — focus drops into the session pane itself. A row whose
+  // pane died resumes on demand as
   // a PEEK when it's parked/done: the disposition/archive stays, engagement
   // (a new prompt) is what graduates it. The window comes from the live
   // pane's ACTUAL location, never the row's recorded session:index — indexes
   // get reused, and a stale one lands anywhere.
-  async function switchTo(win: WinState, s: InboxSession): Promise<void> {
+  async function switchTo(win: WinState, s: InboxSession, focusPane = false): Promise<void> {
     const loc = s.real ? await paneLocation(s.real.paneId) : null;
     if (loc && s.real) {
       if (loc.windowId === win.windowId) {
@@ -404,7 +410,20 @@ export function runSidebarRenderer(): void {
         // a mid-flight failure here must NOT fall through: the pane is alive,
         // resuming would spawn a duplicate window for a live session
         try {
-          await showWindowKeepSidebar(win, loc.windowId, s.id, loc.session);
+          if (focusPane) {
+            await Bun.$`tmux select-window -t ${loc.windowId}`.quiet();
+            await Bun.$`tmux select-pane -t ${s.real.paneId}`.quiet();
+            await showToClients(loc.session);
+            // drop this sidebar's chrome eagerly — its focus-out escape can
+            // lag a tick (same as landInSidebar's FROM handling)
+            if (win.focused) {
+              win.focused = false;
+              win.clickArmed = false;
+              paint(win);
+            }
+          } else {
+            await showWindowKeepSidebar(win, loc.windowId, s.id, loc.session);
+          }
         } catch {}
         return;
       }
@@ -617,7 +636,11 @@ export function runSidebarRenderer(): void {
     }
 
     if (win.snoozeMenuFor) {
-      // digits-then-unit, unit commits instantly: "16h", "3d"; digits REQUIRED
+      // Snooze form: digits fill the amount (empty = placeholder 1), t/d/h or
+      // Tab pick the unit, Enter commits, q/esc cancel. Everything else is
+      // INERT — a stray key never closes the form, and nothing commits before
+      // Enter (the retired digits-then-unit grammar's instant unit-commit made
+      // a partial "16h" a destructive 1h snooze).
       const id = win.snoozeMenuFor;
       if (ev.name === "q") {
         win.snoozeMenuFor = null;
@@ -625,7 +648,15 @@ export function runSidebarRenderer(): void {
         await unfocusToPane(win);
         return;
       }
+      if (ev.name === "escape") {
+        win.snoozeMenuFor = null;
+        win.snoozeDigits = "";
+        paint(win);
+        return;
+      }
       if (/^[0-9]$/.test(ev.ch ?? "") && win.snoozeDigits.length < 3) {
+        // a leading 0 can't start a valid amount — refuse it so Enter is always committable
+        if (win.snoozeDigits === "" && ev.ch === "0") return;
         win.snoozeDigits += ev.ch;
         paint(win);
         return;
@@ -635,38 +666,41 @@ export function runSidebarRenderer(): void {
         paint(win);
         return;
       }
-      if (ev.ch === "h" || ev.ch === "d") {
-        if (win.snoozeDigits === "") {
-          showFlash(win, "amount first — e.g. 16h, 3d");
-          paint(win);
-          return;
-        }
-        const unit = ev.ch;
-        const n = Number(win.snoozeDigits);
-        win.snoozeMenuFor = null;
-        win.snoozeDigits = "";
-        if (n >= 1) {
-          const prev = win.selectedId;
-          if (win.selectedId === id) win.selectedId = nextSelectionAfterVerb(win, id);
-          const target = findSession(id);
-          const walk = await livesHere(win, target);
-          const ok = applyVerb(() => store.snooze(id, wakeAt(Date.now(), n, unit), Date.now()));
-          if (ok) {
-            await killPaneOf(win, target, win.selectedId);
-            showFlash(win, `snoozed ${n}${unit}${target?.real ? " — pane closed" : ""}`);
-            paintAll();
-            if (walk) await followSelection(win, win.selectedId);
-            return;
-          }
-          win.selectedId = prev;
-          showFlash(win, "gone — nothing snoozed");
-        }
+      if (ev.ch === "t" || ev.ch === "d" || ev.ch === "h") {
+        win.snoozeUnit = ev.ch;
         paint(win);
         return;
       }
-      win.snoozeMenuFor = null;
-      win.snoozeDigits = "";
-      paint(win);
+      if (ev.name === "tab") {
+        const i = SNOOZE_UNITS.findIndex(([u]) => u === win.snoozeUnit);
+        win.snoozeUnit = SNOOZE_UNITS[(i + 1) % SNOOZE_UNITS.length]![0];
+        paint(win);
+        return;
+      }
+      if (ev.name === "enter") {
+        const n = win.snoozeDigits === "" ? 1 : Number(win.snoozeDigits);
+        const unit = win.snoozeUnit;
+        win.snoozeMenuFor = null;
+        win.snoozeDigits = "";
+        const prev = win.selectedId;
+        if (win.selectedId === id) win.selectedId = nextSelectionAfterVerb(win, id);
+        const target = findSession(id);
+        const walk = await livesHere(win, target);
+        const now = Date.now();
+        const wake = wakeAt(now, n, unit);
+        const ok = applyVerb(() => store.snooze(id, wake, now));
+        if (ok) {
+          await killPaneOf(win, target, win.selectedId);
+          showFlash(win, `☾ ${fmtWakeAbs(wake, now)}${target?.real ? " — pane closed" : ""}`);
+          paintAll();
+          if (walk) await followSelection(win, win.selectedId);
+          return;
+        }
+        win.selectedId = prev;
+        showFlash(win, "gone — nothing snoozed");
+        paint(win);
+        return;
+      }
       return;
     }
 
@@ -731,6 +765,8 @@ export function runSidebarRenderer(): void {
       case "s": {
         if (row) {
           win.snoozeMenuFor = row.id;
+          win.snoozeDigits = "";
+          win.snoozeUnit = "t";
           paint(win);
         }
         break;
@@ -815,6 +851,8 @@ export function runSidebarRenderer(): void {
         win.clickArmed = false;
         win.helpVisible = false;
         win.blockNoteFor = null;
+        win.snoozeMenuFor = null;
+        win.snoozeDigits = "";
         // selection deliberately kept — invisible unfocused, re-seeded on gain
         paint(win);
       }
@@ -841,7 +879,7 @@ export function runSidebarRenderer(): void {
       }
       const s = findSession(id);
       if (!s) return;
-      if (win.selectedId === s.id) await switchTo(win, s);
+      if (win.selectedId === s.id) await switchTo(win, s, true);
       else win.selectedId = s.id;
       paint(win);
       return;

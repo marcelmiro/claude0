@@ -8,10 +8,11 @@ describe("parseInput", () => {
     expect(parseInput("?")).toEqual([{ type: "key", name: "?", ch: "?", shift: false }]);
   });
 
-  test("enter, backspace, ctrl-c", () => {
+  test("enter, backspace, ctrl-c, tab", () => {
     expect(parseInput("\r")).toEqual([{ type: "key", name: "enter" }]);
     expect(parseInput("\x7f")).toEqual([{ type: "key", name: "backspace" }]);
     expect(parseInput("\x03")).toEqual([{ type: "key", name: "c", ctrl: true }]);
+    expect(parseInput("\t")).toEqual([{ type: "key", name: "tab" }]);
   });
 
   test("lone ESC is the escape key; arrows decode", () => {

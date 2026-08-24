@@ -87,15 +87,10 @@ export function fmtAge(ms: number): string {
 // because portkey renders the same countdown (served as /wake-format.js).
 export { formatWakeIn as fmtWake } from "../shared/wake-format";
 
-// Exact wake for the detail line: clock time within a day, else day/month plus
-// clock time — day snoozes are exact relative offsets (and phone-set day wakes
-// land at 8AM local), so a >24h wake has a meaningful time part.
-export function fmtWakeAbs(until: number, now: number): string {
-  const dt = new Date(until);
-  const hm = `${dt.getHours()}:${String(dt.getMinutes()).padStart(2, "0")}`;
-  if (until - now < 86_400_000) return hm;
-  return `${dt.getDate()}/${dt.getMonth() + 1} ${hm}`;
-}
+// Exact wake for the detail line, snooze-form preview and commit flash:
+// shared with portkey's snooze toast (served as /wake-abs.js) so one wake
+// never renders two ways. Fixed English format; splits on the LOCAL calendar day.
+export { formatWakeAbs as fmtWakeAbs } from "../shared/wake-abs";
 
 // Branch names bury the ticket ID mid-string; the prefix before it is the
 // useless half ("marcelmiro-ENG-2687-pass-…" → "ENG-2687-pass-…").

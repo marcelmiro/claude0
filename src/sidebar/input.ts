@@ -52,6 +52,7 @@ export function parseInput(data: string): InputEvent[] {
     if (c === "\r" || c === "\n") events.push({ type: "key", name: "enter" });
     else if (c === "\x7f" || c === "\b") events.push({ type: "key", name: "backspace" });
     else if (c === "\x03") events.push({ type: "key", name: "c", ctrl: true });
+    else if (c === "\t") events.push({ type: "key", name: "tab" });
     else if (c >= " " && c !== "\x7f") {
       const lower = c.toLowerCase();
       const isLetter = lower !== c.toUpperCase();

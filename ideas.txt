@@ -79,3 +79,4 @@ Lifecycle model locked 2026-08-02 (see docs/adr/0013 + CONTEXT.md terms). Phase 
 - Session pinning (pin important sessions to top regardless of status)
 - Preview pane search (/ within preview to find text)
 - Inbox `x` dismiss: archive without a RECENT entry (double-tap confirm, kills pane, no trace) — for throwaway sessions; deferred until killing the pane manually becomes a real pain
+- `snooze.timezone` config (IANA string, default = host zone) for the `t` morning-anchor math — travel fix: 8AM currently means the VM's 8AM. One knob keeps sidebar + portkey symmetric; rejected per-request client TZ (the sidebar's keystroke relay has no TZ channel, and client-TZ-at-set-time is the wrong zone anyway when you travel before the wake). Deferred until traveling makes it hurt; mis-anchored wakes are already visible (toast/preview render in the viewer's zone)

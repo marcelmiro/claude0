@@ -16,6 +16,17 @@ describe("wakeAt", () => {
     const justPastMidnight = new Date(2026, 7, 11, 0, 30).getTime();
     expect(wakeAt(justPastMidnight, 1, "d")).toBe(justPastMidnight + 86_400_000);
   });
+
+  test("t is the morning anchor: 8AM local on the +N calendar day", () => {
+    expect(wakeAt(NOW, 1, "t")).toBe(new Date(2026, 7, 12, 8).getTime());
+    expect(wakeAt(NOW, 3, "t")).toBe(new Date(2026, 7, 14, 8).getTime());
+    // pressed just after local midnight, 1t is still the NEXT day's 8AM
+    const justPastMidnight = new Date(2026, 7, 11, 0, 30).getTime();
+    expect(wakeAt(justPastMidnight, 1, "t")).toBe(new Date(2026, 7, 12, 8).getTime());
+    // Oct 25 2026 is an EU DST fallback day — wall-clock 8AM, whatever the offset did.
+    const oct24 = new Date(2026, 9, 24, 23, 0).getTime();
+    expect(wakeAt(oct24, 1, "t")).toBe(new Date(2026, 9, 25, 8).getTime());
+  });
 });
 
 import { isWakePreset, presetWakeAt } from "./inbox-model";

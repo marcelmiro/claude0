@@ -17,6 +17,7 @@ import {
   deriveSections,
   effectiveSince,
   isWoken,
+  wakeAt,
   type InboxSession,
   type Section,
 } from "../core/inbox-model";
@@ -27,6 +28,14 @@ export interface VisibleRow {
   section: Section;
 }
 
+export type SnoozeUnit = "t" | "d" | "h";
+/** Form order = Tab-cycle order, most→least used. `t` = 8AM on the +N calendar day. */
+export const SNOOZE_UNITS: [SnoozeUnit, string][] = [
+  ["t", "8am"],
+  ["d", "day"],
+  ["h", "hr"],
+];
+
 /** Per-window interaction state the view depends on. */
 export interface ViewState {
   focused: boolean;
@@ -34,6 +43,7 @@ export interface ViewState {
   activePaneId: string | null;
   snoozeMenuFor: string | null;
   snoozeDigits: string;
+  snoozeUnit: SnoozeUnit;
   blockNoteFor: string | null;
   blockNote: string;
   helpVisible: boolean;
@@ -72,7 +82,7 @@ function helpLines(): string[] {
     ` ${fg(C.fg, "↵ click")} ${fg(C.muted, "show session")}`,
     `         ${fg(C.dim, "again: enter pane")}`,
     `         ${fg(C.dim, "parked/recent: peek")}`,
-    ` ${fg(C.fg, "s")}       ${fg(C.muted, "snooze  16h 3d")}`,
+    ` ${fg(C.fg, "s")}       ${fg(C.muted, "snooze, pick time")}`,
     ` ${fg(C.fg, "b")}       ${fg(C.muted, "block, type note")}`,
     `         ${fg(C.dim, "parked: unpark")}`,
     ` ${fg(C.fg, "e")}       ${fg(C.muted, "done + close pane")}`,
@@ -80,7 +90,7 @@ function helpLines(): string[] {
     ` ${fg(C.fg, "f")}       ${fg(C.muted, "fork, new window")}`,
     "",
     ` ${bold(fg(C.dim, "leave"))}`,
-    ` ${fg(C.fg, "q esc")}   ${fg(C.muted, "back to work pane")}`,
+    ` ${fg(C.fg, "q ⎋")}    ${fg(C.muted, "back to work pane")}`,
     ` ${fg(C.fg, "M-s")}     ${fg(C.muted, "toggle from anywhere")}`,
   ];
 }
@@ -159,7 +169,7 @@ export function renderView(
   if (vs.helpVisible && vs.focused) {
     const content = helpLines().slice(0, Math.max(0, height - 1));
     while (content.length < height - 1) content.push("");
-    content.push(` ${fg(C.dim, "? q esc close")}`);
+    content.push(` ${fg(C.dim, "? q ⎋ close")}`);
     return { rows: content, visible: [], rowAtLine: [], scrollTop: 0 };
   }
 
@@ -251,7 +261,8 @@ export function renderView(
   // has authored info. Unfocused = pure glance surface, no chrome, top-pinned.
   const sel = sessions.find((s) => s.id === vs.selectedId);
   const detail = vs.focused && sel ? detailFor(sel, now) : null;
-  const chromeRows = 1 + (detail ? 1 : 0);
+  // the snooze form spends a second chrome line (unit blocks + amount/preview)
+  const chromeRows = (vs.focused && vs.snoozeMenuFor ? 2 : 1) + (detail ? 1 : 0);
   const contentHeight = Math.max(1, height - chromeRows);
 
   // scroll: glance mode always shows the top (Needs you); focused keeps the
@@ -270,9 +281,28 @@ export function renderView(
     rows.push("");
   } else if (vs.blockNoteFor) {
     const w = dims.width - 12;
-    rows.push(` ${fg(C.peach, "✗")} ${truncate(vs.blockNote, Math.max(4, w))}${fg(C.peach, "▏")} ${fg(C.dim, "↵ esc")}`);
+    rows.push(` ${fg(C.peach, "✗")} ${truncate(vs.blockNote, Math.max(4, w))}${fg(C.peach, "▏")} ${fg(C.dim, "↵ ⎋")}`);
   } else if (vs.snoozeMenuFor) {
-    rows.push(` ${fg(C.peach, "snooze:")} ${vs.snoozeDigits}${fg(C.peach, "▏")}${bold("h")}/${bold("d")} ${fg(C.dim, "esc")}`);
+    // two-line form: unit blocks (Tab / direct key selects), then amount +
+    // resolved-wake preview. Empty amount = overwritable placeholder 1 (dim).
+    const blocks = SNOOZE_UNITS.map(([u, label]) => {
+      const inner = ` ${bold(fg(C.fg, u))} ${fg(u === vs.snoozeUnit ? C.fg : C.muted, label)} `;
+      return u === vs.snoozeUnit ? bg(C.sel, inner) : inner;
+    }).join(" ");
+    rows.push(` ${blocks}`);
+    // caret AFTER typed digits (cursor at end of input), BEFORE the placeholder
+    // (insertion point at start — the dim 1 is untyped, so typing replaces it).
+    // ▏ inks the LEFT edge of its cell, ▕ the RIGHT — each hugs the digit it
+    // sits against. The typed branch pads one cell where the caret's cell was,
+    // so the first digit lands in the placeholder's own column and the bar
+    // advances a cell — typing reads as replace-in-place, not a digit hop.
+    const amount = vs.snoozeDigits
+      ? ` ${fg(C.fg, vs.snoozeDigits)}${fg(C.peach, "▏")}`
+      : `${fg(C.peach, "▕")}${fg(C.dim, "1")}`;
+    const preview = fmtWakeAbs(wakeAt(now, Number(vs.snoozeDigits || "1"), vs.snoozeUnit), now);
+    rows.push(
+      ` ${fg(C.peach, "☾")} ${amount} ${fg(C.muted, "→")} ${fg(C.fg, preview)}  ${fg(C.dim, "↵ ⎋")}`,
+    );
   } else if (vs.flash && now < vs.flashUntil) {
     rows.push(` ${fg(C.mint, truncate(vs.flash, dims.width - 2))}`);
   } else {

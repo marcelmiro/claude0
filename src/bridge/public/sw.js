@@ -20,6 +20,7 @@ const SHELL_PATHS = [
   "/diff-lines.js",
   "/tap-target.js",
   "/wake-format.js",
+  "/wake-abs.js",
   "/sync.js",
   "/reconnect.js",
   "/manifest.json",
