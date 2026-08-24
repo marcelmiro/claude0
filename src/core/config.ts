@@ -1,4 +1,5 @@
 import { homedir } from "os";
+import { dirname, resolve } from "path";
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import type { Config, DeploymentRole, TmuxKeys } from "../types";
 
@@ -342,13 +343,24 @@ function mergeMissingKeys(user: Record<string, unknown>, defaults: Record<string
   return changed;
 }
 
+/** Inverse of the `~` expansion applied at points of use (see git.ts). */
+function collapseHome(path: string): string {
+  const home = homedir();
+  return path === home || path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path;
+}
+
 /** Install discoverable defaults/schema; back-fills keys shipped since the user's
  *  file was written, never replacing a present value. */
 export async function ensureUserConfig(): Promise<boolean> {
   mkdirSync(PATHS.dir, { recursive: true });
   let created = false;
   if (!(await Bun.file(PATHS.config).exists())) {
-    writeAtomic(PATHS.config, `${JSON.stringify(DEFAULT_CONFIG, null, 2)}\n`);
+    // Fresh config only: seed repositories.roots with the directory the claude0
+    // checkout lives in, so a clone anywhere works without editing config. The
+    // static "~/dev" default remains the fallback and back-fill value.
+    const fresh = structuredClone(DEFAULT_CONFIG);
+    fresh.repositories.roots = [collapseHome(dirname(resolve(`${import.meta.dir}/../..`)))];
+    writeAtomic(PATHS.config, `${JSON.stringify(fresh, null, 2)}\n`);
     created = true;
   }
   const schemaSource = `${import.meta.dir}/../../config/config.schema.json`;

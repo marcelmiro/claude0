@@ -41,7 +41,10 @@ export interface DoctorCheck {
 }
 
 /** Tools claude0 functionally invokes on every role. */
-const ESSENTIAL_TOOLS = ["tmux", "git", "bun", "claude", "gh", "lsof", "nc"] as const;
+/** Tools every role needs on PATH before claude0 is usable; `claude0 setup`
+ * pre-flights exactly this list. gh/lsof/nc below only degrade features. */
+export const REQUIRED_TOOLS = ["tmux", "git", "bun", "claude"] as const;
+const ESSENTIAL_TOOLS = [...REQUIRED_TOOLS, "gh", "lsof", "nc"] as const;
 /** What the host workload additionally needs. */
 const HOST_TOOLS = ["claude0", "zsh", "curl", "mosh-server", "bwrap", "socat"] as const;
 const HOST_UNITS = [

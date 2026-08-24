@@ -8,11 +8,12 @@ Environment=PATH=%h/.bun/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 # tmux runs status-right's `#(claude0 status)` only while a client is attached — but a
 # headless host's steady state is detached, which is exactly when transition pushes
 # matter most. This loop ticks the monitor ONLY when no client is attached, so the
-# two tick sources never run concurrently. The resurrect save every 300 ticks
-# (~15 min) is NOT gated on attachment: it is the only periodic saver on linux
+# two tick sources never run concurrently. The resurrect save every 100 ticks
+# (~5 min, matching RESURRECT_SAVE_INTERVAL_MS) is NOT gated on attachment: it
+# is the only periodic saver on linux
 # (no continuum), keeping the layout and pane→session map fresh for a hard
 # reboot regardless of who is looking (ExecStop only covers a clean stop).
-ExecStart=/bin/bash -c 'n=0; while true; do if [ -z "$(tmux list-clients 2>/dev/null)" ]; then claude0 status >/dev/null 2>&1; fi; n=$((n+1)); if [ "$n" -ge 300 ]; then n=0; claude0 resurrect save >/dev/null 2>&1 || true; fi; sleep 3; done'
+ExecStart=/bin/bash -c 'n=0; while true; do if [ -z "$(tmux list-clients 2>/dev/null)" ]; then claude0 status >/dev/null 2>&1; fi; n=$((n+1)); if [ "$n" -ge 100 ]; then n=0; claude0 resurrect save >/dev/null 2>&1 || true; fi; sleep 3; done'
 Restart=always
 RestartSec=5s
 

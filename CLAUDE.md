@@ -210,7 +210,7 @@ Inline step-through UI that replaces the session list (no modal). Steps: repo â†
 
 Refresh loop paused during wizard. Esc pops back one step (or cancels from the repo step). Git errors flash as status messages and keep wizard open for retry. Progress messages shown during checkout/worktree operations.
 
-Config `repositories.roots` (default `["~/dev"]`): directories scanned 1-level deep for git repos to include alongside session repos. Repositories remain flat under each root; linked worktrees live inside their base at `<repo>/.claude/worktrees/`.
+Config `repositories.roots` (fresh configs default to the claude0 checkout's parent directory; code fallback `["~/dev"]`): directories scanned 1-level deep for git repos to include alongside session repos. Repositories remain flat under each root; linked worktrees live inside their base at `<repo>/.claude/worktrees/`.
 
 ### AI naming (`names.ts`)
 

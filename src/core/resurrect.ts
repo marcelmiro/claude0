@@ -163,8 +163,10 @@ export function resurrectCommand(pluginDir: string, action: "save" | "restore"):
   return action === "save" ? ["bash", script, "quiet"] : ["bash", script];
 }
 
-/** Cadence of the daemon's periodic layout save (continuum's conventional default). */
-export const RESURRECT_SAVE_INTERVAL_MS = 15 * 60_000;
+/** Cadence of the daemon's periodic layout save. A save is a subsecond script
+ * writing one small pruned file, so the interval is set by the acceptable loss
+ * window, not by cost. Mirrored by the linux monitor unit's tick count. */
+export const RESURRECT_SAVE_INTERVAL_MS = 5 * 60_000;
 
 /**
  * argv for the daemon's periodic best-effort save, or null when this process

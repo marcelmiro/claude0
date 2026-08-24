@@ -20,7 +20,7 @@ import { eventSourcedStatus } from "./core/hook-events";
 import { nativeStatus, resolveStatus } from "./core/session-state";
 import { loadNameCache, slugify } from "./core/names";
 import { PATHS, DEFAULT_CONFIG, loadConfig, saveConfig, ensureUserConfig, tmuxKeys, resolveRole } from "./core/config";
-import { renderTmuxFragment, renderTerminalLauncher, importAccepted, installedHookVersion, runDoctor } from "./core/doctor";
+import { renderTmuxFragment, renderTerminalLauncher, importAccepted, installedHookVersion, runDoctor, REQUIRED_TOOLS } from "./core/doctor";
 import type { Config, DeploymentRole } from "./types";
 import { PRESENCE_WINDOW_S } from "./core/presence";
 import { pickSavedCwd, resolveRestoreTarget, resolveResurrect, resurrectOptionSet, resurrectRenderDir, resurrectCommand, cloneResurrectCommands, RESURRECT_COMMIT, daemonSaveCommand, RESURRECT_SAVE_INTERVAL_MS } from "./core/resurrect";
@@ -975,6 +975,17 @@ export async function setup(roleFlag?: string, opts: SetupOptions = {}): Promise
   const configCreated = await ensureUserConfig();
   const role = await resolveSetupRole(roleFlag);
 
+  // Missing tools warn but never abort: everything setup writes is inert
+  // config that goes live once the tool exists. Host provisioning installs
+  // these itself, so the pre-flight would only report what it's about to fix.
+  const missingTools = role === "host" ? [] : REQUIRED_TOOLS.filter((tool) => !Bun.which(tool));
+  const warnMissingTools = () => {
+    if (missingTools.length === 0) return;
+    console.log(`⚠ Missing required tools: ${missingTools.join(", ")}`);
+    console.log("  Install them (macOS: brew install tmux git; bun: https://bun.sh; claude: https://claude.ai/install.sh), then re-run `claude0 doctor`.");
+  };
+  warnMissingTools();
+
   // A client is nothing without its host: ask once, or say where to set it.
   if (role === "client") {
     const config = await loadConfig();
@@ -1122,6 +1133,7 @@ export async function setup(roleFlag?: string, opts: SetupOptions = {}): Promise
   if (!scriptsWritten && !settingsChanged && daemonResult === "unchanged" && integrationChanged.length === 0 && !configCreated) {
     console.log("Claude0 hooks and terminal integration already configured.");
     await provisionHost();
+    warnMissingTools();
     return;
   }
 
@@ -1151,6 +1163,7 @@ export async function setup(roleFlag?: string, opts: SetupOptions = {}): Promise
       : "\nNew Claude Code sessions will now emit status/transcript events.",
   );
   await provisionHost();
+  warnMissingTools();
 }
 
 /**

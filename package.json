@@ -8,6 +8,7 @@
   },
   "scripts": {
     "prepare": "husky",
+    "setup": "bun install && bun bin/claude0.ts setup",
     "start": "bun run src/index.ts",
     "dev": "bun --watch src/index.ts",
     "status": "bun run src/monitor.ts",

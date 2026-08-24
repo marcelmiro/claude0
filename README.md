@@ -7,68 +7,54 @@ sessions. It supports two independent modes:
 - **Remote:** a Mac or Linux client uses Mosh to attach to an always-on Linux Claude0
   host. tmux owns session persistence; the client is only a terminal.
 
-## Install Claude0 on a computer
+## Prerequisites
 
-Requirements: [Bun](https://bun.sh), tmux, zsh, Git, and Claude Code. Remote
-mode also requires Mosh on the client and host.
+Claude0 needs [Bun](https://bun.sh), tmux, Git, and
+[Claude Code](https://claude.ai/install.sh) on PATH. Remote mode also requires
+Mosh on the client and host.
 
-```sh
-mkdir -p ~/dev
-git clone https://github.com/marcelmiro/claude0 ~/dev/claude0
-cd ~/dev/claude0
-bun install
-mkdir -p ~/.local/bin
-ln -sf "$PWD/bin/claude0.ts" ~/.local/bin/claude0
-claude0 setup
-```
-
-`claude0 setup` is idempotent. It installs Claude hooks plus narrowly scoped
-Claude0-owned extensions at:
-
-```text
-~/.config/claude0/tmux.conf
-~/.config/claude0/shell.zsh
-~/.config/claude0/terminal-launcher  # private transport implementation
-~/.local/bin/c0
-```
-
-It adds one import line to `~/.tmux.conf` and `~/.zshrc`; it never replaces or
-templates personal dotfiles, and none are required — Claude0 installs everything
-it needs, including tmux-resurrect (a user-managed TPM copy always takes
-precedence over the Claude0-owned clone). See
-[ADR 23](docs/adr/0023-dotfiles-independence.md).
-
-### Migrating an existing `~/Documents` installation
-
-Do not move repositories or rename the account with plain `mv`: Git worktree
-metadata and Claude transcript identities contain absolute paths. The layout
-and account changes can be staged independently. First migrate the layout under
-the current home:
+Claude0 never installs system packages on a Mac — your package manager is
+yours. On macOS:
 
 ```sh
-CURRENT_HOME="$HOME"
-bun run scripts/migrate-dev-layout.ts preflight \
-  --target-home "$CURRENT_HOME" \
-  --source-root "$CURRENT_HOME/Documents" \
-  --target-root "$CURRENT_HOME/dev"
-bun run scripts/migrate-dev-layout.ts apply
+brew install tmux git
+curl -fsSL https://bun.sh/install | bash
+curl -fsSL https://claude.ai/install.sh | bash
 ```
 
-Immediately before a later account rename, generate a fresh home-only manifest
-from the already-migrated layout, then run `apply` on the renamed account:
+A Linux **host** is the exception: `claude0 setup --role host` provisions its
+own packages (see below). `claude0 setup` warns about any missing required
+tool, and `claude0 doctor` audits the full installation.
+
+## Install
+
+Clone anywhere and run one command:
 
 ```sh
-bun run scripts/migrate-dev-layout.ts preflight \
-  --target-home /Users/marcel \
-  --source-root "$HOME/dev" \
-  --target-root /Users/marcel/dev
-# after the rename, as the new account:
-bun run scripts/migrate-dev-layout.ts apply
+git clone https://github.com/marcelmiro/claude0
+cd claude0
+bun run setup
 ```
 
-Each apply phase keeps path-state backups under
-`~/.config/claude0/migrations/`. See
-[ADR 17](docs/adr/0017-user-centric-development-layout.md) for the invariants.
+`bun run setup` installs dependencies and runs `claude0 setup`, which is
+idempotent and installs everything else:
+
+- the `claude0` and `c0` commands in `~/.local/bin` (symlinks to the checkout)
+- Claude Code lifecycle hooks under `~/.config/claude0/hooks`
+- narrowly scoped tmux/zsh fragments plus one import line in `~/.tmux.conf`
+  and `~/.zshrc`
+- session persistence: tmux-resurrect (pinned clone; a user-managed TPM copy
+  always takes precedence), its save/restore hooks, and a periodic layout save
+  every 5 minutes — no tmux-continuum needed
+- the inbox daemon (launchd on macOS; a systemd user unit on a Linux host)
+
+Personal dotfiles, prompts, and tmux presentation are never replaced or
+templated, and none are required — see
+[ADR 23](docs/adr/0023-dotfiles-independence.md). To update later:
+`git pull && bun run setup`. Verify any install with `claude0 doctor`.
+
+Migrating a pre-`~/dev` installation? See
+[docs/history/migrate-documents-layout.md](docs/history/migrate-documents-layout.md).
 
 ## One user config
 
@@ -82,8 +68,9 @@ ${EDITOR:-vim} "$(claude0 config)"
 
 Claude0 has one machine-local, schema-backed settings file. Repository discovery,
 terminal attachment, UI, and notification preferences all live in that file; Claude0
-does not maintain hidden sidecar settings. The default repository layout is flat:
-`~/dev/<repo>`. Set `repositories.priority` only when you want selected repos pinned.
+does not maintain hidden sidecar settings. `repositories.roots` defaults to the
+directory the claude0 checkout lives in (repositories stay flat under each root).
+Set `repositories.priority` only when you want selected repos pinned.
 
 ## Local and remote terminal modes
 
