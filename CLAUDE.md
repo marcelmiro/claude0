@@ -47,6 +47,7 @@ The mobile bridge (`claude0 bridge`) runs as a systemd user unit on the Linux VM
 | `claude0 resurrect save\|restore` | Resolve the tmux-resurrect plugin (user copy wins) and exec its script | exit passthrough |
 | `claude0 daemon` | Inbox engine: snooze wakes, discovery snapshots, sidebar renderer (run by launchd/systemd, not by hand) | long-running |
 | `claude0 bridge` | Portkey HTTP bridge for the phone (systemd unit on the host) | long-running |
+| `claude0 bridge token` | Print the bridge login token from `bridge.env` (phone pairing) | stdout |
 | `claude0 save-sessions` | Snapshot pane→session map for tmux-resurrect | stdout (silent in hook) |
 | `claude0 restore-sessions` | Restore Claude sessions after tmux-resurrect restore | stdout |
 | `claude0 --help` | Show available commands and usage | stdout |

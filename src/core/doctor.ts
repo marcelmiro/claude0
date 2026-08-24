@@ -410,7 +410,7 @@ function tmuxCheck(): DoctorCheck {
 }
 
 /** KEY=value from an EnvironmentFile, hand-quoted values unwrapped. */
-function envValue(env: string, key: string): string | undefined {
+export function envValue(env: string, key: string): string | undefined {
   const raw = env.match(new RegExp(`^${key}=(.*)$`, "m"))?.[1]?.trim();
   if (!raw) return undefined;
   return raw.replace(/^(["'])(.*)\1$/, "$2");

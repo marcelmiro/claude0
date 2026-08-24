@@ -20,7 +20,7 @@ import { eventSourcedStatus } from "./core/hook-events";
 import { nativeStatus, resolveStatus } from "./core/session-state";
 import { loadNameCache, slugify } from "./core/names";
 import { PATHS, DEFAULT_CONFIG, loadConfig, saveConfig, ensureUserConfig, tmuxKeys, resolveRole } from "./core/config";
-import { renderTmuxFragment, renderTerminalLauncher, importAccepted, installedHookVersion, runDoctor, REQUIRED_TOOLS, CLIENT_TOOLS } from "./core/doctor";
+import { renderTmuxFragment, renderTerminalLauncher, importAccepted, installedHookVersion, runDoctor, envValue, REQUIRED_TOOLS, CLIENT_TOOLS } from "./core/doctor";
 import type { Config, DeploymentRole } from "./types";
 import { PRESENCE_WINDOW_S } from "./core/presence";
 import { pickSavedCwd, resolveRestoreTarget, resolveResurrect, resurrectOptionSet, resurrectRenderDir, resurrectCommand, cloneResurrectCommands, RESURRECT_COMMIT, daemonSaveCommand, RESURRECT_SAVE_INTERVAL_MS } from "./core/resurrect";
@@ -1709,8 +1709,23 @@ export async function daemon(): Promise<void> {
   }
 
   // The sidebar renderer runs inside this process (own 1s loop + unix
-  // socket).
-  const { runSidebarRenderer } = await import("./sidebar/renderer");
+  // socket). A second daemon would steal that socket from the live one
+  // (the renderer unlinks and rebinds it), so refuse if a renderer answers.
+  const { runSidebarRenderer, SIDEBAR_SOCK } = await import("./sidebar/renderer");
+  const rendererAlive = await Bun.connect({
+    unix: SIDEBAR_SOCK,
+    socket: { data() {} },
+  }).then(
+    (sock) => {
+      sock.end();
+      return true;
+    },
+    () => false, // no socket file, or a stale one with no listener
+  );
+  if (rendererAlive) {
+    console.error("claude0 daemon is already running (launchd/systemd manages it) — not starting a second instance.");
+    process.exit(1);
+  }
   runSidebarRenderer();
 
   let tick = 0;
@@ -1800,6 +1815,23 @@ export async function sidebarCtl(cmd: string | undefined, paneId: string | undef
       }).catch(() => resolve());
     });
   } catch {}
+}
+
+// ---------------------------------------------------------------------------
+// claude0 bridge token — print the bridge login token for phone pairing
+// ---------------------------------------------------------------------------
+
+export async function bridgeToken(): Promise<void> {
+  const path = `${PATHS.dir}/bridge.env`;
+  const env = await Bun.file(path)
+    .text()
+    .catch(() => null);
+  const token = env === null ? undefined : envValue(env, "CLAUDE0_BRIDGE_TOKEN");
+  if (!token) {
+    console.error(`No bridge token in ${path} — run \`claude0 setup --role host\` on the host first.`);
+    process.exit(2);
+  }
+  console.log(token);
 }
 
 // ---------------------------------------------------------------------------

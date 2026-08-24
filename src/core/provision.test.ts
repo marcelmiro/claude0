@@ -307,7 +307,7 @@ test("guided stops list exactly the unauthenticated tools with exact commands; p
   expect(all.filter((l) => l.includes("[todo]"))).toHaveLength(3);
   const none = guidedStops(satisfied(), ctx);
   expect(none.some((l) => l.includes("[todo]"))).toBe(false);
-  expect(none.join("\n")).toContain("bridge.env");
+  expect(none.join("\n")).toContain("bridge token");
 });
 
 test("renderDryRun prints every step with a verdict and never a secret", () => {

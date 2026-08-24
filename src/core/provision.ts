@@ -489,7 +489,7 @@ export function guidedStops(state: SystemState, ctx: ProvisionContext): string[]
   }
   lines.push(
     "",
-    `Client pairing: the bridge token lives in ${ctx.home}/.config/claude0/bridge.env — paste it into portkey on first connect.`,
+    "Client pairing: run `claude0 bridge token` to print the phone login token — paste it into the phone app on first connect.",
     "Reboot once to prove unit autostart.",
   );
   return lines;

@@ -109,7 +109,7 @@ The host serves the phone app over Tailscale. Grab the login token and the
 URL on the host:
 
 ```sh
-grep TOKEN ~/.config/claude0/bridge.env | cut -d= -f2
+c0 bridge token          # the login token
 tailscale serve status   # the app is the https:// line (proxy to port 8473)
 ```
 
