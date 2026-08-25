@@ -10,7 +10,7 @@
 import "../test/helpers/home";
 import { TEST_HOME } from "../test/helpers/home";
 import { test, expect, beforeEach } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync, readFileSync, readlinkSync, existsSync, symlinkSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync, readFileSync, readlinkSync, existsSync, symlinkSync, statSync } from "node:fs";
 import { setup, HOOK_VERSION } from "./cli";
 import { HOLD_WINDOW_MS } from "./core/approval";
 
@@ -461,4 +461,52 @@ test("client setup restores a registered hook script that vanished", async () =>
   await setup("client");
   const script = readFileSync(`${TEST_HOME}/.config/claude0/hooks/session-start.sh`, "utf8");
   expect(script).toContain(`# HOOK_VERSION=`);
+});
+
+// --- image paste Service (client Mac) ---
+
+const serviceDir = `${TEST_HOME}/Library/Services/claude0 paste-image.workflow`;
+
+async function configureRemoteHost(host: string | null): Promise<void> {
+  const { PATHS, ensureUserConfig } = await import("./core/config");
+  await ensureUserConfig();
+  const config = JSON.parse(readFileSync(PATHS.config, "utf8"));
+  config.terminal.remoteHost = host;
+  config.terminal.defaultTarget = host ? "remote" : "local";
+  writeFileSync(PATHS.config, JSON.stringify(config));
+}
+
+test("client setup renders the image paste Service from the templates, idempotently, and retires it when the role changes", async () => {
+  if (process.platform !== "darwin") return; // Services (and the pbs hotkey) exist only on macOS
+  rmSync(serviceDir, { recursive: true, force: true });
+  await configureRemoteHost("vm.ts.net");
+  await setup("client");
+  const info = readFileSync(`${serviceDir}/Contents/Info.plist`, "utf8");
+  const wflow = readFileSync(`${serviceDir}/Contents/document.wflow`, "utf8");
+  expect(info).toContain("<string>claude0 paste-image</string>");
+  expect(info).toContain("<string>com.mitchellh.ghostty</string>");
+  expect(wflow).toContain("exec &quot;$HOME/.local/bin/claude0&quot; paste-image");
+  expect(info + wflow).not.toContain("{{");
+
+  const before = statSync(`${serviceDir}/Contents/document.wflow`).mtimeMs;
+  await setup("client");
+  expect(statSync(`${serviceDir}/Contents/document.wflow`).mtimeMs).toBe(before);
+
+  await setup("local");
+  expect(existsSync(serviceDir)).toBe(false);
+});
+
+test("client setup without a remote host installs no Service", async () => {
+  if (process.platform !== "darwin") return;
+  rmSync(serviceDir, { recursive: true, force: true });
+  await configureRemoteHost(null);
+  await setup("client");
+  expect(existsSync(serviceDir)).toBe(false);
+});
+
+test("setup never writes a macOS Service bundle off darwin", async () => {
+  if (process.platform === "darwin") return;
+  await configureRemoteHost("vm.ts.net");
+  await setup("client");
+  expect(existsSync(`${TEST_HOME}/Library/Services`)).toBe(false);
 });

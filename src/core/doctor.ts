@@ -7,6 +7,7 @@
 import { existsSync, accessSync, constants } from "node:fs";
 import { userInfo } from "node:os";
 import { DEFAULT_CONFIG, tmuxKeys, parseTmuxKey } from "./config";
+import { imagePasteManifest, readServiceTemplates, pbsServiceKey, describeKey, terminalBundleId, pasteImageLockDir, lockOwnerAlive, RECEIVE_PROBE_COMMAND, SSH_OPTIONS, SERVICE_NAME } from "./image-paste";
 import { resolveResurrect, resurrectOptionSet, resurrectRenderDir } from "./resurrect";
 import type { ResurrectResolution } from "./resurrect";
 import type { Config, DeploymentRole, TmuxKeys } from "../types";
@@ -537,6 +538,72 @@ function daemonAbsentCheck(): DoctorCheck {
   };
 }
 
+/**
+ * Client Mac: the image-paste Service is installed and current, its hotkey is
+ * registered, the terminal leaves the chord alone, and the host answers the ssh
+ * the paste rides on. Everything setup renders is re-rendered here and compared.
+ */
+function imagePasteCheck(): DoctorCheck {
+  return {
+    name: "image-paste",
+    async run(ctx) {
+      const host = ctx.config?.terminal.remoteHost;
+      if (!host) return [warn("image paste: terminal.remoteHost is unset — the Service is not installed until claude0 setup knows the host")];
+      const install = imagePasteManifest(ctx.home, ctx.config, await readServiceTemplates(ctx.templateDir));
+      const results: DoctorResult[] = [];
+
+      let current = true;
+      for (const file of install.files) current &&= (await readText(file.path)) === file.content;
+      results.push(
+        current
+          ? ok(`image paste service is installed (${SERVICE_NAME}.workflow)`)
+          : fail("image paste service is missing or stale — run claude0 setup"),
+      );
+
+      // The pbs domain is real-machine state; under the test seam the bundle stands in.
+      if (!process.env.CLAUDE0_HOME) {
+        const status = await probe(["defaults", "read", "pbs", "NSServicesStatus"]);
+        const at = status.out.indexOf(pbsServiceKey(SERVICE_NAME));
+        const entry = at === -1 ? "" : status.out.slice(at);
+        const registered = entry.slice(0, entry.indexOf("}") + 1).includes(`key_equivalent = "${install.keyEquivalent}"`);
+        results.push(
+          registered
+            ? ok(`image paste hotkey is registered (${describeKey(install.key)})`)
+            : fail(`image paste hotkey is not registered as ${describeKey(install.key)} — run claude0 setup`),
+        );
+      }
+
+      // Ghostty binds super+shift+v to paste_from_selection by default, which wins over
+      // the Service; the unbind line is the only way the chord reaches it.
+      if (terminalBundleId(ctx.config) === DEFAULT_CONFIG.notifications.terminalBundleId && install.key === DEFAULT_CONFIG.terminal.imagePasteKey) {
+        const ghostty = (await readText(`${ctx.home}/.config/ghostty/config`)) ?? (await readText(`${ctx.home}/Library/Application Support/com.mitchellh.ghostty/config`));
+        results.push(
+          ghostty && /^\s*keybind\s*=\s*super\+shift\+v\s*=\s*unbind\s*$/m.test(ghostty)
+            ? ok("Ghostty leaves super+shift+v to the image paste service")
+            : warn("Ghostty still binds super+shift+v (paste_from_selection) — add `keybind = super+shift+v=unbind` to its config or the chord pastes selection text"),
+        );
+      }
+
+      if (!process.env.CLAUDE0_HOME) {
+        const ssh = await probe(["ssh", ...SSH_OPTIONS, host, RECEIVE_PROBE_COMMAND]);
+        results.push(
+          ssh.code === 0
+            ? ok(`host ${host} runs claude0 over ssh`)
+            : ssh.code === 127
+              ? fail(`host ${host} answers ssh but has no claude0 on PATH — run claude0 setup --role host there`)
+              : fail(`ssh ${host} failed (exit ${ssh.code}) — image paste needs key-based ssh to the host`),
+        );
+      }
+
+      const lock = pasteImageLockDir(ctx.home);
+      if (existsSync(lock) && !lockOwnerAlive(lock)) {
+        results.push(warn(`stale image paste lock — a killed run left ${lock}; the next paste reclaims it`));
+      }
+      return results;
+    },
+  };
+}
+
 export function doctorChecks(ctx: DoctorContext): DoctorCheck[] {
   const checks: DoctorCheck[] = [
     toolsCheck("essential-tools", ctx.role === "client" ? CLIENT_TOOLS : ESSENTIAL_TOOLS),
@@ -551,7 +618,7 @@ export function doctorChecks(ctx: DoctorContext): DoctorCheck[] {
   }
   // launchd exists only on darwin — the per-role daemon checks skip cleanly elsewhere.
   if (ctx.platform === "darwin" && ctx.role === "local") checks.push(daemonPresentCheck());
-  if (ctx.platform === "darwin" && ctx.role === "client") checks.push(daemonAbsentCheck());
+  if (ctx.platform === "darwin" && ctx.role === "client") checks.push(daemonAbsentCheck(), imagePasteCheck());
   return checks;
 }
 

@@ -45,7 +45,12 @@
         "defaultTarget": { "enum": ["local", "remote"] },
         "remoteHost": { "type": ["string", "null"] },
         "localSession": { "type": "string", "minLength": 1 },
-        "remoteSession": { "type": "string", "minLength": 1 }
+        "remoteSession": { "type": "string", "minLength": 1 },
+        "imagePasteKey": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Client role, macOS: hotkey of the image-paste Service — modifiers cmd/ctrl/alt/shift plus one key (default \"cmd+shift+v\"). The terminal must leave the chord unbound."
+        }
       }
     },
     "ui": {

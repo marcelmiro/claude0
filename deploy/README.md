@@ -51,6 +51,18 @@ OSC 52, which needs Ghostty's `clipboard-read = allow` and
 `clipboard-write = allow`. When the chain is healthy, tmux advertises both the
 `clipboard` and `bpaste` client features.
 
+Images can't ride the terminal (mosh drops every image-capable sequence), so
+`c0 setup --role client` installs a macOS Service: **Cmd+Shift+V** in the
+terminal runs `claude0 paste-image`, which ships the clipboard PNG over ssh to
+`claude0 receive-image` on the host; the host stores it under
+`~/.config/claude0/uploads/` and pastes the path into the focused Claude
+prompt, which renders it as `[Image #1]` — the same path phone attachments
+take. Ghostty must not bind the chord (`keybind = super+shift+v=unbind`;
+`c0 doctor` warns otherwise). Refusals (no image, no Claude prompt focused,
+host unreachable) surface as macOS notifications; the chord is
+`terminal.imagePasteKey` in the config
+([ADR 27](../docs/adr/0027-image-paste-is-a-service-hotkey-plus-path-paste.md)).
+
 ## After a reboot
 
 Everything must come back with no SSH login (that is what linger is for).

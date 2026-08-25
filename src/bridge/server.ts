@@ -12,7 +12,7 @@
  * defense-in-depth.
  */
 
-import { createHash, timingSafeEqual, randomUUID } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import {
   existsSync,
   readdirSync,
@@ -62,6 +62,7 @@ import { repoRootForSession, safeRepoPath, fileDiff, rangeDiff, branchChanges } 
 import { branchPullRequest, type PullRequestInfo } from "../core/pull-request";
 import { recoverWorktreeTranscript } from "../core/recover";
 import { loadConfig, PATHS } from "../core/config";
+import { saveUploadedBytes } from "../core/uploads";
 import { listPendingApprovals, decideApproval } from "../core/approval";
 import { markPortkeySource } from "../core/input-source";
 import {
@@ -195,24 +196,14 @@ function sendResult(r: SendResult): Response {
 // Image uploads — written to PATHS.uploads, then pasted into the pane by sendMessage.
 // ---------------------------------------------------------------------------
 
-// Allow-list of accepted image types → file extension. The filename is always our own
-// randomUUID (never the client's) so there's no path-traversal surface.
-const IMAGE_EXT: Record<string, string> = {
-  "image/png": "png",
-  "image/jpeg": "jpg",
-  "image/webp": "webp",
-  "image/gif": "gif",
-};
 const UPLOAD_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 /** Persist uploaded image files; returns absolute paths, or a `bad-image` error. */
 async function saveUploadedImages(files: File[]): Promise<{ paths: string[] } | { error: "bad-image" }> {
   const paths: string[] = [];
   for (const f of files) {
-    const ext = IMAGE_EXT[f.type];
-    if (!ext) return { error: "bad-image" };
-    const dest = `${PATHS.uploads}/${randomUUID()}.${ext}`;
-    await Bun.write(dest, await f.arrayBuffer()); // Bun.write creates the parent dir
+    const dest = await saveUploadedBytes(await f.arrayBuffer(), f.type);
+    if (!dest) return { error: "bad-image" };
     paths.push(dest);
   }
   return { paths };

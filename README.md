@@ -119,6 +119,13 @@ local login shell:
 The host's Mosh server keeps a 30-day reconnect window, so a slept or roaming
 laptop reconnects to the same terminal.
 
+Clipboard images can't cross the terminal, so client setup also installs a
+macOS Service: **Cmd+Shift+V** in the terminal pastes the clipboard image into
+the focused Claude prompt on the host (as `[Image #1]`, like a local paste).
+Ghostty binds that chord by default — add `keybind = super+shift+v=unbind` to
+its config (`c0 doctor` reminds you). Change the chord with
+`terminal.imagePasteKey`.
+
 ### Phone
 
 The host serves the phone app over Tailscale. Grab the login token and the

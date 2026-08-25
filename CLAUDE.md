@@ -86,6 +86,7 @@ Processes & caches:
 | AskUserQuestion hold, "Chat about this" | [8](docs/adr/0008-question-hold-not-send-keys.md) | `core/tmux.ts` |
 | Background scripts/agents surface (⏳, 🤖 pill), runner liveness | [26](docs/adr/0026-background-work-is-visibility-only.md) | `core/script-wait.ts`, `core/background-tasks.ts`, `core/runner-verdicts.ts` |
 | Fork sessions, transcript seeding | [25](docs/adr/0025-fork-transcript-seeding.md) | `core/session-api.ts` |
+| Image paste from a client Mac (Service hotkey → ssh → path paste) | [27](docs/adr/0027-image-paste-is-a-service-hotkey-plus-path-paste.md) | `core/image-paste.ts`, `src/paste-image.ts`, `config/service/` |
 | Model/effort switcher | [4](docs/adr/0004-model-effort-switcher-scope.md) | `core/session-api.ts` |
 | systemd units, tmux-resurrect pairing, restore-path resolution | [16](docs/adr/0016-systemd-units-replace-launchd.md), [23](docs/adr/0023-dotfiles-independence.md) | `deploy/`, `core/resurrect.ts` |
 | Setup roles, config defaults, VM layout | [22](docs/adr/0022-per-machine-roles.md), [20](docs/adr/0020-config-defaults-live-in-code-setup-materializes.md), [17](docs/adr/0017-user-centric-development-layout.md), [15](docs/adr/0015-vm-home-is-users-throxy.md) | `src/cli.ts` (setup/doctor) |

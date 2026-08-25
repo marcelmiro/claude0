@@ -268,6 +268,8 @@ export interface Config {
     remoteHost: string | null;
     localSession: string;
     remoteSession: string;
+    /** Chord that pastes the Mac clipboard image into the remote Claude pane (client role); absent ⇒ "cmd+shift+v" */
+    imagePasteKey?: string;
   };
   ui: {
     statusMonitor: boolean;

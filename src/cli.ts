@@ -12,7 +12,10 @@
 
 import { homedir } from "os";
 import { loadState, saveState, loadPaneSessions } from "./core/state";
-import { switchToPane, listPanes, renameWindow, capturePane, displayMessage, atDeskFocus, SHELL_NAMES } from "./core/tmux";
+import { switchToPane, listPanes, renameWindow, capturePane, displayMessage, atDeskFocus, SHELL_NAMES, sendBracketedPaste } from "./core/tmux";
+import { shellModeInput, flattenStyled } from "./core/session-api";
+import { isPng, saveUploadedBytes } from "./core/uploads";
+import { imagePasteManifest, imagePasteKey, terminalBundleId, readServiceTemplates, pbsServiceKey, pbsServiceValue, receiveRefusal, describeKey, IMAGE_MAX_BYTES, SERVICE_NAME, type FocusedPane } from "./core/image-paste";
 import { syncWindowPrefix, stripAllPrefixes, abbreviateRepo, ATTENTION_PREFIX } from "./core/notifications";
 import { findClaudeProcesses } from "./core/process";
 import { detectStatus } from "./core/status";
@@ -28,7 +31,7 @@ import { pickRepoPath } from "./core/sessions";
 import { resolveTranscriptPath, latestTranscriptCwd } from "./core/last-turn";
 import { shellQuote } from "./core/launch-command";
 import { PENDING_DIR, DECISIONS_DIR, HOLD_WINDOW_MS, QUESTION_HOLD_MS, HOOK_KILL_GRACE_MS } from "./core/approval";
-import { mkdirSync, writeFileSync, readFileSync, readlinkSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, readlinkSync, rmSync, symlinkSync, existsSync } from "node:fs";
 
 const home = homedir();
 
@@ -1114,6 +1117,7 @@ export async function setup(roleFlag?: string, opts: SetupOptions = {}): Promise
   }
 
   const daemonResult = await installDaemonAgent(home, role);
+  const imagePasteResult = await installImagePasteService(home, role);
 
   // Sidebar default-on: the renderer stands up only while this marker exists,
   // and nothing else creates it — a
@@ -1139,7 +1143,7 @@ export async function setup(roleFlag?: string, opts: SetupOptions = {}): Promise
     await runHostProvisioning(await provisionContext(home, opts));
   };
 
-  if (!scriptsWritten && !settingsChanged && daemonResult === "unchanged" && integrationChanged.length === 0 && !configCreated) {
+  if (!scriptsWritten && !settingsChanged && daemonResult === "unchanged" && imagePasteResult === "unchanged" && integrationChanged.length === 0 && !configCreated) {
     console.log("Claude0 hooks and terminal integration already configured.");
     await provisionHost();
     warnMissingTools();
@@ -1165,6 +1169,11 @@ export async function setup(roleFlag?: string, opts: SetupOptions = {}): Promise
   }
   if (daemonResult !== "unchanged") {
     console.log(`Inbox daemon ${daemonResult} (launchd: com.claude0.daemon — snooze wakes fire without a terminal open).`);
+  }
+  if (imagePasteResult !== "unchanged") {
+    const config = await loadConfig().catch(() => null); // same file the installer rendered from
+    console.log(`Image paste service ${imagePasteResult}: ${describeKey(imagePasteKey(config))} in ${terminalBundleId(config)} pastes the clipboard image into the focused Claude session.`);
+    console.log("  The terminal must leave that chord unbound (Ghostty: keybind = super+shift+v=unbind).");
   }
   console.log(
     role === "client"
@@ -1272,6 +1281,115 @@ async function installDaemonAgent(home: string, role: DeploymentRole): Promise<"
   }
 
   return changed ? (existing ? "updated" : "installed") : "unchanged";
+}
+
+/**
+ * Install/refresh the macOS Service whose hotkey runs `claude0 paste-image`
+ * (see core/image-paste.ts). Client Macs only: a local Mac's Claude Code pastes
+ * natively, and the host has no pasteboard. The hotkey lives in the `pbs`
+ * defaults domain and needs a pbs flush to apply.
+ */
+async function installImagePasteService(home: string, role: DeploymentRole): Promise<"installed" | "updated" | "unchanged"> {
+  if (process.platform !== "darwin") return "unchanged";
+  // Read after the client prompt above may have saved terminal.remoteHost.
+  const config = await loadConfig().catch(() => null);
+  const install = imagePasteManifest(home, config, await readServiceTemplates(`${import.meta.dir}/../config`));
+  const wanted = role === "client" && Boolean(config?.terminal.remoteHost);
+  if (!wanted) {
+    const hadBundle = existsSync(install.dir);
+    rmSync(install.dir, { recursive: true, force: true });
+    if (hadBundle && !process.env.CLAUDE0_HOME) {
+      await Bun.$`defaults write pbs NSServicesStatus -dict-remove ${pbsServiceKey(SERVICE_NAME)}`.quiet().nothrow();
+    }
+    if (hadBundle) console.log(`Image paste service retired: ${role === "client" ? "terminal.remoteHost is unset" : `this machine's role is "${role}"`}.`);
+    else if (role === "client") console.log("Image paste service skipped: set terminal.remoteHost, then re-run claude0 setup.");
+    return "unchanged";
+  }
+
+  let existed = false;
+  let changed = false;
+  for (const file of install.files) {
+    let existing = "";
+    try {
+      existing = await Bun.file(file.path).text();
+      existed = true;
+    } catch {}
+    if (existing === file.content) continue;
+    await Bun.write(file.path, file.content); // creates Contents/
+    changed = true;
+  }
+
+  // CLAUDE0_HOME is the test seam — never touch the real pbs domain from tests.
+  // The hotkey is re-registered on every run: it's idempotent, and a user who
+  // removed it in System Settings gets it back with the next setup.
+  if (!process.env.CLAUDE0_HOME) {
+    await Bun.$`defaults write pbs NSServicesStatus -dict-add ${pbsServiceKey(SERVICE_NAME)} ${pbsServiceValue(install.keyEquivalent)}`.quiet().nothrow();
+    await Bun.$`/System/Library/CoreServices/pbs -flush`.quiet().nothrow();
+    await Bun.$`/System/Library/CoreServices/pbs -update`.quiet().nothrow();
+  }
+  return changed ? (existed ? "updated" : "installed") : "unchanged";
+}
+
+// ---------------------------------------------------------------------------
+// claude0 receive-image (host side of the client's image paste)
+// ---------------------------------------------------------------------------
+
+/**
+ * Read a PNG from stdin (shipped by `claude0 paste-image` over ssh), store it as
+ * an upload, and bracketed-paste its path into the Claude pane the attached
+ * client is looking at — Claude Code renders that as `[Image #N]`, the same
+ * path portkey attachments take. Refusals print one line and exit 2; the Mac
+ * shows that line as a notification. Path only, no Enter: like a local paste,
+ * the user captions and submits.
+ */
+export async function receiveImage(): Promise<void> {
+  const refuse = (reason: string) => {
+    console.log(reason);
+    process.exitCode = 2;
+  };
+  // Cap while reading: the Mac pre-checks the size, but anything with ssh access
+  // could pipe an unbounded stream — never buffer past the limit.
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for await (const chunk of Bun.stdin.stream()) {
+      total += chunk.byteLength;
+      if (total > IMAGE_MAX_BYTES) return refuse(`image exceeds ${IMAGE_MAX_BYTES / 1024 / 1024} MB`);
+      chunks.push(chunk);
+    }
+  } catch {
+    return refuse("could not read the image");
+  }
+  const bytes = Buffer.concat(chunks);
+
+  let pane: FocusedPane | null = null;
+  try {
+    // The most recently active client — a second attached terminal (rare, single
+    // operator) shouldn't capture a paste meant for the one being typed in.
+    const clients = (await Bun.$`tmux list-clients -F '#{client_activity} #{client_name}'`.quiet().text())
+      .trim().split("\n").filter(Boolean)
+      .map((line) => line.split(" "))
+      .sort((a, b) => Number(b[0]) - Number(a[0]));
+    const client = clients[0]?.[1];
+    if (client) {
+      const [id, currentCommand] = (await Bun.$`tmux display-message -c ${client} -p '#{pane_id} #{pane_current_command}'`.quiet().text()).trim().split(" ");
+      if (id) {
+        const capture = await capturePane(id, { escapes: true });
+        pane = { id, currentCommand: currentCommand ?? "", shellMode: shellModeInput(flattenStyled(capture, false)) !== null };
+      }
+    }
+  } catch {
+    // no tmux server — reads as no client attached
+  }
+
+  const refusal = receiveRefusal({ png: isPng(bytes), pane });
+  if (refusal) return refuse(refusal);
+  let path: string | null = null;
+  try {
+    path = await saveUploadedBytes(bytes, "image/png");
+  } catch {}
+  if (!path) return refuse("could not store the image");
+  await sendBracketedPaste(pane!.id, path);
 }
 
 // ---------------------------------------------------------------------------

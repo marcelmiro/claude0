@@ -10,6 +10,7 @@ import { TEST_HOME, CONFIG_DIR } from "../../test/helpers/home";
 import { test, expect, beforeEach } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync, cpSync } from "node:fs";
 import { doctorChecks, summarize, runDoctor, renderTmuxFragment, renderTerminalLauncher, resurrectDoubleLoad, probe } from "./doctor";
+import { imagePasteManifest, readServiceTemplates } from "./image-paste";
 import type { DoctorContext } from "./doctor";
 import { DEFAULT_CONFIG, tmuxKeys } from "./config";
 import { claude0ResurrectDir } from "./resurrect";
@@ -50,6 +51,8 @@ beforeEach(() => {
   rmSync(`${TEST_HOME}/.config/zsh`, { recursive: true, force: true });
   rmSync(`${TEST_HOME}/.tmux`, { recursive: true, force: true });
   rmSync(plistPath, { force: true });
+  rmSync(`${TEST_HOME}/Library/Services`, { recursive: true, force: true });
+  rmSync(`${TEST_HOME}/.config/ghostty`, { recursive: true, force: true });
 });
 
 // --- role dispatch ---
@@ -69,7 +72,7 @@ test("check sets are role-dispatched; darwin-only checks skip cleanly off-darwin
     "swap",
   ]);
   expect(names(ctx({ role: "local", platform: "darwin" }))).toEqual([...BASE_CHECKS, "daemon-present"]);
-  expect(names(ctx({ role: "client", platform: "darwin" }))).toEqual([...BASE_CHECKS, "daemon-absent"]);
+  expect(names(ctx({ role: "client", platform: "darwin" }))).toEqual([...BASE_CHECKS, "daemon-absent", "image-paste"]);
   expect(names(ctx({ role: "client", platform: "linux" }))).toEqual(BASE_CHECKS);
   expect(names(ctx({ role: "local", platform: "linux" }))).toEqual(BASE_CHECKS);
 });
@@ -313,4 +316,50 @@ test("a hung probe is killed at its deadline instead of holding the process open
 
 test("a missing probe binary reads as a failed probe, not a crash", async () => {
   expect(await probe(["c0-definitely-not-a-binary"])).toEqual({ code: -1, out: "" });
+});
+
+// --- image paste (client Mac) ---
+// pbs and ssh probes are real-machine state, skipped under the CLAUDE0_HOME seam;
+// the bundle freshness, the Ghostty unbind, and the stale lock are file checks.
+
+test("image paste: no remoteHost warns and stops; missing bundle fails; a rendered one passes", async () => {
+  const unset = await check("image-paste", ctx({ role: "client", config: DEFAULT_CONFIG }));
+  expect(unset).toHaveLength(1);
+  expect(unset[0]).toMatchObject({ status: "warn", label: expect.stringContaining("remoteHost") });
+
+  const config: Config = { ...DEFAULT_CONFIG, terminal: { ...DEFAULT_CONFIG.terminal, remoteHost: "vm.ts.net" } };
+  const missing = await check("image-paste", ctx({ role: "client", config }));
+  expect(missing[0]).toMatchObject({ status: "fail", label: expect.stringContaining("run claude0 setup") });
+
+  const install = imagePasteManifest(TEST_HOME, config, await readServiceTemplates(templateDir));
+  for (const file of install.files) {
+    mkdirSync(file.path.slice(0, file.path.lastIndexOf("/")), { recursive: true });
+    writeFileSync(file.path, file.content);
+  }
+  const current = await check("image-paste", ctx({ role: "client", config }));
+  expect(current[0]).toMatchObject({ status: "ok", label: expect.stringContaining("claude0 paste-image.workflow") });
+  // Ghostty default binding still in place ⇒ warning, never a failure.
+  expect(current[1]).toMatchObject({ status: "warn", label: expect.stringContaining("super+shift+v=unbind") });
+  expect(summarize(current).exitCode).toBe(0);
+
+  // A stale template render (different chord/app) reads as stale, and the unbind line clears the warning.
+  writeFileSync(install.files[0]!.path, install.files[0]!.content.replace("com.mitchellh.ghostty", "com.other.term"));
+  mkdirSync(`${TEST_HOME}/.config/ghostty`, { recursive: true });
+  writeFileSync(`${TEST_HOME}/.config/ghostty/config`, "keybind = super+v=paste_from_clipboard\nkeybind = super+shift+v=unbind\n");
+  const stale = await check("image-paste", ctx({ role: "client", config }));
+  expect(stale[0].status).toBe("fail");
+  expect(stale[1].status).toBe("ok");
+});
+
+test("image paste: a lock whose owner is dead is reported, a live owner's is not", async () => {
+  const config: Config = { ...DEFAULT_CONFIG, terminal: { ...DEFAULT_CONFIG.terminal, remoteHost: "vm.ts.net" } };
+  const lock = `${CONFIG_DIR}/paste-image.lock`;
+  mkdirSync(lock, { recursive: true });
+  writeFileSync(`${lock}/pid`, String(process.pid)); // this test process stands in for a running paste
+  const live = await check("image-paste", ctx({ role: "client", config }));
+  expect(live.some((r) => r.label.includes("stale image paste lock"))).toBe(false);
+  writeFileSync(`${lock}/pid`, "999999999");
+  const dead = await check("image-paste", ctx({ role: "client", config }));
+  expect(dead.at(-1)).toMatchObject({ status: "warn", label: expect.stringContaining("stale image paste lock") });
+  rmSync(lock, { recursive: true, force: true });
 });

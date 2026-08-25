@@ -28,6 +28,8 @@ function help() {
   \x1b[1mService commands\x1b[0m (run by launchd/systemd, not by hand):
     \x1b[36mbridge\x1b[0m              Serve the HTTP/SSE bridge for the mobile web app
     \x1b[36mdaemon\x1b[0m              Inbox daemon: snooze wakes, discovery, sidebar renderer
+    \x1b[36mpaste-image\x1b[0m         Client Mac: ship the clipboard image to the host (the Service hotkey runs it)
+    \x1b[36mreceive-image\x1b[0m       Host: paste a PNG from stdin into the focused Claude pane
 
   \x1b[1mOptions:\x1b[0m
     \x1b[36m-h, --help\x1b[0m          Show this help message
@@ -179,6 +181,12 @@ switch (cmd) {
     break;
   case "notify":
     await import("../src/cli").then((m) => m.notify(process.argv.slice(3).join(" ")));
+    break;
+  case "paste-image":
+    await import("../src/paste-image").then((m) => m.pasteImage());
+    break;
+  case "receive-image":
+    await import("../src/cli").then((m) => m.receiveImage());
     break;
   default:
     console.error(`Unknown command: ${cmd}`);

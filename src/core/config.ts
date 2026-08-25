@@ -33,6 +33,7 @@ export const DEFAULT_CONFIG = {
     remoteHost: null,
     localSession: "main",
     remoteSession: "main",
+    imagePasteKey: "cmd+shift+v",
   },
   ui: {
     statusMonitor: true,
@@ -123,12 +124,22 @@ export function validateConfig(value: unknown): Config {
   const priority = stringsAt(value.repositories.priority, "repositories.priority", { nonEmpty: true });
 
   if (!isObject(value.terminal)) throw new Error("terminal must be an object");
-  onlyKeys(value.terminal, ["defaultTarget", "remoteHost", "localSession", "remoteSession"], "terminal");
+  onlyKeys(value.terminal, ["defaultTarget", "remoteHost", "localSession", "remoteSession", "imagePasteKey"], "terminal");
   if (value.terminal.defaultTarget !== "local" && value.terminal.defaultTarget !== "remote") {
     throw new Error('terminal.defaultTarget must be "local" or "remote"');
   }
   if (value.terminal.remoteHost !== null && typeof value.terminal.remoteHost !== "string") {
     throw new Error("terminal.remoteHost must be a string or null");
+  }
+  // Optional (back-filled by ensureUserConfig): absent ⇒ the default chord at point of use.
+  let imagePasteKey: string | undefined;
+  if (value.terminal.imagePasteKey !== undefined) {
+    imagePasteKey = stringAt(value.terminal.imagePasteKey, "terminal.imagePasteKey");
+    try {
+      pbsKeyEquivalent(imagePasteKey);
+    } catch (error) {
+      throw new Error(`terminal.imagePasteKey: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   if (!isObject(value.ui)) throw new Error("ui must be an object");
@@ -199,6 +210,7 @@ export function validateConfig(value: unknown): Config {
       remoteHost: value.terminal.remoteHost,
       localSession: stringAt(value.terminal.localSession, "terminal.localSession"),
       remoteSession: stringAt(value.terminal.remoteSession, "terminal.remoteSession"),
+      ...(imagePasteKey === undefined ? {} : { imagePasteKey }),
     },
     ui: {
       statusMonitor: booleanAt(value.ui.statusMonitor, "ui.statusMonitor"),
@@ -243,6 +255,27 @@ export function tmuxKeyProblem(spec: string): string | null {
     return safeKeyToken(key) ? null : `key "${key}" may only use modifiers plus letters/digits (named keys like Up/BSpace/F5 included)`;
   }
   return `root-table binding "${key}" needs a modifier (e.g. "M-${key}") — an unmodified key would swallow that character in every pane; use "prefix ${key}" for a prefixed binding`;
+}
+
+/**
+ * Render a "cmd+shift+v"-style chord as the `key_equivalent` string macOS `pbs`
+ * stores for a Service hotkey: modifier glyphs (`@` cmd, `^` ctrl, `~` alt, `$`
+ * shift) in that fixed order, then the single lowercase key character. Throws on
+ * an unknown modifier or a key that isn't exactly one letter/digit.
+ */
+const PBS_MODIFIERS: Record<string, string> = { cmd: "@", ctrl: "^", alt: "~", shift: "$" };
+export function pbsKeyEquivalent(spec: string): string {
+  const parts = spec.trim().toLowerCase().split("+");
+  const key = parts.pop() ?? "";
+  if (!/^[a-z0-9]$/.test(key)) throw new Error(`key "${key}" must be a single letter or digit (e.g. "cmd+shift+v")`);
+  const glyphs = new Set<string>();
+  for (const modifier of parts) {
+    const glyph = PBS_MODIFIERS[modifier];
+    if (!glyph) throw new Error(`unknown modifier "${modifier}" (use cmd, ctrl, alt, shift)`);
+    glyphs.add(glyph);
+  }
+  if (glyphs.size === 0) throw new Error(`"${spec}" needs at least one modifier (e.g. "cmd+shift+v")`);
+  return ["@", "^", "~", "$"].filter((glyph) => glyphs.has(glyph)).join("") + key;
 }
 
 /** Parse a validated tmux key spec into its bind table + key. */
