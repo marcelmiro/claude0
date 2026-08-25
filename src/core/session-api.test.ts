@@ -492,6 +492,31 @@ test("inputPending is blind to a shell-mode draft (why the guard is its own step
   expect(shellModeInput(cap)).toEqual({ text: "rm -rf build" });
 });
 
+// --- notification rows (❯ ⧉ …) below the statusline -----------------------------
+// Live capture (lead-scoring pane): Claude Code renders background-task notifications
+// as `❯ ⧉  <task> · Enter to open · x to dismiss` BELOW the statusline — the one ❯
+// line that sits under the live input. Reading it as a draft made killInput "fail"
+// forever and every phone send abort with draft-stash-failed.
+
+const NOTIF_ROW = "❯ ⧉  dial-priority-score · Enter to open · x to dismiss";
+
+test("inputPending: false with a notification row below an empty prompt", () => {
+  const cap = ["⏺ done.", RULE, "❯ ", RULE, "  346.9k/1000k (34%) • main", NOTIF_ROW].join("\n");
+  expect(inputPending(cap)).toBe(false);
+});
+
+test("inputPending: a real draft above a notification row still reads pending", () => {
+  const cap = [RULE, "❯ half-typed draft", RULE, "  ⏸ manual mode on", NOTIF_ROW].join("\n");
+  expect(inputPending(cap)).toBe(true);
+});
+
+test("shellModeInput: notification row doesn't mask a live shell prompt", () => {
+  // The row starts with ❯, which the bottom-up scan used to read as "normal prompt
+  // live" — returning null and letting a plain send execute as bash.
+  const cap = [RULE, "! rm -rf build", RULE, "  ! for shell mode", NOTIF_ROW].join("\n");
+  expect(shellModeInput(cap)).toEqual({ text: "rm -rf build" });
+});
+
 test("inputPending: false on the queued-messages placeholder (hint text, not a draft)", () => {
   // Real pane capture while a message sits in the input queue: the queued message echoes
   // as its own ❯ line above the separator, and the (empty) input renders placeholder hint

@@ -192,7 +192,7 @@ export async function readPaneStatusline(paneId: string, capture?: string): Prom
 /** Outcome of a send; `reason` is set only on rejection (nothing was sent). */
 export type SendResult = {
   ok: boolean;
-  reason?: "no-pane" | "no-question" | "stale-question" | "not-presented" | "not-held" | "no-prompt" | "no-session" | "rewind-unavailable" | "rewind-mismatch" | "rewind-mode" | "bad-image" | "bad-selection" | "no-confirm" | "no-repo" | "no-transcript" | "resume-failed" | "not-found" | "shell-draft" | "shell-clear-failed" | "draft-stash-failed" | "clear-failed";
+  reason?: "no-pane" | "no-question" | "stale-question" | "not-presented" | "not-held" | "no-prompt" | "no-session" | "rewind-unavailable" | "rewind-mismatch" | "rewind-mode" | "bad-image" | "bad-selection" | "no-confirm" | "no-repo" | "no-transcript" | "resume-failed" | "not-found" | "shell-draft" | "shell-clear-failed" | "draft-stash-failed" | "clear-failed" | "notification-clear-failed";
   /** Fresh session id, set by createSession to the dictated id. */
   sessionId?: string;
 };
@@ -1328,6 +1328,8 @@ export async function sendMessage(
 ): Promise<SendResult> {
   const paneId = await resolveSessionPane(sessionId);
   if (!paneId) return { ok: false, reason: "no-pane" };
+  // Notification rows eat every key below — dismiss them before any input choreography.
+  if (!(await clearNotificationRows(paneId))) return { ok: false, reason: "notification-clear-failed" };
   // One styled capture, two views: shell detection needs the dim "! for shell mode"
   // hint kept; draft detection needs dim ghost text dropped (see flattenStyled).
   let styled = await capturePane(paneId, { escapes: true });
@@ -1399,6 +1401,8 @@ export async function setSessionModelEffort(
 ): Promise<SendResult & { line?: string }> {
   const paneId = await resolveSessionPane(sessionId);
   if (!paneId) return { ok: false, reason: "no-pane" };
+  // Same key-eating hazard as sendMessage: a visible notification row swallows the send.
+  if (!(await clearNotificationRows(paneId))) return { ok: false, reason: "notification-clear-failed" };
   const hadDraft = inputPending(await captureTyped(paneId));
   for (const step of buildSendPlan(`/${kind} ${value}`, [], hadDraft)) {
     // Same abort-on-failed-stash as sendMessage: never type into a remnant draft.
@@ -1474,9 +1478,41 @@ async function captureTyped(paneId: string): Promise<string> {
   return flattenStyled(await capturePane(paneId, { escapes: true }), true);
 }
 
+/**
+ * Claude Code renders background-task notification rows BELOW the statusline —
+ * `❯ ⧉  <task-name> · Enter to open · x to dismiss` — the one place a `❯` line sits
+ * UNDER the live input. It's colored (not dim), so the ghost-text drop keeps it, and
+ * reading it as a draft made killInput "fail" forever and every send abort with
+ * draft-stash-failed. Worse, while a row is visible it CAPTURES plain keystrokes —
+ * lab-verified: `x` dismissed the row without touching a draft in the input box, and
+ * a dozen C-u kill attempts left the draft intact — so any send choreography must
+ * dismiss the rows first (`clearNotificationRows`). The `⧉` right after the prompt
+ * glyph is the discriminator; the `❯`-keyed scans skip these rows. The `m` flag lets
+ * the same regex probe a whole capture.
+ */
+const NOTIFICATION_ROW = /^❯\s?⧉/m;
+
+/**
+ * Dismiss any visible notification rows with their own `x` key before typing into the
+ * pane — while one shows, the input box never sees our keys. Gated on detection (a bare
+ * `x` with no row present would type into the input) and re-captured each round so
+ * stacked rows drain one by one. Returns whether the pane is actually clear of rows;
+ * callers fail loud on false rather than typing into a key-eating widget.
+ */
+async function clearNotificationRows(paneId: string): Promise<boolean> {
+  let cap = flattenStyled(await capturePane(paneId, { escapes: true }), false);
+  for (let i = 0; i < 4 && NOTIFICATION_ROW.test(cap); i++) {
+    await sendKey(paneId, "x");
+    await Bun.sleep(KEY_GAP);
+    cap = flattenStyled(await capturePane(paneId, { escapes: true }), false);
+  }
+  return !NOTIFICATION_ROW.test(cap);
+}
+
 export function inputPending(capture: string): boolean {
   const lines = capture.split("\n");
   for (let i = lines.length - 1; i >= 0; i--) {
+    if (NOTIFICATION_ROW.test(lines[i]!)) continue;
     const m = lines[i]!.match(/^❯\s?(.*)$/);
     if (m) {
       const input = m[1]!.trim();
@@ -1502,6 +1538,7 @@ export function shellModeInput(capture: string): { text: string } | null {
   const lines = capture.split("\n");
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i]!;
+    if (NOTIFICATION_ROW.test(line)) continue;
     if (/^❯/.test(line)) return null;
     const m = line.match(/^!\s?(.*)$/);
     if (m && lines.slice(i + 1).some((l) => l.includes("! for shell mode"))) {

@@ -80,3 +80,22 @@ Two send-path fixes fall out of the lab findings:
 - **Server-side revert detection** — the server can see the bare leaf but not the sent
   text after a revert (it exists only in the pane input and the phone's memory), and
   only the client knows which device drove the send. Detection stays client-side.
+
+## Addendum (2026-08-25): notification rows eat the draft choreography
+
+Claude Code renders background-task notification rows below the statusline —
+`❯ ⧉  <task-name> · Enter to open · x to dismiss` — with two consequences for the
+send path (both lab-verified against a live pane):
+
+- **The row is the one `❯` line that sits BELOW the live input**, breaking the
+  "live input is the last `❯` line" assumption. It's colored, not dim, so the
+  ghost-text drop keeps it; `inputPending`/`shellModeInput` read it as an
+  unclearable draft (or mask a live shell prompt) and every send aborts with
+  `draft-stash-failed`. Both scans now skip `❯ ⧉`-prefixed rows.
+- **While a row is visible it captures plain keystrokes** — `x` dismissed the row
+  without touching a draft sitting in the input box, and repeated `C-u` kills left
+  that draft intact. Detection fixes alone don't help: the stash kills (and the
+  message itself) never reach the input. `sendMessage`/`setSessionModelEffort` now
+  dismiss visible rows with `x` (gated on detection, re-captured per round) before
+  any input choreography, failing loud (`notification-clear-failed`) if rows won't
+  clear rather than typing into a key-eating widget.
