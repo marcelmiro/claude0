@@ -57,11 +57,27 @@ daemon. It never replaces personal dotfiles. Update later with
 
 ## Usage
 
-```sh
-c0          # list all commands
-c0 tui      # the session manager (tmux prefix+a)
-c0 config   # print the config file's path, e.g. code $(c0 config)
+Everything is keyboard-driven from inside tmux. `prefix` is tmux's prefix
+key, `ctrl+b` unless you changed it. Press it, release, then type the rest,
+so `prefix ctrl+a` means `ctrl+b`, release, `ctrl+a`.
+
+```text
+alt+s           focus the inbox sidebar, from any window
+alt+shift+s     show or hide the inbox sidebar
+prefix a        open the full session manager in a popup
+prefix ctrl+a   jump to the next session that needs you
 ```
+
+The whole workflow is that last key. A session needs you, `prefix ctrl+a`
+jumps to it, you act, you jump again. When Needs you is empty, you're done.
+
+```sh
+c0                    # list all commands
+c0 config             # print the config file's path
+code $(c0 config)     # open the config in your IDE, swap `code` for yours
+```
+
+Remap any of these keys under `tmux.keys` in the config.
 
 ## Remote mode
 
