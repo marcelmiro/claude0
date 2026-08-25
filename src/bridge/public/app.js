@@ -2101,7 +2101,8 @@ function Turn({ turn, upCount, canCode }) {
     } else if (b.type === "tool_use") {
       const input = b.input || {};
       const path = editedPath(input);
-      const arg = input.command || path || input.pattern || "";
+      const skill = input.skill ? `${input.skill}${input.args ? ` ${input.args}` : ""}` : "";
+      const arg = input.command || path || input.pattern || skill || "";
       if ((EDIT_TOOLS.has(b.name) || b.name === "Read") && path) {
         // Edit/Read chips are informational — diffs live on the changed-files page, which
         // doesn't depend on a per-chip path resolving inside the session's repo (a
