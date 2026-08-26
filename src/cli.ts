@@ -1377,10 +1377,13 @@ export async function receiveImage(): Promise<void> {
       .sort((a, b) => Number(b[0]) - Number(a[0]));
     const client = clients[0]?.[1];
     if (client) {
-      const [id, currentCommand] = (await Bun.$`tmux display-message -c ${client} -p '#{pane_id} #{pane_current_command}'`.quiet().text()).trim().split(" ");
-      if (id) {
+      const [id, tty] = (await Bun.$`tmux display-message -c ${client} -p '#{pane_id} #{pane_tty}'`.quiet().text()).trim().split(" ");
+      if (id && tty) {
+        // Same tty correlation session discovery uses (ps "pts/3" vs tmux "/dev/pts/3").
+        const paneTty = tty.replace(/^\/dev\//, "");
+        const claude = (await findClaudeProcesses()).some((proc) => proc.tty === paneTty);
         const capture = await capturePane(id, { escapes: true });
-        pane = { id, currentCommand: currentCommand ?? "", shellMode: shellModeInput(flattenStyled(capture, false)) !== null };
+        pane = { id, claude, shellMode: shellModeInput(flattenStyled(capture, false)) !== null };
       }
     }
   } catch {

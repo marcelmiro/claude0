@@ -46,8 +46,10 @@ defaults domain (`NSServicesStatus`, `key_equivalent` rendered from
 
 Every refusal is a macOS notification: no image, image over 20 MB, host unset
 or unreachable, no client attached, or the focused pane isn't a Claude prompt
-(`pane_current_command` ≠ `claude`, or the prompt is in `!` shell mode — a plain
-send there would execute the path as bash, ADR 12). Nothing runs between pastes.
+(no live `claude` process on the pane's tty — the same ps×tmux correlation
+session discovery uses; `pane_current_command` reads the launching shell for
+some panes — or the prompt is in `!` shell mode, where a plain send would
+execute the path as bash, ADR 12). Nothing runs between pastes.
 
 `claude0 doctor` (client) re-renders the bundle and compares, checks the `pbs`
 entry, warns when Ghostty still binds `super+shift+v` (its default

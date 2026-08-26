@@ -102,10 +102,10 @@ test("decidePaste: host, image, and size gate before a push", () => {
 });
 
 test("receiveRefusal: PNG magic, an attached client, a claude pane outside shell mode", () => {
-  const pane = { id: "%1", currentCommand: "claude", shellMode: false };
+  const pane = { id: "%1", claude: true, shellMode: false };
   expect(receiveRefusal({ png: false, pane })).toBe("not a PNG");
   expect(receiveRefusal({ png: true, pane: null })).toBe("no terminal attached");
-  expect(receiveRefusal({ png: true, pane: { ...pane, currentCommand: "zsh" } })).toBe("focus a Claude prompt first (%1 runs zsh)");
+  expect(receiveRefusal({ png: true, pane: { ...pane, claude: false } })).toBe("focus a Claude prompt first (%1 runs no Claude)");
   expect(receiveRefusal({ png: true, pane: { ...pane, shellMode: true } })).toBe("focus a Claude prompt first (%1 is in ! shell mode)");
   expect(receiveRefusal({ png: true, pane })).toBeNull();
 });

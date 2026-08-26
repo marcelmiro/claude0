@@ -168,7 +168,8 @@ export function decidePaste(facts: PasteFacts): PasteDecision {
 /** The pane the attached client is looking at, as `receive-image` probes it. */
 export interface FocusedPane {
   id: string;
-  currentCommand: string;
+  /** A live claude process sits on the pane's tty (`pane_current_command` is unreliable: it reads the launching shell for some panes) */
+  claude: boolean;
   shellMode: boolean;
 }
 
@@ -183,8 +184,8 @@ export function receiveRefusal(facts: ReceiveFacts): string | null {
   if (!facts.png) return "not a PNG";
   if (!facts.pane) return "no terminal attached";
   // A `!` shell prompt would execute the pasted path as bash; a non-claude pane would type it.
-  if (facts.pane.currentCommand !== "claude" || facts.pane.shellMode) {
-    const why = facts.pane.shellMode ? "is in ! shell mode" : `runs ${facts.pane.currentCommand || "nothing"}`;
+  if (!facts.pane.claude || facts.pane.shellMode) {
+    const why = facts.pane.shellMode ? "is in ! shell mode" : "runs no Claude";
     return `focus a Claude prompt first (${facts.pane.id} ${why})`;
   }
   return null;
