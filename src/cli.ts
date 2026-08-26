@@ -1299,7 +1299,7 @@ async function installImagePasteService(home: string, role: DeploymentRole): Pro
     const hadBundle = existsSync(install.dir);
     rmSync(install.dir, { recursive: true, force: true });
     if (hadBundle && !process.env.CLAUDE0_HOME) {
-      await Bun.$`defaults write pbs NSServicesStatus -dict-remove ${pbsServiceKey(SERVICE_NAME)}`.quiet().nothrow();
+      Bun.spawnSync(["defaults", "write", "pbs", "NSServicesStatus", "-dict-remove", pbsServiceKey(SERVICE_NAME)]);
     }
     if (hadBundle) console.log(`Image paste service retired: ${role === "client" ? "terminal.remoteHost is unset" : `this machine's role is "${role}"`}.`);
     else if (role === "client") console.log("Image paste service skipped: set terminal.remoteHost, then re-run claude0 setup.");
@@ -1321,11 +1321,16 @@ async function installImagePasteService(home: string, role: DeploymentRole): Pro
 
   // CLAUDE0_HOME is the test seam — never touch the real pbs domain from tests.
   // The hotkey is re-registered on every run: it's idempotent, and a user who
-  // removed it in System Settings gets it back with the next setup.
+  // removed it in System Settings gets it back with the next setup. Plain argv,
+  // not Bun.$: the key and the `{…;}` value are two interpolations with shell
+  // metacharacters, which the Bun shell mangles (see renameWindow in tmux.ts).
   if (!process.env.CLAUDE0_HOME) {
-    await Bun.$`defaults write pbs NSServicesStatus -dict-add ${pbsServiceKey(SERVICE_NAME)} ${pbsServiceValue(install.keyEquivalent)}`.quiet().nothrow();
-    await Bun.$`/System/Library/CoreServices/pbs -flush`.quiet().nothrow();
-    await Bun.$`/System/Library/CoreServices/pbs -update`.quiet().nothrow();
+    const write = Bun.spawnSync(["defaults", "write", "pbs", "NSServicesStatus", "-dict-add", pbsServiceKey(SERVICE_NAME), pbsServiceValue(install.keyEquivalent)]);
+    if (write.exitCode !== 0) {
+      console.log(`⚠ Image paste hotkey registration failed: ${write.stderr.toString().trim() || `defaults exited ${write.exitCode}`}`);
+    }
+    Bun.spawnSync(["/System/Library/CoreServices/pbs", "-flush"]);
+    Bun.spawnSync(["/System/Library/CoreServices/pbs", "-update"]);
   }
   return changed ? (existed ? "updated" : "installed") : "unchanged";
 }
