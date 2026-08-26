@@ -15,7 +15,7 @@ import { loadState, saveState, loadPaneSessions } from "./core/state";
 import { switchToPane, listPanes, renameWindow, capturePane, displayMessage, atDeskFocus, SHELL_NAMES, sendBracketedPaste } from "./core/tmux";
 import { shellModeInput, flattenStyled } from "./core/session-api";
 import { isPng, saveUploadedBytes } from "./core/uploads";
-import { imagePasteManifest, imagePasteKey, terminalBundleId, readServiceTemplates, pbsServiceKey, pbsServiceValue, receiveRefusal, describeKey, IMAGE_MAX_BYTES, SERVICE_NAME, type FocusedPane } from "./core/image-paste";
+import { imagePasteManifest, imagePasteKey, terminalBundleId, readServiceTemplates, pbsServiceKeyLiteral, pbsServiceValue, receiveRefusal, describeKey, IMAGE_MAX_BYTES, SERVICE_NAME, type FocusedPane } from "./core/image-paste";
 import { syncWindowPrefix, stripAllPrefixes, abbreviateRepo, ATTENTION_PREFIX } from "./core/notifications";
 import { findClaudeProcesses } from "./core/process";
 import { detectStatus } from "./core/status";
@@ -1299,7 +1299,7 @@ async function installImagePasteService(home: string, role: DeploymentRole): Pro
     const hadBundle = existsSync(install.dir);
     rmSync(install.dir, { recursive: true, force: true });
     if (hadBundle && !process.env.CLAUDE0_HOME) {
-      Bun.spawnSync(["defaults", "write", "pbs", "NSServicesStatus", "-dict-remove", pbsServiceKey(SERVICE_NAME)]);
+      Bun.spawnSync(["defaults", "write", "pbs", "NSServicesStatus", "-dict-remove", pbsServiceKeyLiteral(SERVICE_NAME)]);
     }
     if (hadBundle) console.log(`Image paste service retired: ${role === "client" ? "terminal.remoteHost is unset" : `this machine's role is "${role}"`}.`);
     else if (role === "client") console.log("Image paste service skipped: set terminal.remoteHost, then re-run claude0 setup.");
@@ -1325,7 +1325,7 @@ async function installImagePasteService(home: string, role: DeploymentRole): Pro
   // not Bun.$: the key and the `{…;}` value are two interpolations with shell
   // metacharacters, which the Bun shell mangles (see renameWindow in tmux.ts).
   if (!process.env.CLAUDE0_HOME) {
-    const write = Bun.spawnSync(["defaults", "write", "pbs", "NSServicesStatus", "-dict-add", pbsServiceKey(SERVICE_NAME), pbsServiceValue(install.keyEquivalent)]);
+    const write = Bun.spawnSync(["defaults", "write", "pbs", "NSServicesStatus", "-dict-add", pbsServiceKeyLiteral(SERVICE_NAME), pbsServiceValue(install.keyEquivalent)]);
     if (write.exitCode !== 0) {
       console.log(`⚠ Image paste hotkey registration failed: ${write.stderr.toString().trim() || `defaults exited ${write.exitCode}`}`);
     }

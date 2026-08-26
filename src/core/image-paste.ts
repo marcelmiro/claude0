@@ -60,9 +60,14 @@ export function describeKey(spec: string): string {
     .join("+");
 }
 
-/** The `pbs` NSServicesStatus key naming an Automator Service's hotkey entry. */
+/** The `pbs` NSServicesStatus key naming an Automator Service's hotkey entry, as `defaults read` prints it. */
 export function pbsServiceKey(name: string): string {
   return `(null) - ${name} - runWorkflowAsService`;
+}
+
+/** The same key as a `defaults write` argument: parsed as a plist literal, so the quotes are part of the argv. */
+export function pbsServiceKeyLiteral(name: string): string {
+  return `"${pbsServiceKey(name)}"`;
 }
 
 /** The old-style plist value `pbs` stores per Service: enabled everywhere, with the chord. */
