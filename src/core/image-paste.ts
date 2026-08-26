@@ -65,6 +65,17 @@ export function pbsServiceKey(name: string): string {
   return `(null) - ${name} - runWorkflowAsService`;
 }
 
+/**
+ * Does `defaults read pbs NSServicesStatus` show our Service bound to `keyEquivalent`?
+ * The read prints keys containing `_` quoted (`"key_equivalent" = "@$v";`).
+ */
+export function pbsHotkeyRegistered(servicesStatus: string, keyEquivalent: string): boolean {
+  const at = servicesStatus.indexOf(pbsServiceKey(SERVICE_NAME));
+  if (at === -1) return false;
+  const entry = servicesStatus.slice(at, servicesStatus.indexOf("}", at) + 1);
+  return entry.includes(`"key_equivalent" = "${keyEquivalent}";`);
+}
+
 /** The same key as a `defaults write` argument: parsed as a plist literal, so the quotes are part of the argv. */
 export function pbsServiceKeyLiteral(name: string): string {
   return `"${pbsServiceKey(name)}"`;

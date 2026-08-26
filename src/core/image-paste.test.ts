@@ -15,6 +15,7 @@ import {
   readServiceTemplates,
   imagePasteManifest,
   pasteImageCommand,
+  pbsHotkeyRegistered,
   describeKey,
   IMAGE_MAX_BYTES,
 } from "./image-paste";
@@ -40,6 +41,22 @@ test("terminal.imagePasteKey is validated through the pbs mapping and stays opti
   expect(validateConfig({ ...DEFAULT_CONFIG, terminal }).terminal.imagePasteKey).toBeUndefined();
   expect(() => validateConfig({ ...DEFAULT_CONFIG, terminal: { ...terminal, imagePasteKey: "meta+v" } })).toThrow("terminal.imagePasteKey: unknown modifier");
   expect(() => validateConfig({ ...DEFAULT_CONFIG, terminal: { ...terminal, imagePasteKey: "" } })).toThrow("non-empty string");
+});
+
+test("pbsHotkeyRegistered reads the entry as `defaults read` prints it (quoted keys)", () => {
+  const out = `{
+    "(null) - claude0 paste-image - runWorkflowAsService" =     {
+        "enabled_context_menu" = 1;
+        "enabled_services_menu" = 1;
+        "key_equivalent" = "@$v";
+    };
+    "com.apple.Other - Thing - doIt" =     {
+        "key_equivalent" = "@$i";
+    };
+}`;
+  expect(pbsHotkeyRegistered(out, "@$v")).toBe(true);
+  expect(pbsHotkeyRegistered(out, "@$i")).toBe(false); // another service's chord, not ours
+  expect(pbsHotkeyRegistered("{\n}", "@$v")).toBe(false);
 });
 
 test("describeKey title-cases the chord for messages", () => {

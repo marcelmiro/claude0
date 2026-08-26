@@ -7,7 +7,7 @@
 import { existsSync, accessSync, constants } from "node:fs";
 import { userInfo } from "node:os";
 import { DEFAULT_CONFIG, tmuxKeys, parseTmuxKey } from "./config";
-import { imagePasteManifest, readServiceTemplates, pbsServiceKey, describeKey, terminalBundleId, pasteImageLockDir, lockOwnerAlive, RECEIVE_PROBE_COMMAND, SSH_OPTIONS, SERVICE_NAME } from "./image-paste";
+import { imagePasteManifest, readServiceTemplates, pbsHotkeyRegistered, describeKey, terminalBundleId, pasteImageLockDir, lockOwnerAlive, RECEIVE_PROBE_COMMAND, SSH_OPTIONS, SERVICE_NAME } from "./image-paste";
 import { resolveResurrect, resurrectOptionSet, resurrectRenderDir } from "./resurrect";
 import type { ResurrectResolution } from "./resurrect";
 import type { Config, DeploymentRole, TmuxKeys } from "../types";
@@ -563,9 +563,7 @@ function imagePasteCheck(): DoctorCheck {
       // The pbs domain is real-machine state; under the test seam the bundle stands in.
       if (!process.env.CLAUDE0_HOME) {
         const status = await probe(["defaults", "read", "pbs", "NSServicesStatus"]);
-        const at = status.out.indexOf(pbsServiceKey(SERVICE_NAME));
-        const entry = at === -1 ? "" : status.out.slice(at);
-        const registered = entry.slice(0, entry.indexOf("}") + 1).includes(`key_equivalent = "${install.keyEquivalent}"`);
+        const registered = pbsHotkeyRegistered(status.out, install.keyEquivalent);
         results.push(
           registered
             ? ok(`image paste hotkey is registered (${describeKey(install.key)})`)
