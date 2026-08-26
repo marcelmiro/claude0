@@ -105,8 +105,8 @@ test("receiveRefusal: PNG magic, an attached client, a claude pane outside shell
   const pane = { id: "%1", currentCommand: "claude", shellMode: false };
   expect(receiveRefusal({ png: false, pane })).toBe("not a PNG");
   expect(receiveRefusal({ png: true, pane: null })).toBe("no terminal attached");
-  expect(receiveRefusal({ png: true, pane: { ...pane, currentCommand: "zsh" } })).toBe("focus a Claude prompt first");
-  expect(receiveRefusal({ png: true, pane: { ...pane, shellMode: true } })).toBe("focus a Claude prompt first");
+  expect(receiveRefusal({ png: true, pane: { ...pane, currentCommand: "zsh" } })).toBe("focus a Claude prompt first (%1 runs zsh)");
+  expect(receiveRefusal({ png: true, pane: { ...pane, shellMode: true } })).toBe("focus a Claude prompt first (%1 is in ! shell mode)");
   expect(receiveRefusal({ png: true, pane })).toBeNull();
 });
 

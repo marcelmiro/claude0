@@ -183,6 +183,9 @@ export function receiveRefusal(facts: ReceiveFacts): string | null {
   if (!facts.png) return "not a PNG";
   if (!facts.pane) return "no terminal attached";
   // A `!` shell prompt would execute the pasted path as bash; a non-claude pane would type it.
-  if (facts.pane.currentCommand !== "claude" || facts.pane.shellMode) return "focus a Claude prompt first";
+  if (facts.pane.currentCommand !== "claude" || facts.pane.shellMode) {
+    const why = facts.pane.shellMode ? "is in ! shell mode" : `runs ${facts.pane.currentCommand || "nothing"}`;
+    return `focus a Claude prompt first (${facts.pane.id} ${why})`;
+  }
   return null;
 }
