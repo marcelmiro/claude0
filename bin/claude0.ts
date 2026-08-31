@@ -93,9 +93,30 @@ switch (cmd) {
   case "reset":
     await import("../src/cli").then((m) => m.reset());
     break;
-  case "status":
+  case "status": {
+    // A client machine has no local sessions — proxy the monitor to the host over
+    // ssh so `claude0 status` reports the sessions the user actually cares about.
+    // An unloadable config degrades to the local monitor, same as the monitor's
+    // own fallback. Elsewhere (host/local), stay lean: this is tmux's 3s tick.
+    const { loadConfig, resolveRole } = await import("../src/core/config");
+    const config = await loadConfig().catch(() => null);
+    if (resolveRole(config) === "client") {
+      const host = config?.terminal.remoteHost;
+      if (!host) {
+        console.error("claude0 status: set terminal.remoteHost, then run claude0 setup");
+        process.exit(2);
+      }
+      const { remoteClaude0, SSH_OPTIONS } = await import("../src/core/image-paste");
+      const child = Bun.spawn(["ssh", ...SSH_OPTIONS, host, remoteClaude0("status")], {
+        stdin: "ignore",
+        stdout: "inherit",
+        stderr: "inherit",
+      });
+      process.exit(await child.exited);
+    }
     await import("../src/monitor");
     break;
+  }
   case "list":
     await import("../src/cli").then((m) => m.list());
     break;

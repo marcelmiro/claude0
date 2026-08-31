@@ -38,9 +38,13 @@ export function lockOwnerAlive(lockDir: string): boolean {
 }
 /** The ssh remote commands: a non-interactive shell may lack the bun/claude0 dirs. */
 const REMOTE_PATH = 'PATH="$HOME/.bun/bin:$HOME/.local/bin:$PATH"';
-export const RECEIVE_COMMAND = `${REMOTE_PATH} claude0 receive-image`;
+/** A claude0 invocation runnable through non-interactive ssh on the host. */
+export function remoteClaude0(args: string): string {
+  return `${REMOTE_PATH} claude0 ${args}`;
+}
+export const RECEIVE_COMMAND = remoteClaude0("receive-image");
 /** Doctor's reachability probe: exit 0 ⇒ ssh works and claude0 is on the host's PATH. */
-export const RECEIVE_PROBE_COMMAND = `${REMOTE_PATH} claude0 --help`;
+export const RECEIVE_PROBE_COMMAND = remoteClaude0("--help");
 export const SSH_OPTIONS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5"];
 
 export function imagePasteKey(config: Config | null): string {
