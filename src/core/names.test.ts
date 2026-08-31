@@ -3,7 +3,7 @@ import { CONFIG_DIR } from "../../test/helpers/home";
 import { test, expect } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { getSessionName, loadNameCache, normalizeName, slugify, looksLikeRefusal, salvageName, pruneNameCache, needsNaming, buildNamingPrompt, saveNameCache, type NameCache } from "./names";
+import { getSessionName, loadNameCache, normalizeName, slugify, looksLikeRefusal, salvageName, pruneNameCache, needsNaming, inNamingCooldown, buildNamingPrompt, saveNameCache, type NameCache } from "./names";
 
 const CACHE_FILE = join(CONFIG_DIR, "names.json");
 function writeCache(obj: unknown) {
@@ -175,4 +175,13 @@ test("saveNameCache: round-trips atomically with no temp file left behind", asyn
   const { readdirSync } = await import("node:fs");
   expect(readdirSync(CONFIG_DIR).filter((f) => f.includes("names.json.tmp"))).toEqual([]);
   rmSync(CACHE_FILE, { force: true });
+});
+
+test("inNamingCooldown: unnamed sessions retry early, named ones hold the full TTL", () => {
+  const named = cache({ names: { s1: "Fix Auth" } });
+  const skips = new Map([["s1", 90_000], ["s2", 90_000], ["s3", 30_000]]);
+  expect(inNamingCooldown(skips, "s1", named)).toBe(true); // named: 90s < 5min
+  expect(inNamingCooldown(skips, "s2", named)).toBe(false); // unnamed: 90s > 60s retry
+  expect(inNamingCooldown(skips, "s3", named)).toBe(true); // unnamed: 30s < 60s
+  expect(inNamingCooldown(skips, "s4", named)).toBe(false); // no cooldown at all
 });

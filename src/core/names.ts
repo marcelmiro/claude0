@@ -53,25 +53,38 @@ export async function releaseNamingLock(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 const NAMING_SKIP_DIR = `${CLAUDE0_ROOT}/.config/claude0/naming-skip`;
-const NAMING_SKIP_TTL = 5 * 60_000; // 5 minutes
+const NAMING_SKIP_TTL = 5 * 60_000; // renames: the drift-thrash guard
+// A failed attempt on a NEVER-named session is usually "transcript not ready yet"
+// (fresh /compact or /clear) — there's no name to churn, so back off briefly
+// instead of leaving the session unnamed for the full rename cooldown.
+const NAMING_RETRY_UNNAMED = 60_000;
 
-/** SessionIds with a live cooldown; expired marker files are unlinked as seen. */
-export async function loadNamingSkips(): Promise<Set<string>> {
-  const live = new Set<string>();
+/** Cooldown start age (ms) per sessionId; expired marker files are unlinked as seen. */
+export async function loadNamingSkips(): Promise<Map<string, number>> {
+  const live = new Map<string, number>();
   try {
     const { readdir, stat, unlink } = await import("fs/promises");
     const now = Date.now();
     for (const id of await readdir(NAMING_SKIP_DIR)) {
       try {
-        if (now - (await stat(`${NAMING_SKIP_DIR}/${id}`)).mtimeMs > NAMING_SKIP_TTL) {
+        const elapsed = now - (await stat(`${NAMING_SKIP_DIR}/${id}`)).mtimeMs;
+        if (elapsed > NAMING_SKIP_TTL) {
           await unlink(`${NAMING_SKIP_DIR}/${id}`);
         } else {
-          live.add(id);
+          live.set(id, elapsed);
         }
       } catch {}
     }
   } catch {}
   return live;
+}
+
+/** True while a session's cooldown blocks another attempt: named sessions back off
+ *  the full rename TTL; never-named ones retry after NAMING_RETRY_UNNAMED. */
+export function inNamingCooldown(skips: Map<string, number>, sessionId: string, cache: NameCache): boolean {
+  const elapsed = skips.get(sessionId);
+  if (elapsed === undefined) return false;
+  return elapsed < (cache.names[sessionId] ? NAMING_SKIP_TTL : NAMING_RETRY_UNNAMED);
 }
 
 /** Start (or restart) a session's naming cooldown. */

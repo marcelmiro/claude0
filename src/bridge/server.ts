@@ -86,6 +86,7 @@ import {
   releaseNamingLock,
   loadNamingSkips,
   setNamingSkip,
+  inNamingCooldown,
   needsNaming,
   pruneNameCacheIfLarge,
   type NameCache,
@@ -816,7 +817,8 @@ async function computeSessionsPayload(): Promise<unknown> {
 // generateAIName + the shared name cache and skip file. Drift refresh matters here:
 // the monitor only ticks while a tmux client is attached, so on a phone-only day the
 // bridge is the sole naming authority. Lock-coordinated so the bridge and monitor
-// never double-name; every attempt (success or failure) backs off for NAMING_SKIP_TTL.
+// never double-name; every attempt (success or failure) starts a cooldown — long
+// for renames (drift-thrash guard), short for still-unnamed sessions.
 
 let namingActive = false;
 const NAMING_BATCH = 3; // keep concurrent `claude -p` low so cold starts don't starve past the timeout
@@ -833,7 +835,7 @@ function maybeGenerateNames(sessions: Session[], cache: NameCache): void {
         .filter(
           (s) =>
             s.id &&
-            !skips.has(s.id) &&
+            !inNamingCooldown(skips, s.id, cache) &&
             (s.firstPrompt || s.summary || s.lastPrompt) &&
             needsNaming(cache, s.id, s.lastPrompt || s.summary || ""),
         )

@@ -21,7 +21,7 @@ import { classifyActivity } from "./core/presence";
 import { detectScriptWaits } from "./core/script-wait";
 import { getBaseRepoPath } from "./core/git";
 import { repoNameFromPath } from "./core/sessions";
-import { loadNameCache, saveNameCache, generateAIName, getSessionName, slugify, acquireNamingLock, releaseNamingLock, pruneNameCacheIfLarge, loadNamingSkips, setNamingSkip, needsNaming, type NameCache } from "./core/names";
+import { loadNameCache, saveNameCache, generateAIName, getSessionName, slugify, acquireNamingLock, releaseNamingLock, pruneNameCacheIfLarge, loadNamingSkips, setNamingSkip, needsNaming, inNamingCooldown, type NameCache } from "./core/names";
 import { disambiguateByRepo } from "./core/session-label";
 import { findActiveSessionInfo, readNamingExtras } from "./core/sessions";
 import { homedir } from "os";
@@ -485,7 +485,7 @@ async function phase2(
   const unnamed = sessions.find(s => {
     if (!s.tmuxPane) return false;
     const sessionId = paneSessionMap[s.tmuxPane.paneId];
-    if (!sessionId || namingSkips.has(sessionId)) return false;
+    if (!sessionId || inNamingCooldown(namingSkips, sessionId, nameCache)) return false;
     return needsNaming(nameCache, sessionId, s.lastPrompt || s.summary || "");
   });
 
