@@ -12,7 +12,7 @@ import { test, expect, beforeAll, afterAll } from "bun:test";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { EVENTS_DIR } from "../core/hook-events";
 import { CONSUMERS_DIR, fromB64url } from "../core/web-push";
-import { startBridge } from "./server";
+import { startBridge, applyTail, gzipJson } from "./server";
 
 const TOKEN = "route-test-token";
 let server: ReturnType<typeof startBridge>;
@@ -174,6 +174,81 @@ test("/stream/open validates its body and requires a device", async () => {
     body: JSON.stringify({ sessionId: 42 }),
   });
   expect(badBody.status).toBe(400);
+});
+
+// --- gzipJson: the JSON response compression wrapper on every route ---
+
+const jsonRes = (data: unknown) =>
+  new Response(JSON.stringify(data), { headers: { "content-type": "application/json" } });
+const gzipReq = (encoding?: string) =>
+  new Request("http://x/", encoding ? { headers: { "accept-encoding": encoding } } : {});
+
+test("gzipJson compresses a large JSON body and the roundtrip preserves it", async () => {
+  const data = { blob: "x".repeat(4096) };
+  const out = await gzipJson(gzipReq("gzip, deflate, br"), jsonRes(data));
+  expect(out.headers.get("content-encoding")).toBe("gzip");
+  expect(out.headers.get("vary")).toBe("accept-encoding");
+  const body = Bun.gunzipSync(new Uint8Array(await out.arrayBuffer()));
+  expect(JSON.parse(new TextDecoder().decode(body))).toEqual(data);
+});
+
+test("gzipJson passes through small bodies, non-JSON, and clients without gzip", async () => {
+  const small = await gzipJson(gzipReq("gzip"), jsonRes({ ok: true }));
+  expect(small.headers.get("content-encoding")).toBeNull();
+  expect(await small.json()).toEqual({ ok: true });
+
+  const sse = new Response("data: x\n\n", { headers: { "content-type": "text/event-stream" } });
+  expect(await gzipJson(gzipReq("gzip"), sse)).toBe(sse); // untouched, not rebuilt
+
+  const noGzip = jsonRes({ blob: "x".repeat(4096) });
+  expect(await gzipJson(gzipReq(), noGzip)).toBe(noGzip);
+});
+
+test("routes serve gzip end-to-end when the client asks for it", async () => {
+  // /sessions under the temp HOME is small — asserts the passthrough path over HTTP…
+  const r = await fetch(`${base}/sessions`, { headers: { cookie, "accept-encoding": "gzip" } });
+  expect(r.status).toBe(200);
+  expect(await r.json()).toBeDefined(); // fetch transparently decodes either way
+});
+
+// --- applyTail: the `?tail=` slice for tail-first initial paint ---
+
+const tailPayload = (count: number) => ({
+  turns: Array.from({ length: count }, (_, i) => ({ role: "user", i })),
+  rev: "rev-abc",
+  usage: { in: 1 },
+});
+
+test("applyTail slices to the last n turns, sets partial, drops rev", () => {
+  const out = applyTail(tailPayload(100), "40");
+  expect((out.turns as { i: number }[]).length).toBe(40);
+  expect((out.turns as { i: number }[])[0]!.i).toBe(60); // suffix, not prefix
+  expect(out.partial).toBe(true);
+  expect("rev" in out).toBe(false);
+  expect(out.usage).toEqual({ in: 1 }); // non-turn fields ride along
+});
+
+test("applyTail passes a payload at or under n through untouched", () => {
+  const p = tailPayload(40);
+  const out = applyTail(p, "40");
+  expect(out).toBe(p); // same object — full, rev kept, no partial
+  expect(out.partial).toBeUndefined();
+  expect(out.rev).toBe("rev-abc");
+});
+
+test("applyTail ignores absent, zero, negative, huge, and garbage tail values", () => {
+  const p = tailPayload(100);
+  for (const bad of [null, "0", "-5", "501", "abc", "4.5", ""]) {
+    expect(applyTail(p, bad)).toBe(p);
+  }
+});
+
+test("GET /transcript?tail on an unknown session returns the (short) payload un-marked", async () => {
+  const r = await fetch(`${base}/sessions/never-existed/transcript?tail=40`, { headers: { cookie } });
+  expect(r.status).toBe(200);
+  const body = (await r.json()) as { turns: unknown[]; partial?: boolean };
+  expect(Array.isArray(body.turns)).toBe(true);
+  expect(body.partial).toBeUndefined();
 });
 
 test("/stream/open rejects a sessionId with glob/path metacharacters", async () => {

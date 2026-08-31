@@ -409,6 +409,8 @@
            the label would jitter sideways on that step. */
         @keyframes dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }
       }
+      /* Tail-first paint: earlier turns are still in flight behind the tail slice. */
+      .tail-loading { color: var(--dim-text); font-size: 12px; padding: 2px 4px 10px; font-family: var(--mono); text-align: center; }
       /* Dim system/interrupt notice line — not a user bubble (mirrors the TUI ⊘ event line). */
       .sysline { color: var(--dim-text); font-size: 12px; padding: 2px 4px; font-family: var(--mono); text-align: center; }
       /* Teammate mailbox messages (the human didn't type them). A report = bylined left

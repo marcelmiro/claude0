@@ -261,6 +261,7 @@ const transcriptCache = new Map(); // sessionId → last /transcript payload (op
 const changesDataCache = new Map(); // sessionId → last /changes payload (ChangesCard/FilesView)
 const prDataCache = new Map(); // sessionId → last /pr payload (usePullRequest)
 function cacheTranscript(id, data) {
+  if (data && data.partial) return; // a tail slice must never become a later open's instant paint
   boundedSet(transcriptCache, id, data);
 }
 
@@ -458,6 +459,28 @@ async function refreshTranscript() {
     applyTranscript(id, data);
   } catch {
     /* keep last-known */
+  }
+}
+
+// Tail-first paint for a session we hold no copy of: a tiny `?tail=` GET renders the
+// newest turns near-instantly while the full branch (subscribe snapshot / fallback GET,
+// both racing behind it) fills the thread in. The response is marked `partial` and
+// carries no `rev`, so it can never satisfy the rev short-circuit or be cached; the
+// seq guard keeps it from overwriting a full copy that landed first, and the
+// stale-session check keeps it from painting into a different session after a switch.
+const TAIL_TURNS = 40;
+async function fetchTailPaint(id) {
+  const seq = ++txReqSeq;
+  try {
+    const r = await fetch(`/sessions/${encodeURIComponent(id)}/transcript?tail=${TAIL_TURNS}`);
+    if (!r.ok) return;
+    const data = await r.json();
+    if (id !== selectedId.value) return; // session switched mid-flight — drop stale response
+    if (seq < txAppliedSeq) return; // a full copy already landed — never regress to a partial
+    txAppliedSeq = seq;
+    applyTranscript(id, data);
+  } catch {
+    /* the racing full fetch covers it */
   }
 }
 
@@ -955,6 +978,10 @@ function open(id) {
   diffView.value = null; // drop any diff / changed-files view from the previous session
   filesView.value = false;
   clearAttachments();
+  // No cached copy → the screen would sit on "loading…" until a full payload crosses
+  // the link. Race a tiny tail slice ahead of it for the first paint (fired before the
+  // full fetch so its lower seq can never clobber the full copy).
+  if (!transcript.value) fetchTailPaint(id);
   openSubscription(id); // the pushed snapshot is the primary paint…
   refreshTranscript(); // …the GET is the fallback (races are settled by seq)
   markRead(id);
@@ -3401,6 +3428,7 @@ function Detail() {
 
   // After each render: re-pin to the newest output (forced on session switch) unless the
   // user has scrolled up to read history.
+  const prevPaint = useRef({ partial: false, scrollHeight: 0 }); // last render's tail-slice state
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -3409,6 +3437,12 @@ function Detail() {
       follow.current = true;
     }
     if (follow.current) el.scrollTop = el.scrollHeight;
+    else if (prevPaint.current.partial && t && !t.partial) {
+      // The full branch just replaced a tail slice, prepending history above the
+      // viewport — offset by the height delta so the turn being read doesn't move.
+      el.scrollTop += el.scrollHeight - prevPaint.current.scrollHeight;
+    }
+    prevPaint.current = { partial: !!(t && t.partial), scrollHeight: el.scrollHeight };
     // Recompute button visibility after the DOM settles (new content can push us off the
     // bottom without firing a scroll event), so the controls don't lag behind streaming.
     syncFloat();
@@ -3427,6 +3461,9 @@ function Detail() {
     >
       <div class="scroll thread" ref=${scrollRef} onScroll=${syncFloat}>
         ${!t && html`<div class="sub" style="padding:8px">loading…</div>`}
+        ${t &&
+        t.partial &&
+        html`<div class="tail-loading">loading earlier messages…</div>`}
         ${(() => {
           // Per user turn: upCount = Up-presses to reach it in the /rewind picker (0 = not a
           // checkpoint, so no rewind offered); canCode = whether any file-editing tool ran
@@ -3486,7 +3523,9 @@ function Detail() {
               }
             }
             if (!Number.isNaN(at)) prevAt = at;
-            const up = upByIndex.get(i) || 0;
+            // While the copy is a tail slice, offer no rewind: the floor it would set is
+            // an absolute index, wrong the moment the full branch replaces the slice.
+            const up = t.partial ? 0 : upByIndex.get(i) || 0;
             out.push(html`<${Turn} key=${i} turn=${turn} upCount=${up} canCode=${editAfter[i]} />`);
           }
           return out;

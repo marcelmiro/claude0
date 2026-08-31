@@ -169,6 +169,16 @@ export const FIXTURE_SESSIONS = [
 const m = 60_000;
 export const FIXTURE_TRANSCRIPT = {
   turns: [
+    // Filler history padding the thread past the `?tail=` cutoff (40), so the design
+    // loop exercises the partial first paint (loader row, then the full fill-in). The
+    // crafted showcase turns below stay inside the tail slice.
+    ...Array.from({ length: 30 }, (_, i) => [
+      { role: "user", content: [{ type: "text", text: `earlier question #${i + 1} about the auth flow` }] },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `Earlier answer #${i + 1} — superseded by the work below.` }],
+      },
+    ]).flat(),
     {
       role: "user",
       at: ago(95 * m),

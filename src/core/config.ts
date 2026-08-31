@@ -2,6 +2,7 @@ import { homedir } from "os";
 import { dirname, resolve } from "path";
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import type { Config, DeploymentRole, TmuxKeys } from "../types";
+import { WORKTREES_DIR } from "./git";
 
 // CLAUDE0_HOME overrides the home root (tests point it at a temp dir; bun's
 // os.homedir() ignores a runtime-set $HOME, so an env seam is the reliable hook).
@@ -389,10 +390,15 @@ export async function ensureUserConfig(): Promise<boolean> {
   let created = false;
   if (!(await Bun.file(PATHS.config).exists())) {
     // Fresh config only: seed repositories.roots with the directory the claude0
-    // checkout lives in, so a clone anywhere works without editing config. The
-    // static "~/dev" default remains the fallback and back-fill value.
+    // checkout lives in, so a clone anywhere works without editing config. Code
+    // running from a worktree (<repo>/.claude/worktrees/<name>) seeds from the
+    // base repo, not the worktrees dir. The static "~/dev" default remains the
+    // fallback and back-fill value.
     const fresh = structuredClone(DEFAULT_CONFIG);
-    fresh.repositories.roots = [collapseHome(dirname(resolve(`${import.meta.dir}/../..`)))];
+    const checkoutPath = resolve(`${import.meta.dir}/../..`);
+    const wtAt = checkoutPath.lastIndexOf(`/${WORKTREES_DIR}/`);
+    const checkout = wtAt === -1 ? checkoutPath : checkoutPath.slice(0, wtAt);
+    fresh.repositories.roots = [collapseHome(dirname(checkout))];
     writeAtomic(PATHS.config, `${JSON.stringify(fresh, null, 2)}\n`);
     created = true;
   }

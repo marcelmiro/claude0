@@ -174,8 +174,10 @@ function json(data: unknown, status = 200, extra: Record<string, string> = {}): 
 // reaches ~250KB raw (~3x smaller gzipped) and portkey often rides a slow mobile
 // link. JSON only: SSE must stream unbuffered, and the static shell is cached by
 // the service worker. Below the threshold the gzip header outweighs the savings.
+// Constraint (BREACH): no JSON body may ever echo attacker-influenced input next to
+// a secret — compressed length would then leak the secret to a tailnet observer.
 const GZIP_MIN_BYTES = 1024;
-async function gzipJson(req: Request, res: Response): Promise<Response> {
+export async function gzipJson(req: Request, res: Response): Promise<Response> {
   if (!res.headers.get("content-type")?.startsWith("application/json")) return res;
   if (!/\bgzip\b/.test(req.headers.get("accept-encoding") ?? "")) return res;
   const body = await res.arrayBuffer();
@@ -1123,6 +1125,27 @@ async function composeTranscriptPayload(id: string): Promise<Record<string, unkn
   return { ...tx, approval, ...statusline };
 }
 
+/**
+ * Tail-first initial paint: `?tail=<n>` trims the payload to the last n turns,
+ * marked `partial: true` and stripped of `rev` — a partial copy must never
+ * satisfy the `?rev=` short-circuit or be held by the client as a full
+ * revision. A payload already at or under n turns passes through untouched
+ * (full, `rev` kept, no `partial`), as does any out-of-bounds or garbage `n`.
+ */
+export function applyTail(payload: Record<string, unknown>, tailParam: string | null): Record<string, unknown> {
+  const n = Number(tailParam);
+  if (!tailParam || !Number.isInteger(n) || n < 1 || n > 500) return payload;
+  const turns = payload.turns;
+  if (!Array.isArray(turns) || turns.length <= n) return payload;
+  const { rev: _rev, ...rest } = payload;
+  return { ...rest, turns: turns.slice(-n), partial: true };
+}
+
+// One source of truth for the transcript route: the FIXTURES early-return must keep
+// matching exactly what the real handler below matches, or `?tail` silently diverges
+// between demo and production.
+const TRANSCRIPT_PATH = /^\/sessions\/([^/]+)\/transcript$/;
+
 // ---------------------------------------------------------------------------
 // Routing
 // ---------------------------------------------------------------------------
@@ -1150,7 +1173,14 @@ async function route(req: Request): Promise<Response> {
   // --- Demo/test mode: canned data for the GET/action routes (`/stream` falls through) ---
   if (FIXTURES) {
     const fixture = fixtureData(method, path, url.searchParams);
-    if (fixture !== undefined) return json(fixture);
+    if (fixture !== undefined) {
+      // The canned transcript honors `?tail` too — this branch returns before the
+      // real transcript handler below, and the design loop needs the partial paint.
+      if (method === "GET" && TRANSCRIPT_PATH.test(path)) {
+        return json(applyTail(fixture as Record<string, unknown>, url.searchParams.get("tail")));
+      }
+      return json(fixture);
+    }
   }
 
   if (method === "GET" && path === "/sessions") return json(await sessionsPayload());
@@ -1235,7 +1265,7 @@ async function route(req: Request): Promise<Response> {
     return sendResult(await createSession(body.path, body.name));
   }
 
-  const transcript = path.match(/^\/sessions\/([^/]+)\/transcript$/);
+  const transcript = path.match(TRANSCRIPT_PATH);
   if (method === "GET" && transcript) {
     const id = decodeURIComponent(transcript[1]!);
     // Fast path: the client holds this exact file revision (`?rev=`), so skip rebuilding
@@ -1263,7 +1293,7 @@ async function route(req: Request): Promise<Response> {
         });
       }
     }
-    return json(await composeTranscriptPayload(id));
+    return json(applyTail(await composeTranscriptPayload(id), url.searchParams.get("tail")));
   }
 
   // Transcript subscription (versioned state push): the device tells the bridge which

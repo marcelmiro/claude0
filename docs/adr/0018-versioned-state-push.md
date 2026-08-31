@@ -122,3 +122,20 @@ migration (a client that ignores them renders exactly as before):
 Rejected: shipping the full `tool_result` behind a cap. Even capped, results
 are the bulk of a transcript, and the phone's question is "did it work and
 what's the one line I need", which the summary answers.
+
+## Addendum (2026-08-31): tail-first initial paint
+
+First open of an uncached long session waited on the full active branch (hundreds
+of KB + a large DOM render) before showing anything. The client now races a
+`GET /sessions/:id/transcript?tail=40` ahead of the full fetch: the server slices
+the composed payload to the last 40 turns, marks it `partial: true`, and strips
+`rev` — a partial copy can never satisfy the `?rev=` unchanged short-circuit or
+enter the client transcript cache. The push protocol is unchanged: the
+subscribe-time forced snapshot (or the fallback full GET, whichever lands first
+by seq) replaces the slice wholesale and completes the conversation. While
+partial, the client shows a "loading earlier messages" row, offers no rewind
+(its floor is an absolute turn index, wrong once the full branch lands), and on
+the partial→full swap offsets the scroll position by the height delta when the
+user has scrolled off the bottom. JSON responses are also gzipped now (bridge
+fetch handler) — the tail slice cuts first-paint transfer and render on top of
+that.
