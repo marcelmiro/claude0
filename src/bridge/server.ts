@@ -170,6 +170,22 @@ function json(data: unknown, status = 200, extra: Record<string, string> = {}): 
   });
 }
 
+// Gzip JSON bodies for clients that accept it — a long session's transcript payload
+// reaches ~250KB raw (~3x smaller gzipped) and portkey often rides a slow mobile
+// link. JSON only: SSE must stream unbuffered, and the static shell is cached by
+// the service worker. Below the threshold the gzip header outweighs the savings.
+const GZIP_MIN_BYTES = 1024;
+async function gzipJson(req: Request, res: Response): Promise<Response> {
+  if (!res.headers.get("content-type")?.startsWith("application/json")) return res;
+  if (!/\bgzip\b/.test(req.headers.get("accept-encoding") ?? "")) return res;
+  const body = await res.arrayBuffer();
+  const headers = new Headers(res.headers);
+  if (body.byteLength < GZIP_MIN_BYTES) return new Response(body, { status: res.status, headers });
+  headers.set("content-encoding", "gzip");
+  headers.set("vary", "accept-encoding");
+  return new Response(Bun.gzipSync(new Uint8Array(body)), { status: res.status, headers });
+}
+
 function staticResponse(rel: string): Response {
   const type = rel.endsWith(".html")
     ? "text/html;charset=utf-8"
@@ -1799,7 +1815,7 @@ export function startBridge(): ReturnType<typeof Bun.serve> {
     idleTimeout: 255, // long-lived SSE; heartbeat (15s) keeps it active well within
     async fetch(req) {
       try {
-        return await route(req);
+        return await gzipJson(req, await route(req));
       } catch (e) {
         const url = new URL(req.url);
         console.error(`unhandled error on ${req.method} ${url.pathname}:`, e);
