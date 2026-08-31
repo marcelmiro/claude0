@@ -46,6 +46,7 @@ Lifecycle model locked 2026-08-02 (see docs/adr/0013 + CONTEXT.md terms). Phase 
 - Verbs on direct tmux bindings (prefix+z = snooze current window, etc.) if the prototype shows the sidebar is eyes-only and never focused
 - Portkey swipe-to-triage on inbox rows (swipe = snooze/archive, the mobile-email interaction)
 - Auto-archive candidates from derived signals (PR merged → suggest done) — the "derived wherever possible" principle applied to disposal
+- Lifecycle hole: a pane killed out from under claude0 (prefix+x, crash, /exit, kill-window) never gets an archivedAt fact, so the session drops out of the inbox entirely — only recoverable via TUI > show archived (raw dead-JSONL scan, a separate mechanism). Fix: daemon reconcile step — session in previous snapshot, pane genuinely gone (absent 2 consecutive ticks or confirmed via list-panes), no disposition/archive fact → record an archive event so it lands in recently done. Skip reconcile when tmux itself is unreachable (server restart/resurrect would mass-archive). ~20-40 LOC + test in core/inbox-*. Rejected alternative: rebinding prefix+x to archive-then-kill — covers one entry point, barely less code.
 
 ## Post-hoc Re-flag (mark session as needs-attention) — SUPERSEDED by Session Inbox
 - Problem: once ⚡ clears on focus, a session that's STILL `waiting` never re-flags — the monitor flags on the running→waiting *transition*, not on standing state. So a glanced-at-but-deferred block loses its ⚡ for the rest of its life.

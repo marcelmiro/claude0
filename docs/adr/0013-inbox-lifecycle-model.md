@@ -358,3 +358,15 @@ pill. Both take a copy-only long-press (still not rewind checkpoints).
 An optimistic send bubble that lingers past ~5s grows a "sending…" tag —
 on the happy path it retires into the real turn before the tag appears.
 
+
+## Addendum: `/clear` files the old session under Recent (2026-08-26)
+
+`/clear` hands a pane to a new session id; the old one never gets a pane back, so
+before this it simply vanished with the next snapshot replace — neither in Needs You
+nor in Recent. The daemon tick now archives it (`replacedInPane`,
+`core/inbox-discovery.ts`): a previous-snapshot row whose pane now hosts a different id,
+and that is alive at no pane, is `store.archive`d and preserved as a Recent row for the
+usual 24h. Detection compares against the persisted snapshot, not an in-memory
+id-change signal — each tick is a fresh process. The same rule catches a `claude`
+relaunched by hand in an exited session's pane; a pane that is simply killed is not a
+replacement and behaves as before.

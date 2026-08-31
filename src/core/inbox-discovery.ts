@@ -160,6 +160,14 @@ export async function discoveryTick(store: InboxStore): Promise<void> {
   // (the authored overlay is safe in its own tables regardless)
   if (byId.size === 0 && prevRows.some((s) => s.real)) return;
 
+  // /clear (or a relaunch in the same pane) hands the pane to a NEW session id: the old
+  // one is over and never gets a pane back, so file it under RECENT now instead of
+  // leaving it to vanish with the snapshot replace. Compared against the persisted
+  // snapshot because each tick is a fresh process (no in-memory id-change signal).
+  for (const id of replacedInPane(prevRows, byId)) {
+    if (store.archive(id, now)) arch.set(id, now);
+  }
+
   const rows = [...byId.values()];
   // authored rows outlive discovery: parked (disposition) rows don't need a
   // live pane, archived rows stay in RECENT for their 24h window, and a row
@@ -192,3 +200,20 @@ export async function discoveryTick(store: InboxStore): Promise<void> {
   );
 }
 
+
+/**
+ * Ids of previous-snapshot rows whose live pane now hosts a DIFFERENT session — the
+ * session was /clear'ed or replaced in place — and that are not alive at any pane
+ * this tick. Pure; unit-tested.
+ */
+export function replacedInPane(prevRows: InboxSession[], current: Map<string, InboxSession>): string[] {
+  const idByPane = new Map<string, string>();
+  for (const r of current.values()) if (r.real) idByPane.set(r.real.paneId, r.id);
+  const out: string[] = [];
+  for (const p of prevRows) {
+    if (!p.real || current.has(p.id)) continue;
+    const now = idByPane.get(p.real.paneId);
+    if (now !== undefined && now !== p.id) out.push(p.id);
+  }
+  return out;
+}
