@@ -43,7 +43,7 @@ These are routine, durably-authorized actions — **do them yourself, don't just
 - All shell/IO in try/catch returning empty defaults — never crash the TUI.
 - Stream transcript IO in long-lived processes (`jsonlLines()` or windowed byte reads) — one `.text()` of a multi-MB JSONL permanently ratchets RSS (freed malloc pages don't return to the OS; the bridge hit a ~1GB plateau on a 3MB heap).
 - Vesper palette: `bg=#101010 fg=#FFFFFF muted=#A0A0A0 dim=#505050 surface=#1C1C1C peach=#FFC799 mint=#99FFE4 red=#FF8080`. Status colors: waiting/ready=peach, running=mint, idle=dim.
-- Window names are `[⚡|🔄|⏳]{repo}[/{ai-name}]`; the monitor is the sole naming authority ([ADR 14](docs/adr/0014-presence-is-client-activity.md) addendum).
+- Window names are `[⚡|🔄|⏳]{repo}[/{ai-name}]`; the monitor is the sole window-*writing* authority ([ADR 14](docs/adr/0014-presence-is-client-activity.md) addendum) — name *generation* is shared with the bridge ([ADR 28](docs/adr/0028-ai-only-session-naming.md)).
 
 ## Gotchas (paid for in blood)
 

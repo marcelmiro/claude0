@@ -40,6 +40,12 @@ export function disambiguateNames(items: Array<{ id: string; name: string }>): M
   return out;
 }
 
+/** One-line cut of free text for use as a temporary session title. */
+export function snippet(text: string, max = 80): string {
+  const one = (text || "").replace(/\s+/g, " ").trim();
+  return one.length > max ? `${one.slice(0, max - 1)}…` : one;
+}
+
 /**
  * Per-repo disambiguation: group by repo, suffix collisions within each group.
  * Every surface (tmux windows, TUI list, phone) feeds the same shape through

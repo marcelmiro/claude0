@@ -90,7 +90,7 @@ import {
   pruneNameCacheIfLarge,
   type NameCache,
 } from "../core/names";
-import { buildSessionLabel, disambiguateByRepo } from "../core/session-label";
+import { buildSessionLabel, disambiguateByRepo, snippet } from "../core/session-label";
 import { loadState, saveState } from "../core/state";
 import { InboxStore } from "../core/inbox-store";
 import { composeSessions, isWakePreset, presetWakeAt, type InboxSession } from "../core/inbox-model";
@@ -255,10 +255,6 @@ function pruneOldUploads(): void {
 // concurrent subprocess swarms.
 // ---------------------------------------------------------------------------
 
-function snippet(text: string, max = 80): string {
-  const one = text.replace(/\s+/g, " ").trim();
-  return one.length > max ? `${one.slice(0, max - 1)}…` : one;
-}
 
 /**
  * Primary display label: AI name / ticket / branch (via buildSessionLabel), but

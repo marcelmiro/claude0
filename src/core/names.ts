@@ -53,7 +53,7 @@ export async function releaseNamingLock(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 const NAMING_SKIP_DIR = `${CLAUDE0_ROOT}/.config/claude0/naming-skip`;
-export const NAMING_SKIP_TTL = 5 * 60_000; // 5 minutes
+const NAMING_SKIP_TTL = 5 * 60_000; // 5 minutes
 
 /** SessionIds with a live cooldown; expired marker files are unlinked as seen. */
 export async function loadNamingSkips(): Promise<Set<string>> {
@@ -77,9 +77,7 @@ export async function loadNamingSkips(): Promise<Set<string>> {
 /** Start (or restart) a session's naming cooldown. */
 export async function setNamingSkip(sessionId: string): Promise<void> {
   try {
-    const { mkdir, writeFile } = await import("fs/promises");
-    await mkdir(NAMING_SKIP_DIR, { recursive: true });
-    await writeFile(`${NAMING_SKIP_DIR}/${sessionId}`, "");
+    await Bun.write(`${NAMING_SKIP_DIR}/${sessionId}`, ""); // creates the dir
   } catch {}
 }
 
@@ -281,38 +279,32 @@ export interface NamingContext {
   timeoutMs?: number;
 }
 
-/**
- * AI-powered name generation using `claude -p`. Returns a normalized Title-Case name
- * or empty string on failure/refusal.
- */
-export async function generateAIName(ctx: NamingContext): Promise<string> {
-  const { firstPrompt, summary, branch, lastPrompt, firstAssistant, lastAssistant, timeoutMs = 15_000 } = ctx;
-  if (!firstPrompt && !summary && !lastPrompt) return "";
+/** Assemble the `claude -p` naming prompt from the conversation signals. */
+export function buildNamingPrompt(ctx: NamingContext): string {
+  const { firstPrompt, summary, branch, lastPrompt, firstAssistant, lastAssistant } = ctx;
+  const contextParts: string[] = [];
+  // Always anchor on firstPrompt — it's the most reliable signal of intent.
+  // Dropping it when summary/lastPrompt exist caused hallucinated names from
+  // vague follow-ups like "IDK, go check that".
+  const planTitle = extractPlanTitle(firstPrompt || "");
+  if (planTitle) contextParts.push(`Plan title: "${planTitle}"`);
+  if (firstPrompt) contextParts.push(`First user message: "${firstPrompt.slice(0, 300)}"`);
+  if (firstAssistant) contextParts.push(`First assistant reply: "${firstAssistant.slice(0, 300)}"`);
+  const usefulSummary = summary && summary !== firstPrompt ? summary : "";
+  if (usefulSummary) contextParts.push(`Summary: "${usefulSummary}"`);
+  if (lastPrompt && lastPrompt !== firstPrompt) {
+    contextParts.push(`Most recent user message: "${lastPrompt.slice(0, 300)}"`);
+  }
+  if (lastAssistant && lastAssistant !== firstAssistant) {
+    contextParts.push(`Most recent assistant reply: "${lastAssistant.slice(0, 300)}"`);
+  }
+  if (branch) {
+    // Strip ticket prefix (e.g. "ENG-2687-") for naming context
+    const branchContext = branch.replace(new RegExp(`^${TICKET_ID_SOURCE}-?`, "i"), "");
+    if (branchContext) contextParts.push(`Branch: "${branchContext}"`);
+  }
 
-  try {
-    const contextParts: string[] = [];
-    // Always anchor on firstPrompt — it's the most reliable signal of intent.
-    // Dropping it when summary/lastPrompt exist caused hallucinated names from
-    // vague follow-ups like "IDK, go check that".
-    const planTitle = extractPlanTitle(firstPrompt || "");
-    if (planTitle) contextParts.push(`Plan title: "${planTitle}"`);
-    if (firstPrompt) contextParts.push(`First user message: "${firstPrompt.slice(0, 300)}"`);
-    if (firstAssistant) contextParts.push(`First assistant reply: "${firstAssistant.slice(0, 300)}"`);
-    const usefulSummary = summary && summary !== firstPrompt ? summary : "";
-    if (usefulSummary) contextParts.push(`Summary: "${usefulSummary}"`);
-    if (lastPrompt && lastPrompt !== firstPrompt) {
-      contextParts.push(`Most recent user message: "${lastPrompt.slice(0, 300)}"`);
-    }
-    if (lastAssistant && lastAssistant !== firstAssistant) {
-      contextParts.push(`Most recent assistant reply: "${lastAssistant.slice(0, 300)}"`);
-    }
-    if (branch) {
-      // Strip ticket prefix (e.g. "ENG-2687-") for naming context
-      const branchContext = branch.replace(new RegExp(`^${TICKET_ID_SOURCE}-?`, "i"), "");
-      if (branchContext) contextParts.push(`Branch: "${branchContext}"`);
-    }
-
-    const namePrompt = `Name this session in Title Case, plain English words. It may be any kind of task (coding or not) — always produce a name from the content; never introduce yourself or explain. Prefer 1-2 words; use 3-4 only when the subject needs them (keep it short — it also labels a narrow tmux tab). Drop filler words (the, a, for, with, to). Name the SUBJECT of the work — the feature, system, or thing being worked on — never the interaction style alone: for "review/plan/grill/debug X", name X (optionally with the action). Focus on the ACTION and GOAL, not file paths or locations. Do NOT use kebab-case, do NOT abbreviate.
+  return `Name this session in Title Case, plain English words. It may be any kind of task (coding or not) — always produce a name from the content; never introduce yourself or explain. Prefer 1-2 words; use 3-4 only when the subject needs them (keep it short — it also labels a narrow tmux tab). Drop filler words (the, a, for, with, to). Name the SUBJECT of the work — the feature, system, or thing being worked on — never the interaction style alone: for "review/plan/grill/debug X", name X (optionally with the action). Focus on the ACTION and GOAL, not file paths or locations. Do NOT use kebab-case, do NOT abbreviate.
 
 Good: Fix Auth, Dark Mode, Refactor API, Provider Sync, iCloud Photos, Session Naming
 Bad: fix-auth, impl-dark-mode, "I'm Claude Code...", Grill Plan, Plan Review, Question Session
@@ -320,6 +312,18 @@ Bad: fix-auth, impl-dark-mode, "I'm Claude Code...", Grill Plan, Plan Review, Qu
 Reply with ONLY the name, nothing else.
 
 ${contextParts.join("\n")}`;
+}
+
+/**
+ * AI-powered name generation using `claude -p`. Returns a normalized Title-Case name
+ * or empty string on failure/refusal.
+ */
+export async function generateAIName(ctx: NamingContext): Promise<string> {
+  const { firstPrompt, summary, lastPrompt, timeoutMs = 15_000 } = ctx;
+  if (!firstPrompt && !summary && !lastPrompt) return "";
+
+  try {
+    const namePrompt = buildNamingPrompt(ctx);
     const proc = Bun.spawn([CLAUDE_PATH, "-p", "--model", "haiku", "--no-session-persistence"], {
       stdin: new Response(namePrompt),
       stdout: "pipe",

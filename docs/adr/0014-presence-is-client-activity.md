@@ -82,3 +82,8 @@ The monitor is the **sole window-naming authority** — it re-syncs base names, 
 names and prefixes every tick, so a rename made anywhere else survives at most
 one cycle. Attention state crosses processes via `state.json`, not window names:
 the TUI and `claude0 next` clear flags there and the monitor's next tick repaints.
+
+**Addendum (2026-08-31):** "sole window-naming authority" means sole *writer of
+tmux window names*. Name *generation* is shared: the bridge names and
+drift-refreshes sessions symmetrically with the monitor ([ADR 28](0028-ai-only-session-naming.md)),
+writing only the shared cache — the monitor still owns every window rename.

@@ -505,11 +505,12 @@ async function phase2(
           const { firstAssistant, lastAssistant } = await readNamingExtras(unnamed.repoPath, sessionId);
           const name = await generateAIName({ firstPrompt, summary, branch, lastPrompt, firstAssistant, lastAssistant });
           if (name) {
-            // Reload-and-merge: a name the bridge wrote during the ≤15s claude -p run
-            // must not be clobbered by this stale-cache save.
+            // Reload: names the bridge wrote (or pruned) during the ≤15s claude -p
+            // run must not be clobbered or resurrected by this stale in-memory copy —
+            // the disk state is authoritative, plus our one new entry.
             const fresh = await loadNameCache();
-            nameCache.names = { ...nameCache.names, ...fresh.names };
-            nameCache.sources = { ...nameCache.sources, ...fresh.sources };
+            nameCache.names = fresh.names;
+            nameCache.sources = fresh.sources;
             nameCache.names[sessionId] = name;
             // Store the freshest signal we used so future drift checks compare apples-to-apples
             nameCache.sources[sessionId] = lastPrompt || summary || firstPrompt;

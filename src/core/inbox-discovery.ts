@@ -12,18 +12,13 @@
  */
 import { discoverSessions } from "./sessions";
 import { loadNameCache, getSessionName } from "./names";
+import { snippet } from "./session-label";
 import { branchPullRequest } from "./pull-request";
 import { detectScriptWaits } from "./script-wait";
 import { readLastPromptAt, resolveTranscriptPath } from "./last-turn";
 import { pendingToolCall } from "./hook-events";
 import type { InboxStore } from "./inbox-store";
 import { peekEngaged, stripOverlay, type InboxSession } from "./inbox-model";
-
-/** Temporary title for an unnamed session: an 80-char cut of the first prompt. */
-function promptSnippet(text: string): string {
-  const one = (text || "").replace(/\s+/g, " ").trim();
-  return one.length > 80 ? `${one.slice(0, 79)}…` : one;
-}
 
 export async function discoveryTick(store: InboxStore): Promise<void> {
   const nameCache = await loadNameCache(); // AI names, same source as the TUI
@@ -87,7 +82,7 @@ export async function discoveryTick(store: InboxStore): Promise<void> {
       // unmatched sessions, so look active ones up directly). Unnamed sessions
       // title on a first-prompt snippet — what the user asked for identifies
       // the session better than a branch name or a raw id.
-      name: getSessionName(s.id, nameCache) || s.name || promptSnippet(s.firstPrompt) || s.branch,
+      name: getSessionName(s.id, nameCache) || s.name || snippet(s.firstPrompt) || s.branch,
       reason:
         pending?.name === "AskUserQuestion" && pending.question
           ? "question"

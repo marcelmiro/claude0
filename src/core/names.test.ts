@@ -3,7 +3,7 @@ import { CONFIG_DIR } from "../../test/helpers/home";
 import { test, expect } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { getSessionName, loadNameCache, normalizeName, slugify, looksLikeRefusal, salvageName, pruneNameCache, needsNaming, type NameCache } from "./names";
+import { getSessionName, loadNameCache, normalizeName, slugify, looksLikeRefusal, salvageName, pruneNameCache, needsNaming, buildNamingPrompt, saveNameCache, type NameCache } from "./names";
 
 const CACHE_FILE = join(CONFIG_DIR, "names.json");
 function writeCache(obj: unknown) {
@@ -144,4 +144,29 @@ test("needsNaming: unnamed, drifted, and stable cases", () => {
   expect(needsNaming(c, "s1", "new signal")).toBe(true); // drifted
   expect(needsNaming(c, "s1", "old signal")).toBe(false); // stable
   expect(needsNaming(c, "s1", "")).toBe(false); // no signal, keep the name
+});
+
+test("buildNamingPrompt: assistant replies land in the prompt, deduped and truncated", () => {
+  const p = buildNamingPrompt({
+    firstPrompt: "grill me about this plan",
+    firstAssistant: "A".repeat(400),
+    lastPrompt: "ok continue",
+    lastAssistant: "The inbox redesign moves rows into a store",
+    branch: "tf-192-inbox-redesign",
+  });
+  expect(p).toContain('First assistant reply: "' + "A".repeat(300) + '"');
+  expect(p).toContain('Most recent assistant reply: "The inbox redesign moves rows into a store"');
+  // Identical first/last assistant reply appears once.
+  const dup = buildNamingPrompt({ firstPrompt: "x", firstAssistant: "same", lastAssistant: "same" });
+  expect(dup).not.toContain("Most recent assistant reply");
+});
+
+test("saveNameCache: round-trips atomically with no temp file left behind", async () => {
+  const c = cache({ names: { s1: "Fix Auth" }, sources: { s1: "sig" } });
+  await saveNameCache(c);
+  const loaded = await loadNameCache();
+  expect(loaded.names).toEqual({ s1: "Fix Auth" });
+  const { readdirSync } = await import("node:fs");
+  expect(readdirSync(CONFIG_DIR).filter((f) => f.includes("names.json.tmp"))).toEqual([]);
+  rmSync(CACHE_FILE, { force: true });
 });
