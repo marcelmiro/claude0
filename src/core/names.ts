@@ -126,6 +126,15 @@ export const ABBREV: Record<string, string> = {
   enrichment: "enrich",
   repository: "repo", repositories: "repo",
   permission: "perm", permissions: "perm",
+  disposition: "disp", dispositions: "disp",
+  verification: "verif",
+  classification: "classif", classify: "classif",
+  deployment: "deploy", deploy: "deploy",
+  development: "dev", dev: "dev",
+  environment: "env", env: "env",
+  infrastructure: "infra", infra: "infra",
+  documentation: "docs", docs: "docs",
+  generation: "gen", gen: "gen",
 };
 
 /**

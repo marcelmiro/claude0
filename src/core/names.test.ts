@@ -58,6 +58,9 @@ test("slugify: lowercases, hyphenates, abbreviates via ABBREV", () => {
   // domain-noun abbreviations that actually recur in real names
   expect(slugify("Delete Dead Organizations")).toBe("delete-dead-org");
   expect(slugify("Add Tomba Provider")).toBe("add-tomba-prov");
+  expect(slugify("Disposition History Backfill")).toBe("disp-history-backfill");
+  expect(slugify("Employment Verification")).toBe("employment-verif");
+  expect(slugify("Session Name Generation")).toBe("session-name-gen");
 });
 
 test("slugify: em-dash-joined words split into separate slug parts (not merged)", () => {
