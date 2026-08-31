@@ -632,8 +632,8 @@ export async function readNamingExtras(
   repoPath: string,
   sessionId: string,
   projectsDir = `${homedir()}/.claude/projects`,
-): Promise<{ firstAssistant: string; lastAssistant: string }> {
-  const none = { firstAssistant: "", lastAssistant: "" };
+): Promise<{ firstAssistant: string; lastAssistant: string; middlePrompts: string[] }> {
+  const none = { firstAssistant: "", lastAssistant: "", middlePrompts: [] };
   try {
     const encodedPath = repoPath.replace(/\//g, "-");
     const projectDir = await resolveProjectDir(projectsDir, encodedPath, sessionId);
@@ -642,9 +642,48 @@ export async function readNamingExtras(
     return {
       firstAssistant: await getFirstAssistantReply(jsonlPath),
       lastAssistant: await getLatestAssistantReply(jsonlPath),
+      middlePrompts: await getMiddleUserPrompts(jsonlPath),
     };
   } catch {
     return none;
+  }
+}
+
+/**
+ * Up to three user messages sampled evenly from the MIDDLE of the transcript.
+ * The first/last messages often carry no subject ("read TF-245 and begin",
+ * "yes and run /pr-triage") while the middle of the arc names the actual work —
+ * without these the namer degrades to generic labels for long sessions.
+ */
+async function getMiddleUserPrompts(jsonlPath: string): Promise<string[]> {
+  try {
+    const prompts: string[] = [];
+    for await (const line of jsonlLines(jsonlPath)) {
+      if (!line.includes('"type":"user"')) continue;
+      try {
+        const parsed = JSON.parse(line);
+        if (parsed.type !== "user") continue;
+        const content = parsed.message?.content;
+        let text = "";
+        if (typeof content === "string") text = content;
+        else if (Array.isArray(content)) {
+          const block = content.find((b: { type: string }) => b.type === "text");
+          if (block?.text) text = block.text;
+        }
+        if (!text || text.startsWith("[Request interrupted") || text.trimStart().startsWith("<")) continue;
+        const clean = text.replace(/\s+/g, " ").trim();
+        if (clean) prompts.push(clean.length > 150 ? clean.slice(0, 150) + "..." : clean);
+      } catch {
+        continue;
+      }
+    }
+    if (prompts.length <= 2) return []; // only first/last exist — already covered
+    const middle = prompts.slice(1, -1);
+    if (middle.length <= 3) return middle;
+    const picks = [0.25, 0.5, 0.75].map((f) => middle[Math.floor(f * (middle.length - 1))]);
+    return [...new Set(picks)];
+  } catch {
+    return [];
   }
 }
 

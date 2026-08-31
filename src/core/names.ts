@@ -273,6 +273,9 @@ export interface NamingContext {
   lastPrompt?: string;
   firstAssistant?: string;
   lastAssistant?: string;
+  /** User messages sampled from the middle of the transcript — often the only
+   *  place the actual subject appears when first/last are meta ("begin the task"). */
+  middlePrompts?: string[];
   /** Bounds the subprocess — keep it low (15s default) for the background monitor so a
    *  hung `claude -p` can't stall its poll loop; the interactive TUI rename passes a
    *  longer budget so a cold haiku start resolves in one attempt. */
@@ -292,6 +295,9 @@ export function buildNamingPrompt(ctx: NamingContext): string {
   if (firstAssistant) contextParts.push(`First assistant reply: "${firstAssistant.slice(0, 300)}"`);
   const usefulSummary = summary && summary !== firstPrompt ? summary : "";
   if (usefulSummary) contextParts.push(`Summary: "${usefulSummary}"`);
+  for (const m of ctx.middlePrompts ?? []) {
+    contextParts.push(`Mid-session user message: "${m}"`);
+  }
   if (lastPrompt && lastPrompt !== firstPrompt) {
     contextParts.push(`Most recent user message: "${lastPrompt.slice(0, 300)}"`);
   }
@@ -304,10 +310,12 @@ export function buildNamingPrompt(ctx: NamingContext): string {
     if (branchContext) contextParts.push(`Branch: "${branchContext}"`);
   }
 
-  return `Name this session in Title Case, plain English words. It may be any kind of task (coding or not) — always produce a name from the content; never introduce yourself or explain. Prefer 1-2 words; use 3-4 only when the subject needs them (keep it short — it also labels a narrow tmux tab). Drop filler words (the, a, for, with, to). Name the SUBJECT of the work — the feature, system, or thing being worked on — never the interaction style alone: for "review/plan/grill/debug X", name X (optionally with the action). Focus on the ACTION and GOAL, not file paths or locations. Do NOT use kebab-case, do NOT abbreviate.
+  return `Name this session in Title Case, plain English words. It may be any kind of task (coding or not) — always produce a name from the content; never introduce yourself or explain. Prefer 2-3 words; up to 4 when the subject needs them (it labels a narrow tmux tab). Drop filler words (the, a, for, with, to).
 
-Good: Fix Auth, Dark Mode, Refactor API, Provider Sync, iCloud Photos, Session Naming
-Bad: fix-auth, impl-dark-mode, "I'm Claude Code...", Grill Plan, Plan Review, Question Session
+Name the session's OVERALL subject — the specific feature, system, or deliverable being worked on. The most recent messages show the current step; use them to identify the subject, never as the name itself. Never name the interaction style alone: for "review/plan/grill/debug X", name X. Never use a ticket ID (TF-123, ENG-45) as the name — name what the ticket is about. Avoid words generic enough to fit any session (Analytics, Cleanup, Config, Optimization, Task) unless paired with the specific subject. Ignore meta text about continuing or compacting a previous conversation. Focus on the GOAL, not file paths or locations. Do NOT use kebab-case, do NOT abbreviate.
+
+Good: Fix Auth, Dark Mode Toggle, Provider Sync, iCloud Photos, Employment Verification
+Bad: fix-auth, TF-245 Cleanup, Analytics, Grill Plan, Plan Review, "I'm Claude Code..."
 
 Reply with ONLY the name, nothing else.
 
@@ -328,6 +336,10 @@ export async function generateAIName(ctx: NamingContext): Promise<string> {
       stdin: new Response(namePrompt),
       stdout: "pipe",
       stderr: "ignore",
+      // Neutral cwd: `claude -p` loads workspace context from its working directory,
+      // and inheriting the caller's cwd biased names toward the CALLER'S repo — four
+      // unrelated sessions once named after the directory the generator ran from.
+      cwd: homedir(),
       // CLAUDECODE=1 ensures cc_entrypoint=cli billing (Max subscription).
       env: { ...process.env, TMUX: "", TMUX_PANE: "", CLAUDECODE: "1", CLAUDE_CODE_ENTRYPOINT: "cli" },
     });

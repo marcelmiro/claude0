@@ -156,6 +156,9 @@ test("buildNamingPrompt: assistant replies land in the prompt, deduped and trunc
   });
   expect(p).toContain('First assistant reply: "' + "A".repeat(300) + '"');
   expect(p).toContain('Most recent assistant reply: "The inbox redesign moves rows into a store"');
+  const mid = buildNamingPrompt({ firstPrompt: "x", middlePrompts: ["backfill the residuals", "reclassify calls"] });
+  expect(mid).toContain('Mid-session user message: "backfill the residuals"');
+  expect(mid).toContain('Mid-session user message: "reclassify calls"');
   // Identical first/last assistant reply appears once.
   const dup = buildNamingPrompt({ firstPrompt: "x", firstAssistant: "same", lastAssistant: "same" });
   expect(dup).not.toContain("Most recent assistant reply");
