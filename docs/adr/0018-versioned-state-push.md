@@ -92,3 +92,33 @@ background work), and the request-seq guards — pushes participate in them as
   replacement.
 - A subscription is dropped on goodbye/unsubscribe/60s-disconnected; the client
   re-declares it on every stream open, so a pruned subscription self-heals.
+
+## Addendum: the thread payload carries time and outcomes (2026-08-25)
+
+Three additive fields on the transcript payload, all optional, none a
+migration (a client that ignores them renders exactly as before):
+
+- **`turn.at`** — the JSONL record's `timestamp`, verbatim. The phone renders
+  a centered time label before the first stamped turn and wherever the
+  thread pauses for more than five minutes (24h clock, `dd/MM` beyond
+  yesterday — hard-coded like `wake-abs.js`, never Intl), and an elapsed
+  timer on the in-flight tool's chip measured from its own record.
+- **`tool_use.result`** — `{ ok, head, lines }` summarized from the matching
+  `tool_result` (paired by `tool_use_id` across turns — Claude records
+  results as the *next* user turn) before that block is dropped. `head` is
+  the first non-empty line capped at 120 chars; `lines` counts non-empty
+  lines. Success is the norm and unmarked; a chip whose `ok` is false ends
+  in a light "failed", and the head shows when tapped open. A
+  tool_use with no result yet ships none — that absence, plus
+  `pendingTool.toolUseId`, is what marks the live chip.
+- **`tool_use.input`** now ships every present string field from a fixed
+  allowlist (`command, file_path, notebook_path, pattern, description,
+  subagent_type, url, query, skill, args`), each capped at 200 chars except
+  paths, instead of the first present one. Agent chips finally say what the
+  agent was asked (`description` is also the key that links the chip to its
+  `subagents[]` entry for the drill-in tap); WebFetch/WebSearch/Skill chips
+  get their url/query/skill.
+
+Rejected: shipping the full `tool_result` behind a cap. Even capped, results
+are the bulk of a transcript, and the phone's question is "did it work and
+what's the one line I need", which the summary answers.

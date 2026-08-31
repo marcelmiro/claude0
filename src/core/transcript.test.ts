@@ -514,3 +514,13 @@ test("parseActiveBranch handles an empty/meta-only log", () => {
   expect(parseActiveBranch("")).toEqual([]);
   expect(parseActiveBranch('{"type":"system","subtype":"x"}')).toEqual([]);
 });
+
+test("a record's timestamp lands on its turn as `at`; records without one carry no key", () => {
+  const raw = [
+    '{"type":"user","timestamp":"2026-08-25T10:00:00.000Z","message":{"role":"user","content":"hi"}}',
+    '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hello"}]}}',
+  ].join("\n");
+  const turns = parseTranscript(raw);
+  expect(turns[0]!.at).toBe("2026-08-25T10:00:00.000Z");
+  expect("at" in turns[1]!).toBe(false);
+});

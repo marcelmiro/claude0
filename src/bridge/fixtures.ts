@@ -160,16 +160,34 @@ export const FIXTURE_SESSIONS = [
 ];
 
 // Transcript shape — mirrors getTranscript() plus the approval/statusline spread the
-// /transcript route adds. Exercises a user bubble, a markdown assistant bubble (code +
-// list), a tool chip, and an open AskUserQuestion (so the question card + its tags show).
+// /transcript route adds. One of every thread block: compact divider, user + markdown
+// assistant bubbles, every chip variant (edit / command / Agent / WebFetch, one of them
+// failed), a tool-only burst older than lastPromptAt (collapsed tally), slash command,
+// `!` bash turn, ⊘ interrupt line, teammate report + idle ping, image marker, a queued
+// turn, and an open AskUserQuestion (question card + tags). Timestamps step back from
+// now so the 5-minute time-gap labels render.
+const m = 60_000;
 export const FIXTURE_TRANSCRIPT = {
   turns: [
     {
       role: "user",
+      at: ago(95 * m),
+      compactSummary: true,
+      content: [
+        {
+          type: "text",
+          text: "## Summary\n\nThe session moved bridge auth from a bearer header to a cookie. Remaining: gate the SSE route, update the README.",
+        },
+      ],
+    },
+    {
+      role: "user",
+      at: ago(94 * m),
       content: [{ type: "text", text: "Can you switch the bridge token to an HttpOnly cookie?" }],
     },
     {
       role: "assistant",
+      at: ago(93 * m),
       content: [
         {
           type: "text",
@@ -187,14 +205,103 @@ export const FIXTURE_TRANSCRIPT = {
             "Wiring it up now.",
           ].join("\n"),
         },
-        { type: "tool_use", name: "Edit", input: { file_path: "src/bridge/server.ts" } },
+        {
+          type: "tool_use",
+          id: "t1",
+          name: "Edit",
+          input: { file_path: "src/bridge/server.ts" },
+          result: { ok: true, head: "The file src/bridge/server.ts has been updated.", lines: 1 },
+        },
       ],
     },
-    { role: "user", content: [{ type: "text", text: "looks good — ship it" }] },
-    // An executed slash command → normal user bubble showing the typed command.
-    { role: "user", content: [], command: "/pr-triage" },
+    // A burst of tool-only records (≥3 in a row) older than lastPromptAt → one collapsed
+    // tally line; tapping expands the chips, one of which failed.
     {
       role: "assistant",
+      at: ago(92 * m),
+      content: [
+        {
+          type: "tool_use",
+          id: "t2",
+          name: "Bash",
+          input: { command: "bun test src/bridge 2>&1 | tail -4", description: "Run the bridge tests" },
+          result: { ok: true, head: "12 pass", lines: 4 },
+        },
+      ],
+    },
+    {
+      role: "assistant",
+      at: ago(91 * m),
+      content: [
+        {
+          type: "tool_use",
+          id: "t3",
+          name: "Grep",
+          input: { pattern: "cookieToken" },
+          result: { ok: true, head: "src/bridge/server.ts:212:function cookieToken(req: Request)", lines: 3 },
+        },
+      ],
+    },
+    {
+      role: "assistant",
+      at: ago(90 * m),
+      content: [
+        {
+          type: "tool_use",
+          id: "t4",
+          name: "Bash",
+          input: { command: "bun run typecheck", description: "Type-check the bridge" },
+          result: { ok: false, head: "src/bridge/server.ts(214,9): error TS2339: Property 'cookie' does not exist", lines: 2 },
+        },
+      ],
+    },
+    {
+      role: "assistant",
+      at: ago(89 * m),
+      content: [
+        {
+          type: "tool_use",
+          id: "t5",
+          name: "Edit",
+          input: { file_path: "src/bridge/server.ts" },
+          result: { ok: true, head: "The file src/bridge/server.ts has been updated.", lines: 1 },
+        },
+      ],
+    },
+    {
+      role: "assistant",
+      at: ago(88 * m),
+      content: [
+        {
+          type: "tool_use",
+          id: "t6",
+          name: "Agent",
+          // Same description as subagent afix1 below → the chip taps into that agent.
+          input: { description: "Trace the cookie exchange path", subagent_type: "Explore" },
+        },
+        {
+          type: "tool_use",
+          id: "t7",
+          name: "WebFetch",
+          input: { url: "https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie" },
+          result: { ok: true, head: "Set-Cookie: <cookie-name>=<cookie-value>; HttpOnly; SameSite=Strict", lines: 40 },
+        },
+      ],
+    },
+    // 27 minutes of silence → a time-gap label before this prompt.
+    { role: "user", at: ago(60 * m), content: [{ type: "text", text: "looks good — ship it" }] },
+    // Executed slash commands: arg-less → neutral receding pill; with args → a normal
+    // user bubble whose /name renders as a mono chip (the args are the prompt).
+    { role: "user", at: ago(59 * m), content: [], command: "/pr-triage" },
+    {
+      role: "user",
+      at: ago(59 * m),
+      content: [],
+      command: "/loop keep polishing the session thread until every block type reads well on a phone",
+    },
+    {
+      role: "assistant",
+      at: ago(58 * m),
       content: [{ type: "text", text: "Shipping — wiring the cookie into the auth route now." }],
     },
     // A `!` bash passthrough (input + output records folded into one turn by the parser) →
@@ -203,6 +310,7 @@ export const FIXTURE_TRANSCRIPT = {
     // reply below follows it), unlike the slash-command turn above.
     {
       role: "user",
+      at: ago(45 * m),
       content: [],
       bash: {
         command: "git status -sb && bun test 2>&1 | tail -8",
@@ -223,19 +331,53 @@ export const FIXTURE_TRANSCRIPT = {
     },
     {
       role: "assistant",
+      at: ago(44 * m),
       content: [{ type: "text", text: "Clean tree and green tests — the deploy can go out." }],
+    },
+    // Interrupt marker → dim ⊘ system line, not a bubble.
+    {
+      role: "user",
+      at: ago(40 * m),
+      content: [{ type: "text", text: "[Request interrupted by user for tool use]" }],
+    },
+    // Teams mailbox delivery: a report (bylined, expandable) + a bare idle ping.
+    {
+      role: "user",
+      at: ago(35 * m),
+      content: [],
+      teammate: [
+        {
+          id: "reviewer",
+          color: "green",
+          summary: "Auth diff reviewed — 1 finding",
+          body: "## Finding\n\n`cookieToken()` trusts the first `claude0=` pair; a second cookie of the same name would win on some proxies.",
+        },
+        { id: "docs", color: "blue", summary: "", body: '{"type":"idle_notification","from":"docs"}' },
+      ],
+    },
+    // Image attachment + caption → 🖼 marker and the caption bubble.
+    {
+      role: "user",
+      at: ago(31 * m),
+      content: [{ type: "image" }, { type: "text", text: "[Image #1] this is what the login page looks like now" }],
+    },
+    {
+      role: "assistant",
+      at: ago(30 * m),
+      content: [{ type: "text", text: "Looks right — the token field is gone and the cookie is set on connect." }],
     },
     // A message consumed from the input queue MID-turn (queued_command attachment, never a
     // `user` record) — renders as a normal user bubble, excluded from rewind checkpoints.
     {
       role: "user",
+      at: ago(20 * m),
       queued: true,
       content: [{ type: "text", text: "also double-check the cookie's SameSite setting" }],
     },
   ],
   // Still sitting in the input queue (sent mid-turn, unconsumed) → dim "queued" bubble.
   queuedPending: ["and update the README auth section once that lands"],
-  usage: { percent: 62, current: 124_000, size: 200_000 },
+  usage: { tokens: 124_000, size: 200_000, percent: 62 },
   mode: "auto",
   statusline: "124k/200k • eng-2687-cookie-auth",
   // Background work: one script wait + agents on both sides of lastPromptAt, so the
@@ -250,7 +392,7 @@ export const FIXTURE_TRANSCRIPT = {
       launchedAt: new Date(Date.now() - 12 * 60_000).toISOString(),
     },
   ],
-  lastPromptAt: new Date(Date.now() - 30 * 60_000).toISOString(),
+  lastPromptAt: ago(31 * m), // the image prompt above — everything after it is "since your prompt"
   subagents: [
     {
       agentId: "afix1",
@@ -465,7 +607,12 @@ export function fixtureData(method: string, path: string, params?: URLSearchPara
     return params?.get("q") ? FIXTURE_HISTORY_SEARCH : FIXTURE_HISTORY;
   }
   if (method === "GET" && path === "/pending") return [];
-  if (method === "GET" && /^\/sessions\/[^/]+\/transcript$/.test(path)) return FIXTURE_TRANSCRIPT;
+  // The open question blocks only the session whose list row says "question" — on the
+  // others the composer (and, on a running session, the working indicator) stays visible.
+  const tm = path.match(/^\/sessions\/([^/]+)\/transcript$/);
+  if (method === "GET" && tm) {
+    return tm[1] === "fix-auth" ? FIXTURE_TRANSCRIPT : { ...FIXTURE_TRANSCRIPT, openQuestion: null };
+  }
   if (method === "GET" && /^\/sessions\/[^/]+\/changes$/.test(path)) return FIXTURE_CHANGES;
   if (method === "GET" && /^\/sessions\/[^/]+\/diff$/.test(path)) return FIXTURE_DIFF;
   // Stub the mutating actions so the UI's optimistic flows resolve cleanly in a demo.

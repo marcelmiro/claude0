@@ -2003,16 +2003,164 @@ function TeammateRow({ msg }) {
   </div>`;
 }
 
-// A command-carrying chip (Bash) clamps its command to one ellipsized line — tapping
-// toggles the full command, wrapped, so the reader can check what actually ran.
-function CommandChip({ name, command }) {
+// The subagent an Agent chip drills into: the call's `description` is the same string
+// the harness writes to the agent's meta.json (a duplicate description → first match).
+function agentFor(description) {
+  const list = (transcript.value && transcript.value.subagents) || [];
+  return description ? list.find((a) => a.description === description) || null : null;
+}
+
+// Seconds → "42s" / "3m 07s" / "1h 12m" for the running-tool timer.
+function fmtElapsed(secs) {
+  if (secs < 60) return `${secs}s`;
+  const m = Math.floor(secs / 60);
+  if (m < 60) return `${m}m ${String(secs % 60).padStart(2, "0")}s`;
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
+}
+
+// Re-render once a second while mounted (the live chip's elapsed timer).
+function useTick(on) {
+  const [, set] = useState(0);
+  useEffect(() => {
+    if (!on) return;
+    const id = setInterval(() => set((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [on]);
+}
+
+// One tool call → a compact chip: `▸ Name label`, one ellipsized line. Success is the
+// norm and says nothing; a failed call gets a light trailing "failed". Tapping toggles the full label plus what
+// came back (first line + line count); an Agent chip taps into its subagent instead.
+// The chip whose call is the session's in-flight tool renders live (pulsing dot, elapsed
+// since its record landed) so it turns into the finished chip in place.
+// Edit/Read chips: the dir shrinks (dimmed, ellipsized) and the basename never does — the
+// filename must survive any width, the same treatment as the changed-files list.
+function ToolChip({ b, at }) {
   const [open, setOpen] = useState(false);
-  return html`<div class=${open ? "tool open" : "tool"} onClick=${() => setOpen(!open)}>▸ ${name} <span class="arg">${command}</span></div>`;
+  const input = b.input || {};
+  const name = b.name || "tool";
+  const path = editedPath(input);
+  const isEdit = (EDIT_TOOLS.has(name) || name === "Read") && !!path;
+  const agent = name === "Agent" ? agentFor(input.description) : null;
+  const t = transcript.value;
+  const live = !!(t && t.pendingTool && t.pendingTool.toolUseId === b.id && !b.result);
+  useTick(live && !!at);
+  const res = b.result;
+  const skill = input.skill ? `${input.skill}${input.args ? ` ${input.args}` : ""}` : "";
+  const arg =
+    input.command ||
+    (isEdit ? "" : path) ||
+    input.pattern ||
+    skill ||
+    input.description ||
+    input.url ||
+    input.query ||
+    "";
+  const details = [];
+  if (input.description && input.description !== arg) details.push(input.description);
+  // Result line: an error always shows; a success only for tools whose output is the
+  // point (an Edit's "file updated" line says nothing).
+  const showRes = res && (!res.ok || !isEdit) && res.head;
+  const elapsed = live && at ? fmtElapsed(Math.max(0, Math.floor((Date.now() - Date.parse(at)) / 1000))) : "";
+  const cls = `tool${isEdit ? " edit" : ""}${open ? " open" : ""}${live ? " live" : ""}`;
+  const onTap = agent ? () => openAgent(agent, (t && t.subagents) || []) : () => setOpen(!open);
+  // Label is a flex row: the name never shrinks, the argument (or an edit's dir) is the
+  // one part that ellipsizes, and the trailing failure notice, timer and chevron never get clipped.
+  let label;
+  if (isEdit) {
+    const p = path.replace(/^\/Users\/[^/]+\//, "~/");
+    const slash = p.lastIndexOf("/");
+    label = html`<span class="tname">▸ ${name}</span
+      ><span class="tpath"
+        ><span class="fl-dir">${slash >= 0 ? p.slice(0, slash + 1) : ""}</span
+        ><span class="fl-base">${slash >= 0 ? p.slice(slash + 1) : p}</span></span
+      >`;
+  } else {
+    label = html`<span class="tname"
+        >${live ? html`<span class="livedot">⦿</span>` : "▸"} ${name}${input.subagent_type &&
+        html` <span class="tsub">${input.subagent_type}</span>`}</span
+      >${arg && html`<span class="arg">${arg}</span>`}`;
+  }
+  return html`<div class=${cls} onClick=${onTap}>
+    <div class="tlabel">
+      ${label}${res && !res.ok && html`<span class="tres">failed</span>`}${elapsed &&
+      html`<span class="elapsed">· ${elapsed}</span>`}${agent && html`<span class="tchev">›</span>`}
+    </div>
+    ${open && details.length > 0 && html`<div class="tdetail">${details.join("\n")}</div>`}
+    ${open &&
+    showRes &&
+    html`<div class=${`tdetail${res.ok ? "" : " bad"}`}>
+      ${res.head}${res.lines > 1 && html` <span class="tlines">· ${res.lines} lines</span>`}
+    </div>`}
+  </div>`;
+}
+
+// ≥3 consecutive tool-only assistant records read as one burst of work. Collapsed to a
+// one-line tally when the burst predates the user's last prompt (it's history they've
+// already been told about — ADR 13's freshness boundary); expanded while it's the work
+// since that prompt. Tapping the tally expands it in place.
+function ToolBurst({ turns, collapsed }) {
+  const [open, setOpen] = useState(!collapsed);
+  if (open) {
+    return html`<div class="turn">
+      ${turns.map((tn, k) => html`<${Turn} key=${k} turn=${tn} upCount=${0} canCode=${false} />`)}
+      ${collapsed && html`<div class="burst-less" onClick=${() => setOpen(false)}>▴ collapse</div>`}
+    </div>`;
+  }
+  const counts = new Map();
+  const files = new Set();
+  let failed = 0;
+  for (const tn of turns) {
+    for (const b of tn.content || []) {
+      counts.set(b.name, (counts.get(b.name) || 0) + 1);
+      if (b.result && !b.result.ok) failed++;
+      const p = editedPath(b.input || {});
+      if (p) files.add(p.slice(p.lastIndexOf("/") + 1));
+    }
+  }
+  const total = [...counts.values()].reduce((a, c) => a + c, 0);
+  const names = [...counts].map(([n, c]) => (c > 1 ? `${n} ×${c}` : n)).join(", ");
+  const fl = [...files];
+  const fileNote = fl.length ? ` · ${fl.slice(0, 2).join(", ")}${fl.length > 2 ? ` +${fl.length - 2}` : ""}` : "";
+  return html`<div class="turn">
+    <div class="tool burst" onClick=${() => setOpen(true)}>
+      <div class="tlabel">
+        <span class="tname">▸ ${total} tool calls${failed > 0 && html` <span class="tres">· ${failed} failed</span>`}</span>
+        <span class="arg">· ${names}${fileNote}</span>
+      </div>
+    </div>
+  </div>`;
+}
+
+// A turn that is nothing but tool calls — the unit ToolBurst groups.
+const isToolOnlyTurn = (turn) =>
+  turn.role === "assistant" &&
+  !turn.compactSummary &&
+  !turn.command &&
+  !turn.bash &&
+  !turn.teammate &&
+  (turn.content || []).length > 0 &&
+  turn.content.every((b) => b.type === "tool_use");
+
+// Time-gap label between turns: the clock alone today, "Yesterday 13:06", else "24/08 13:06".
+// Hard-coded 24h + dd/MM like shared/wake-abs.js — locale-sensitive Intl formatting is
+// deliberately not relied on in this repo (ADR 13, addendum 9).
+function fmtGap(ms) {
+  const d = new Date(ms);
+  const now = new Date();
+  const two = (n) => String(n).padStart(2, "0");
+  const time = `${two(d.getHours())}:${two(d.getMinutes())}`;
+  if (d.toDateString() === now.toDateString()) return time;
+  const y = new Date(now);
+  y.setDate(now.getDate() - 1);
+  if (d.toDateString() === y.toDateString()) return `Yesterday ${time}`;
+  return `${two(d.getDate())}/${two(d.getMonth() + 1)} ${time}`;
 }
 
 // One conversational turn → a sequence of chat elements: text blocks become
-// bubbles (user right / assistant left), tool calls become compact chips, image
-// attachments become a 🖼 marker; thinking and tool_result blocks are omitted.
+// bubbles (user right / assistant left), tool calls become chips (ToolChip), image
+// attachments become a 🖼 marker; thinking is omitted and tool results survive only as
+// the summary folded into each chip.
 function Turn({ turn, upCount, canCode }) {
   // Post-compaction summary: render as a labeled, full-width system divider — not a giant
   // user bubble — so it reads as "this branch continued from a compact" rather than the user
@@ -2027,12 +2175,21 @@ function Turn({ turn, upCount, canCode }) {
     </div>`;
   }
 
-  // An executed slash command — rendered as a normal user bubble showing exactly what was
-  // typed, matching the terminal (which echoes the command as your prompt line). Not a
-  // rewind checkpoint (content is empty, so isPromptTurn already excludes it), hence no
-  // long-press rewind handlers.
+  // An executed slash command. With args ("/loop fix the tests…") the args ARE the
+  // prompt — render a normal user bubble with the command name as a small mono chip so
+  // the substance reads as prose, not system plumbing. Arg-less commands ("/compact")
+  // really are plumbing: a small neutral pill that recedes. Not a rewind checkpoint
+  // (content is empty, so isPromptTurn already excludes it) — long-press is copy-only.
   if (turn.command) {
-    return html`<div class="turn"><div class="bubble user">${turn.command}</div></div>`;
+    const sp = turn.command.indexOf(" ");
+    const name = sp === -1 ? turn.command : turn.command.slice(0, sp);
+    const args = sp === -1 ? "" : turn.command.slice(sp + 1).trim();
+    return html`<div class="turn">
+      ${args
+        ? // Single-line template: .bubble is pre-wrap, so template newlines would render.
+          html`<div class="bubble user" ...${lpProps(lpStartCopyOnly(turn.command))}><span class="cmdchip">${name}</span> ${args}</div>`
+        : html`<div class="cmdpill" ...${lpProps(lpStartCopyOnly(turn.command))}>${name}</div>`}
+    </div>`;
   }
 
   // A `!` bash command (input + output records folded into one turn by the parser).
@@ -2099,31 +2256,7 @@ function Turn({ turn, upCount, canCode }) {
             >${shown}</div>`,
       );
     } else if (b.type === "tool_use") {
-      const input = b.input || {};
-      const path = editedPath(input);
-      const skill = input.skill ? `${input.skill}${input.args ? ` ${input.args}` : ""}` : "";
-      const arg = input.command || path || input.pattern || skill || "";
-      if ((EDIT_TOOLS.has(b.name) || b.name === "Read") && path) {
-        // Edit/Read chips are informational — diffs live on the changed-files page, which
-        // doesn't depend on a per-chip path resolving inside the session's repo (a
-        // removed worktree or scratchpad edit never can). What the chip owes the reader
-        // is the FILENAME: the dir shrinks (dimmed, ellipsized) and the basename never
-        // does — the same treatment as the changed-files list.
-        const p = path.replace(/^\/Users\/[^/]+\//, "~/");
-        const slash = p.lastIndexOf("/");
-        const dir = slash >= 0 ? p.slice(0, slash + 1) : "";
-        const base = slash >= 0 ? p.slice(slash + 1) : p;
-        els.push(
-          html`<div class="tool edit">
-            <span class="tname">▸ ${b.name}</span
-            ><span class="fl-dir">${dir}</span><span class="fl-base">${base}</span>
-          </div>`,
-        );
-      } else if (input.command) {
-        els.push(html`<${CommandChip} name=${b.name || "tool"} command=${input.command} />`);
-      } else {
-        els.push(html`<div class="tool">▸ ${b.name || "tool"}${arg && html` <span class="arg">${arg}</span>`}</div>`);
-      }
+      els.push(html`<${ToolChip} b=${b} at=${turn.at} />`);
     }
   }
   return els.length ? html`<div class="turn">${els}</div>` : null;
@@ -2392,16 +2525,57 @@ function ApprovalCard({ approval }) {
   `;
 }
 
-// In-flight tool with NO decision required (e.g. auto-approved) — read-only info,
-// never Allow/Deny.
+// In-flight tool with NO decision required (e.g. auto-approved) whose tool_use record
+// hasn't reached the thread yet — a live chip standing in until ToolChip takes over in
+// place. Read-only info, never Allow/Deny. Its timer counts from when this client first
+// saw the call (hook events carry no timestamp); bounded so the map can't grow forever.
+const liveSeen = new Map();
+function liveSince(toolUseId) {
+  if (!toolUseId) return null;
+  if (!liveSeen.has(toolUseId)) {
+    if (liveSeen.size >= 50) liveSeen.delete(liveSeen.keys().next().value);
+    liveSeen.set(toolUseId, Date.now());
+  }
+  return liveSeen.get(toolUseId);
+}
 function RunningTool({ tool }) {
-  const detail = tool.command || tool.filePath || tool.pattern || "";
-  return html`
-    <div class="card">
-      <div class="who">⦿ running — ${tool.name}</div>
-      ${detail && html`<pre>${detail}</pre>`}
+  const detail = tool.command || tool.filePath || tool.pattern || tool.description || "";
+  const since = liveSince(tool.toolUseId);
+  useTick(!!since);
+  const elapsed = since ? fmtElapsed(Math.max(0, Math.floor((Date.now() - since) / 1000))) : "";
+  return html`<div class="tool live">
+    <div class="tlabel">
+      <span class="tname"><span class="livedot">⦿</span> ${tool.name}</span>${detail &&
+      html`<span class="arg">${detail}</span>`}${elapsed && html`<span class="elapsed">· ${elapsed}</span>`}
     </div>
-  `;
+  </div>`;
+}
+
+// The turn-level working indicator. Only rendered when no live tool chip is up (a chip
+// with a pulsing dot IS the working indicator — two at once said the same thing twice);
+// this covers the thinking/writing stretches between tool calls. Elapsed counts from
+// lastPromptAt — the prompt that started the turn — so a glance answers "quick reply or
+// long haul?".
+function Working({ since }) {
+  const start = since ? Date.parse(since) : NaN;
+  useTick(!isNaN(start));
+  const elapsed = isNaN(start) ? "" : fmtElapsed(Math.max(0, Math.floor((Date.now() - start) / 1000)));
+  // Dots go last so their animation never pushes the elapsed time sideways.
+  return html`<div class="typing">
+    working${elapsed && html`<span class="elapsed"> · ${elapsed}</span>`}<span class="dots"></span>
+  </div>`;
+}
+
+// Tag inside an optimistic bubble that appears only after the send has lingered — on the
+// happy path the bubble retires into the real turn within a second or two and the tag
+// never shows; past the delay it disambiguates "slow to land" from "already landed".
+function SendingTag() {
+  const [on, set] = useState(false);
+  useEffect(() => {
+    const id = setTimeout(() => set(true), 5000);
+    return () => clearTimeout(id);
+  }, []);
+  return on ? html`<div class="queuedtag">sending…</div>` : null;
 }
 
 // --- Composer drafts ---------------------------------------------------------
@@ -3098,6 +3272,13 @@ function Detail() {
   // otherwise it's the free-text composer (this is the "replace the message box with
   // the question/answers" behavior).
   const blocked = questions || approval;
+  // The in-flight tool's own chip renders live once its tool_use record is in the thread;
+  // until then a stand-in chip (RunningTool) holds its place at the bottom.
+  const liveInThread =
+    !!(t && t.pendingTool) &&
+    displayTurns.some((turn) =>
+      (turn.content || []).some((b) => b.type === "tool_use" && b.id === t.pendingTool.toolUseId),
+    );
   // An archived session has no live pane: sends/answers would fail with `no-pane`. When it's
   // not actually blocked (discovery can mislabel a live blocked session as archived — those
   // stay answerable), lock the composer and show a standing notice instead of a dead end.
@@ -3276,12 +3457,39 @@ function Detail() {
               (ht.content || []).some((b) => b.type === "text" && (b.text || "").trim() === h.text);
             if (matches) hiddenIdx.add(h.index);
           }
-          return turns.map((turn, i) => {
+          // Time-gap labels: one before the first stamped turn and wherever the thread
+          // pauses for more than 5 minutes — the chat convention, so a session reopened
+          // an hour later says when things happened without stamping every bubble.
+          const GAP_MS = 5 * 60_000;
+          const lastPrompt = t && t.lastPromptAt ? Date.parse(t.lastPromptAt) : NaN;
+          const visible = (i) => i < keepTurns && !hiddenIdx.has(i);
+          const out = [];
+          let prevAt = null;
+          for (let i = 0; i < turns.length; i++) {
+            if (i >= keepTurns) break; // truncated by an optimistic rewind
+            if (hiddenIdx.has(i)) continue; // restored to the composer by an interrupt
+            const turn = turns[i];
+            const at = turn.at ? Date.parse(turn.at) : NaN;
+            if (!Number.isNaN(at) && (prevAt === null || at - prevAt > GAP_MS)) {
+              out.push(html`<div class="timegap" key=${`g${i}`}>${fmtGap(at)}</div>`);
+            }
+            if (isToolOnlyTurn(turn)) {
+              let j = i;
+              while (visible(j + 1) && isToolOnlyTurn(turns[j + 1])) j++;
+              if (j - i >= 2) {
+                const lastAt = turns[j].at ? Date.parse(turns[j].at) : NaN;
+                const stale = !Number.isNaN(lastPrompt) && !Number.isNaN(lastAt) && lastAt < lastPrompt;
+                out.push(html`<${ToolBurst} key=${`b${i}`} turns=${turns.slice(i, j + 1)} collapsed=${stale} />`);
+                if (!Number.isNaN(lastAt)) prevAt = lastAt;
+                i = j;
+                continue;
+              }
+            }
+            if (!Number.isNaN(at)) prevAt = at;
             const up = upByIndex.get(i) || 0;
-            if (i >= keepTurns) return null; // truncated by an optimistic rewind
-            if (hiddenIdx.has(i)) return null; // restored to the composer by an interrupt
-            return html`<${Turn} key=${i} turn=${turn} upCount=${up} canCode=${editAfter[i]} />`;
-          });
+            out.push(html`<${Turn} key=${i} turn=${turn} upCount=${up} canCode=${editAfter[i]} />`);
+          }
+          return out;
         })()}
         ${queued.map((text, i) =>
           text.trim().startsWith("!")
@@ -3314,12 +3522,13 @@ function Detail() {
                   ...${lpProps(lpStartCopyOnly(text))}
                 >
                   <span class="glyph">!</span>${text.trim().slice(1)}
+                  <${SendingTag} />
                 </div>`
               : html`<div
                   class="bubble user pending"
                   key=${`p${i}`}
                   ...${lpProps(lpStartCopyOnly(text))}
-                >${text}</div>`,
+                >${text}<${SendingTag} /></div>`,
           )}
         ${pendingImageSends.value
           .filter((e) => !landed.has(stripImagePrefix(e.text).trim()))
@@ -3331,10 +3540,12 @@ function Detail() {
           >
             <div class="bubthumbs">${entry.urls.map((u) => html`<img src=${u} alt="" key=${u} />`)}</div>
             ${entry.text && html`<div>${entry.text}</div>`}
+            <${SendingTag} />
           </div>`,
           )}
-        ${t && t.pendingTool && !blocked && html`<${RunningTool} tool=${t.pendingTool} />`}
-        ${status === "running" && !blocked && html`<div class="typing">working…</div>`}
+        ${t && t.pendingTool && !blocked && !liveInThread && html`<${RunningTool} tool=${t.pendingTool} />`}
+        ${status === "running" && !blocked && !(t && t.pendingTool) &&
+        html`<${Working} since=${t && t.lastPromptAt} />`}
         ${!archived && html`<${ChangesCard} />`}
       </div>
       <div class="dock">

@@ -234,7 +234,7 @@ test("slimTurns: drops thinking + tool_result, keeps text + tool_use", () => {
   expect(t!.content.map((b) => b.type)).toEqual(["text", "tool_use"]);
 });
 
-test("slimTurns: tool_use input trimmed to the single capped rendered field", () => {
+test("slimTurns: tool_use input trimmed to the capped chip fields", () => {
   const long = "echo " + "a".repeat(500);
   const turns = [
     {
@@ -244,15 +244,75 @@ test("slimTurns: tool_use input trimmed to the single capped rendered field", ()
           type: "tool_use" as const,
           id: "1",
           name: "Bash",
-          input: { command: long, description: "noise", timeout: 9999 },
+          input: { command: long, description: "List files", timeout: 9999, content: "x".repeat(9000) },
         },
       ],
     },
   ];
   const block = slimTurns(turns)[0]!.content[0] as { type: "tool_use"; input: Record<string, string> };
-  expect(Object.keys(block.input)).toEqual(["command"]); // description/timeout dropped
+  expect(Object.keys(block.input)).toEqual(["command", "description"]); // timeout/content dropped
   expect(block.input.command.length).toBeLessThanOrEqual(201); // 200 + "…"
   expect(block.input.command.endsWith("…")).toBe(true);
+});
+
+test("slimTurns: Agent/WebFetch/Skill chips get their describing fields; empty strings dropped", () => {
+  const turns = [
+    {
+      role: "assistant" as const,
+      content: [
+        {
+          type: "tool_use" as const,
+          id: "a",
+          name: "Agent",
+          input: { description: "Trace the cookie path", subagent_type: "Explore", prompt: "p".repeat(5000) },
+        },
+        { type: "tool_use" as const, id: "w", name: "WebFetch", input: { url: "https://x.y/z", prompt: "" } },
+        { type: "tool_use" as const, id: "s", name: "Skill", input: { skill: "code-review", args: "HEAD~1" } },
+      ],
+    },
+  ];
+  const [agent, fetch, skill] = slimTurns(turns)[0]!.content as Array<{ input: Record<string, string> }>;
+  expect(agent!.input).toEqual({ description: "Trace the cookie path", subagent_type: "Explore" });
+  expect(fetch!.input).toEqual({ url: "https://x.y/z" });
+  expect(skill!.input).toEqual({ skill: "code-review", args: "HEAD~1" });
+});
+
+test("slimTurns: tool_result (next user turn) is folded into its tool_use as a summary", () => {
+  const turns = [
+    {
+      role: "assistant" as const,
+      content: [
+        { type: "tool_use" as const, id: "ok", name: "Bash", input: { command: "bun test" } },
+        { type: "tool_use" as const, id: "bad", name: "Bash", input: { command: "tsc" } },
+        { type: "tool_use" as const, id: "open", name: "Bash", input: { command: "sleep 9" } },
+      ],
+    },
+    {
+      role: "user" as const,
+      content: [
+        { type: "tool_result" as const, tool_use_id: "ok", content: "\n  12 pass\n 0 fail\n\n" },
+        {
+          type: "tool_result" as const,
+          tool_use_id: "bad",
+          is_error: true,
+          content: [{ type: "text", text: "src/x.ts(4,2): error TS2322 " + "y".repeat(300) + "\nmore" }],
+        },
+      ],
+    },
+  ];
+  const out = slimTurns(turns);
+  expect(out).toHaveLength(1); // the result-only user turn is still dropped
+  const [ok, bad, open] = out[0]!.content as Array<{ result?: { ok: boolean; head: string; lines: number } }>;
+  expect(ok!.result).toEqual({ ok: true, head: "12 pass", lines: 2 });
+  expect(bad!.result!.ok).toBe(false);
+  expect(bad!.result!.lines).toBe(2);
+  expect(bad!.result!.head.length).toBe(121); // 120 + "…"
+  expect(open!.result).toBeUndefined(); // no result yet — still running or never returned
+});
+
+test("slimTurns: the turn timestamp rides along", () => {
+  const out = slimTurns([{ role: "user", content: [{ type: "text", text: "hi" }], at: "2026-08-25T10:00:00.000Z" }]);
+  expect(out[0]!.at).toBe("2026-08-25T10:00:00.000Z");
 });
 
 test("slimTurns: a turn emptied only by stripping is dropped; genuinely-empty kept", () => {

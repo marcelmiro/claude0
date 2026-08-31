@@ -330,11 +330,20 @@ export interface HookEvent {
 export type TranscriptBlock =
   | { type: "text"; text: string }
   | { type: "thinking"; text: string }
-  | { type: "tool_use"; id: string; name: string; input: unknown }
+  // `result` is attached by the bridge's payload slimming (the tool_result block itself is
+  // dropped): outcome + a capped first line + line count, so a chip can say ✓/✗ and show
+  // what came back without shipping the (often huge) full output.
+  | { type: "tool_use"; id: string; name: string; input: unknown; result?: ToolResultSummary }
   | { type: "tool_result"; tool_use_id: string; content: unknown; is_error?: boolean }
   // Byte-free marker only: the source's base64 image data is dropped at parse time so it
   // never bloats the transcript payload — the UI just shows a "🖼 image" chip.
   | { type: "image" };
+
+export interface ToolResultSummary {
+  ok: boolean; // !is_error
+  head: string; // first non-empty line of the result text, capped
+  lines: number; // total non-empty lines in the result text
+}
 
 /**
  * One conversational turn. Field is `content` (NOT `blocks`) — the contract test
@@ -343,6 +352,9 @@ export type TranscriptBlock =
 export interface TranscriptTurn {
   role: "user" | "assistant";
   content: TranscriptBlock[];
+  // The record's `timestamp` (ISO), when the JSONL carries one. Drives the thread's time
+  // gap labels and the elapsed timer on the running tool.
+  at?: string;
   // Set on the post-compaction summary record (`isCompactSummary` in the JSONL). Claude
   // Code writes the summary as a `user` turn whose content is the whole summary; this flag
   // lets the UI render it as a "continued from compacted summary" divider instead of a giant

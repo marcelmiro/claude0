@@ -117,6 +117,7 @@ interface RawRecord {
 
 /**
  * A message sent while the session is mid-turn sits in Claude Code's input queue. When
+  timestamp?: string;
  * it is consumed MID-turn (inside a tool loop — the common case) it never becomes a
  * `user` record: the queue logs a `remove` op and the message lands on the active branch
  * as a `queued_command` attachment (the next assistant record parents onto its uuid).
@@ -154,6 +155,12 @@ function recordToTurn(record: RawRecord): FoldableTurn | null {
     // A teams delivery consumed mid-turn from the input queue is still a teammate
     // message, not something the user queued — render it as a teammate turn.
     const attachedTeammate = parseTeammateDelivery(text);
+  const turn = recordToTurnBody(record);
+  if (turn && typeof record.timestamp === "string" && record.timestamp) turn.at = record.timestamp;
+  return turn;
+}
+
+function recordToTurnBody(record: RawRecord): FoldableTurn | null {
     if (attachedTeammate) return { role: "user", content: [], teammate: attachedTeammate };
     return { role: "user", content: [{ type: "text", text }], queued: true };
   }

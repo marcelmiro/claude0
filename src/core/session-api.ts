@@ -42,7 +42,7 @@ import { parseBackgroundTasks, liveScripts, type BackgroundTask } from "./backgr
 import { decideQuestion, declineQuestion, buildAnswersMap } from "./approval";
 import { parkedJobSessions } from "./session-state";
 import { jsonlLines, type PendingQuestion, type PendingToolCall } from "./jsonl-reader";
-import type { RestoreState, TranscriptBlock, TranscriptTurn } from "../types";
+import type { RestoreState, ToolResultSummary, TranscriptBlock, TranscriptTurn } from "../types";
 
 export interface SessionTranscript {
   turns: TranscriptTurn[];
@@ -712,50 +712,101 @@ export async function getSubagentTranscript(
   return { turns };
 }
 
-// The tool_use chip shows ONE truncated line (command / file_path / pattern). Ship only
-// that field, capped — not the full `input` (Write contents, Edit strings, long Bash
-// commands), which is never rendered and is ~half the payload.
+// The tool_use chip shows a one-line label plus, when tapped open, the other short
+// string fields that describe the call. Ship only these, capped — never the full `input`
+// (Write contents, Edit strings, Agent prompts), which is never rendered and is ~half
+// the payload.
 const TOOL_ARG_CAP = 200;
-const TOOL_ARG_FIELDS = ["command", "file_path", "notebook_path", "pattern"] as const;
+const TOOL_ARG_FIELDS = [
+  "command",
+  "file_path",
+  "notebook_path",
+  "pattern",
+  "description",
+  "subagent_type",
+  "url",
+  "query",
+  "skill",
+  "args",
+] as const;
 // A path is the chip's tap TARGET, not just its label — the client sends it straight back to
 // `/diff`. A truncated one resolves to nothing and the diff view reports "no changes", which
 // reads exactly like a reverted edit. Absolute worktree paths in a monorepo do reach the cap.
 // Paths are tens of bytes; the cap exists to stop Write contents and long Bash command lines.
 const UNCAPPED_FIELDS: ReadonlySet<string> = new Set(["file_path", "notebook_path"]);
-function slimToolUse(b: Extract<TranscriptBlock, { type: "tool_use" }>): TranscriptBlock {
+const RESULT_HEAD_CAP = 120;
+
+function slimToolUse(
+  b: Extract<TranscriptBlock, { type: "tool_use" }>,
+  result: ToolResultSummary | undefined,
+): TranscriptBlock {
   const raw = (b.input ?? {}) as Record<string, unknown>;
   const input: Record<string, string> = {};
   for (const k of TOOL_ARG_FIELDS) {
     const v = raw[k];
-    if (typeof v === "string") {
+    if (typeof v === "string" && v) {
       input[k] =
         UNCAPPED_FIELDS.has(k) || v.length <= TOOL_ARG_CAP ? v : v.slice(0, TOOL_ARG_CAP) + "…";
-      break; // the chip reads the first present field; one is enough
     }
   }
-  return { type: "tool_use", id: b.id, name: b.name, input };
+  const slim: TranscriptBlock = { type: "tool_use", id: b.id, name: b.name, input };
+  if (result) slim.result = result;
+  return slim;
+}
+
+/** The text of a tool_result's content: a string, or the text parts of a block array. */
+function toolResultText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((p) => (p && typeof p === "object" && typeof (p as { text?: unknown }).text === "string" ? (p as { text: string }).text : ""))
+    .filter(Boolean)
+    .join("\n");
+}
+
+/** Outcome + capped first line + line count — what a chip can show of a tool's result. */
+export function summarizeToolResult(b: Extract<TranscriptBlock, { type: "tool_result" }>): ToolResultSummary {
+  const lines = toolResultText(b.content)
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const first = lines[0] ?? "";
+  return {
+    ok: !b.is_error,
+    head: first.length > RESULT_HEAD_CAP ? first.slice(0, RESULT_HEAD_CAP) + "…" : first,
+    lines: lines.length,
+  };
 }
 
 /**
  * Keep only what the bridge UI renders — text bubbles and tool_use chips — and shrink
  * each to its displayed form. `thinking` is hidden and `tool_result` content is
- * frequently enormous (file reads, command output); both are dropped. tool_use inputs
- * are trimmed to the single capped field the chip shows. A turn left empty purely by
- * stripping is dropped; a genuinely empty turn is preserved (mirrors `parseTranscript`).
+ * frequently enormous (file reads, command output); both are dropped, but each result is
+ * first reduced to a summary attached to its tool_use (paired by id across turns — Claude
+ * records results as the NEXT user turn). tool_use inputs are trimmed to the capped
+ * string fields the chip shows. A turn left empty purely by stripping is dropped; a
+ * genuinely empty turn is preserved (mirrors `parseTranscript`).
  */
 export function slimTurns(turns: TranscriptTurn[]): TranscriptTurn[] {
+  const results = new Map<string, ToolResultSummary>();
+  for (const t of turns) {
+    for (const b of t.content) {
+      if (b.type === "tool_result" && b.tool_use_id) results.set(b.tool_use_id, summarizeToolResult(b));
+    }
+  }
   const out: TranscriptTurn[] = [];
   for (const t of turns) {
     const content: TranscriptBlock[] = [];
     for (const b of t.content) {
       if (b.type === "text" || b.type === "image") content.push(b);
-      else if (b.type === "tool_use") content.push(slimToolUse(b));
+      else if (b.type === "tool_use") content.push(slimToolUse(b, results.get(b.id)));
     }
     if (content.length === 0 && t.content.length > 0) continue;
     // Rebuild with only the fields the client uses — the per-turn flags must ride along
     // (the compact-summary divider, the queued/rewind-skip handling, and the command
     // and bash turns all key on them).
     const slim: TranscriptTurn = { role: t.role, content };
+    if (t.at) slim.at = t.at;
     if (t.compactSummary) slim.compactSummary = true;
     if (t.queued) slim.queued = true;
     if (t.command) slim.command = t.command;

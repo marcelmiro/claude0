@@ -325,3 +325,36 @@ sidebar focused so the next Enter continues the queue (`switchTo` in
 `sidebar/renderer.ts`). And a scope decision from living with the inbox:
 it is an additional way to navigate, not a replacement — the tmux ⚡-prefix
 / `claude0 next` flow is deliberately kept, not discontinued.
+
+## Addendum 10: the thread reads by freshness too (2026-08-25)
+
+The `lastPromptAt` boundary that groups background work (addendum 8) now
+also shapes the thread itself. A run of three or more consecutive tool-only
+assistant records is one **burst**: rendered expanded (every chip) when it
+is work since the user's last prompt, and collapsed to a one-line tally
+("▸ 33 tool calls · 1 failed · Bash ×20, Edit ×9, …") when it predates it —
+history the user has already been told about, one line per burst instead
+of a scroll of identical chips. Tapping the tally expands it in place.
+
+Two smaller reads in the same spirit: the in-flight tool is not a separate
+card but its own chip rendered live (pulsing dot, elapsed since its record
+landed), so it becomes the finished chip without moving; and slash
+command turns stopped rendering as user prose (see the 2026-08-31
+addendum for the current shape).
+
+## Addendum: one working indicator; commands read as prompts (2026-08-31)
+
+The "working…" line and a live tool chip used to render together — two
+indicators for one fact. Now at most one shows: a live chip (stand-in or
+in-place) IS the working indicator while a tool runs; the "working" line
+covers only the thinking/writing stretches between calls, and carries
+elapsed time counted from `lastPromptAt` so a glance answers "quick reply
+or long haul".
+
+Slash-command turns split on the first space. With args the args are the
+prompt: a normal user bubble whose `/name` renders as a small mono chip.
+Arg-less commands (`/compact`, `/clear`) are plumbing: a neutral receding
+pill. Both take a copy-only long-press (still not rewind checkpoints).
+An optimistic send bubble that lingers past ~5s grows a "sending…" tag —
+on the happy path it retires into the real turn before the tag appears.
+
