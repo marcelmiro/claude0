@@ -10,7 +10,7 @@
 import { test, expect } from "bun:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { slashCommandIntent, resolvePaneSessionId, pickRepoPath, groupSessions, getLatestUserPrompt } from "./sessions";
+import { slashCommandIntent, resolvePaneSessionId, resolveActiveId, pickRepoPath, groupSessions, getLatestUserPrompt } from "./sessions";
 import type { Session } from "../types";
 
 test("extracts /implement-plan with its plan path", () => {
@@ -215,4 +215,24 @@ test("recovers a last-prompt buried past the first 64KB window, with multi-byte 
 test("empty result when no last-prompt record exists", async () => {
   const path = await writeTranscript([JSON.stringify({ type: "user", message: { content: "hi" } })]);
   expect(await getLatestUserPrompt(path)).toBe("");
+});
+
+// --- resolveActiveId — a known id with no transcript --------------------------------
+// Claude writes a NEW session's JSONL lazily (first turn); /clear and forks write eagerly.
+// A phone-created session left unprompted must keep its minted id through that window;
+// any other transcript-less known id is a stale pane→session mapping.
+
+test("resolveActiveId: a transcript-backed pane keeps the hook id, else the transcript's", () => {
+  expect(resolveActiveId("hook", "tx", undefined)).toBe("hook");
+  expect(resolveActiveId(undefined, "tx", undefined)).toBe("tx");
+});
+
+test("resolveActiveId: no transcript + id dictated by --session-id on the live process → keep it", () => {
+  expect(resolveActiveId("minted", undefined, "minted")).toBe("minted");
+});
+
+test("resolveActiveId: no transcript + id NOT on the process argv → stale mapping, blank for re-matching", () => {
+  expect(resolveActiveId("stale", undefined, undefined)).toBe("");
+  expect(resolveActiveId("other", undefined, "launch-id")).toBe("");
+  expect(resolveActiveId(undefined, undefined, "minted")).toBe("");
 });

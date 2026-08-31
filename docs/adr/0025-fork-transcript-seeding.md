@@ -51,3 +51,22 @@ destination dir degrades to the old behavior (empty until first turn), not a fai
 - **Special-casing discovery to trust the pane map without a backing JSONL** — makes
   the fork *listed* but still unreadable, and punches a hole in the blank-id rule that
   guards against stale pane files.
+
+## Addendum: phone-created sessions keep their dictated id (2026-08-26)
+
+`createSession` has the same lazy-JSONL window as a fork, and seeding is not available
+to it: `claude --session-id <id>` refuses to start when `<id>.jsonl` already exists
+("Session ID … is already in use" — verified live on 2.1.246); only `--fork-session`
+skips that check. So a session launched from the phone and left unprompted surfaced as
+an **id-less** row (`id: ""`) in Needs You — open and archive both build
+`/sessions/<id>/…` and never matched a route — and the daemon persisted the empty id
+as a snapshot row.
+
+Resolution: the blank-id rule now has one exact exception (`resolveActiveId`,
+`core/sessions.ts`). A known id with no transcript is kept iff the pane's live Claude
+process was launched with `--session-id <that same id>` — the id is on the process's own
+argv, which a stale pane file cannot produce, so the stale-mapping guard the "Rejected"
+entry above defends is not weakened. Every id learned any other way still resets to `""`
+when its JSONL is missing. The other lazy-window suspects need nothing: forks keep the
+seed (it makes them *readable*, not just listed), and `/clear` writes the new session's
+JSONL eagerly (verified on 2.1.246).
