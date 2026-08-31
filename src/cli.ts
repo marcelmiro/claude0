@@ -21,7 +21,7 @@ import { findClaudeProcesses } from "./core/process";
 import { detectStatus } from "./core/status";
 import { eventSourcedStatus } from "./core/hook-events";
 import { nativeStatus, resolveStatus } from "./core/session-state";
-import { loadNameCache, slugify } from "./core/names";
+import { loadNameCache, getSessionName, slugify } from "./core/names";
 import { PATHS, DEFAULT_CONFIG, loadConfig, saveConfig, ensureUserConfig, tmuxKeys, resolveRole } from "./core/config";
 import { renderTmuxFragment, renderTerminalLauncher, importAccepted, installedHookVersion, runDoctor, envValue, REQUIRED_TOOLS, CLIENT_TOOLS } from "./core/doctor";
 import type { Config, DeploymentRole } from "./types";
@@ -377,7 +377,7 @@ export async function list(): Promise<void> {
     const attention = s.needsAttention ? " ⚡" : "";
     const ctx = s.contextPercent ? ` ${s.contextPercent}%` : "";
     console.log(
-      `${icon} ${s.name.padEnd(24)} ${s.status.padEnd(8)} statusSource=${s.statusSource.padEnd(7)} ${s.repo}${ctx}${attention}`,
+      `${icon} ${s.name.padEnd(32)} ${s.status.padEnd(8)} statusSource=${s.statusSource.padEnd(7)} ${s.repo}${ctx}${attention}`,
     );
   }
 }
@@ -432,7 +432,7 @@ export async function switchTo(name?: string): Promise<void> {
       const normalizedTty = pane.tty.replace(/^\/dev\//, "");
       const sessionId = ttyToSessionId.get(normalizedTty);
       if (sessionId) {
-        const cachedName = nameCache.names[sessionId];
+        const cachedName = getSessionName(sessionId, nameCache);
         if (cachedName) {
           // Match against both the normalized name ("fix auth") and its tmux slug
           // ("fix-auth") — the user likely types the slug shown on the tab.

@@ -78,6 +78,7 @@ Processes & caches:
 | Wrapping Claude Code (structured channels vs guarded keystrokes) | [6](docs/adr/0006-wrapping-claude-code.md) | `core/tmux.ts`, `core/session-api.ts` |
 | Inbox lifecycle, sidebar, daemon, snooze/wake, portkey Home | [13](docs/adr/0013-inbox-lifecycle-model.md) + addenda (2 interaction grammar, 6 portkey inbox, 7 Enter/peek, 8 freshness/process shape) | `core/inbox-*.ts`, `src/sidebar/` |
 | Presence, notification tiers, window prefixes | [14](docs/adr/0014-presence-is-client-activity.md), [19](docs/adr/0019-presence-is-client-activity-everywhere.md) | `core/presence.ts`, `core/notifications.ts` |
+| AI session naming (generation, cache, label resolution) | [28](docs/adr/0028-ai-only-session-naming.md) | `core/names.ts`, `src/monitor.ts` |
 | Web Push, per-device routing, tap attribution | [24](docs/adr/0024-web-push-replaces-ntfy.md), [10](docs/adr/0010-notification-taps-attributed-server-side.md) | `core/web-push.ts`, `shared/tap-target.js` |
 | SSE sync — versioned state push, not doorbells; status overlays | [18](docs/adr/0018-versioned-state-push.md) | `bridge/stream.ts`, `shared/sync.js` |
 | Changed-files viewer, baseline, pushed-vs-unpushed tiers, PR link | [1](docs/adr/0001-changed-files-is-a-glance-surface.md), [2](docs/adr/0002-changed-files-baseline.md), [11](docs/adr/0011-pushed-vs-unpushed-is-a-tier-chain.md), [5](docs/adr/0005-link-out-to-the-pull-request.md) | `core/repo-files.ts`, `shared/diff-lines.js`, `core/pull-request.ts` |

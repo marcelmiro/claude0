@@ -2,7 +2,7 @@ import { homedir } from "os";
 import type { SessionIndexEntry, SessionIndex, Session } from "../types";
 import { getBaseRepoPath, extractTicketId } from "./git";
 import { repoNameFromPath } from "./sessions";
-import { slugify, type NameCache } from "./names";
+import { slugify, getSessionName, type NameCache } from "./names";
 import { isConversationalRecord } from "./last-turn";
 
 const home = homedir();
@@ -167,7 +167,7 @@ export async function loadAllSessions(
       }
 
       const repo = repoNameFromPath(baseRepoPath);
-      const aiName = nameCache.names[entry.sessionId] || "";
+      const aiName = getSessionName(entry.sessionId, nameCache);
       const ticketId = extractTicketId(entry.gitBranch || "") || "";
       const activeSession = activeById.get(entry.sessionId);
 

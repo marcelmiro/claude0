@@ -1157,7 +1157,7 @@ function openHistoryRow(row) {
         repo: row.repo,
         branch: row.branch,
         name: row.name,
-        label: row.name || row.summary || row.branch,
+        label: listTitle(row),
         status: "archived",
         restorable: row.restorable,
         summary: row.summary,
@@ -1599,8 +1599,10 @@ function formatAge(iso) {
 
 // Row title mirrors `claude0 list`: the tmux-style AI name (repo is the group header, so
 // just the name). Falls back to the summary/branch label only when unnamed.
+// The ONE title fallback chain — every surface that titles a session (inbox row,
+// detail header, action sheet, history rows) goes through this, so they can't drift.
 function listTitle(s) {
-  return s.name || s.label || s.branch || s.id.slice(0, 8);
+  return s.name || s.label || s.summary || s.branch || s.id.slice(0, 8);
 }
 
 // Mirrors the static boot spinner in index.html exactly, so when Preact mounts and
@@ -1881,7 +1883,7 @@ function History() {
   };
 
   const renderRow = (row) => {
-    const title = row.name || row.summary || row.branch || row.id.slice(0, 8);
+    const title = listTitle(row);
     // Search shows WHY it matched; browse shows how the session ended (or its summary).
     // Never echo the title as the sub-line.
     const rawSub = q && row.matchSnippet ? row.matchSnippet : row.lastAssistant || row.summary || "";

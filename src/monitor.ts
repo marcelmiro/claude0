@@ -21,35 +21,11 @@ import { classifyActivity } from "./core/presence";
 import { detectScriptWaits } from "./core/script-wait";
 import { getBaseRepoPath } from "./core/git";
 import { repoNameFromPath } from "./core/sessions";
-import { loadNameCache, saveNameCache, generateAIName, getSessionName, slugify, acquireNamingLock, releaseNamingLock, type NameCache } from "./core/names";
-import { disambiguateNames } from "./core/session-label";
-import { findActiveSessionInfo } from "./core/sessions";
+import { loadNameCache, saveNameCache, generateAIName, getSessionName, slugify, acquireNamingLock, releaseNamingLock, pruneNameCacheIfLarge, loadNamingSkips, setNamingSkip, needsNaming, type NameCache } from "./core/names";
+import { disambiguateByRepo } from "./core/session-label";
+import { findActiveSessionInfo, readNamingExtras } from "./core/sessions";
 import { homedir } from "os";
 import type { Session, AggregateStatus, PaneInfo, ClaudeProcess } from "./types";
-
-// ---------------------------------------------------------------------------
-// Naming skip tracking — persistent across monitor invocations
-// ---------------------------------------------------------------------------
-
-const NAMING_SKIP_PATH = `${homedir()}/.config/claude0/naming-skip.json`;
-const NAMING_SKIP_TTL = 5 * 60_000; // 5 minutes
-
-type NamingSkipMap = Record<string, number>; // sessionId → timestamp
-
-async function loadNamingSkips(): Promise<NamingSkipMap> {
-  try {
-    const raw = await Bun.file(NAMING_SKIP_PATH).text();
-    return JSON.parse(raw);
-  } catch {
-    return {};
-  }
-}
-
-async function saveNamingSkips(skips: NamingSkipMap): Promise<void> {
-  try {
-    await Bun.write(NAMING_SKIP_PATH, JSON.stringify(skips));
-  } catch {}
-}
 
 // ---------------------------------------------------------------------------
 // Debug logging — only active when ~/.config/claude0/debug.log exists
@@ -327,13 +303,13 @@ async function main(): Promise<void> {
       windowPrefix: config.ui.windowPrefix,
       nativeNotification: config.notifications.native,
       terminalBundleId: config.notifications.terminalBundleId,
-    });
+    }, nameCache);
   }
 
   // Approvals HELD by the PreToolUse hook never render the pane picker, so the
   // status stays `running` and no transition can push for them — tell the driving
   // phone directly (once per hold, skipped while it watches via SSE).
-  await dispatchHeldApprovalPushes(sessions);
+  await dispatchHeldApprovalPushes(sessions, nameCache);
 
   // Script-wait detection: a ready session may still be driving a run_in_background
   // script (the turn genuinely ends while the runner lives — pr-triage waits this way
@@ -373,25 +349,7 @@ async function main(): Promise<void> {
       });
     }
   }
-  // Disambiguate same-repo name collisions across single-pane windows (fix-auth,
-  // fix-auth-2). Keyed on sessionId so the suffix matches the TUI list and phone.
-  const nameItemsByRepo = new Map<string, Array<{ id: string; name: string }>>();
-  for (const win of windowMap.values()) {
-    if (win.paneIds.length !== 1) continue;
-    const sid = paneSessionMap[win.paneIds[0]];
-    if (!sid) continue;
-    const nm = getSessionName(sid, nameCache);
-    if (!nm) continue;
-    const s = sessions.find(s => s.tmuxPane?.paneId === win.paneIds[0]);
-    const repo = s ? repoNameFromPath(s.baseRepoPath) : "unknown";
-    const bucket = nameItemsByRepo.get(repo);
-    if (bucket) bucket.push({ id: sid, name: nm });
-    else nameItemsByRepo.set(repo, [{ id: sid, name: nm }]);
-  }
-  const dnMap = new Map<string, string>();
-  for (const items of nameItemsByRepo.values()) {
-    for (const [id, name] of disambiguateNames(items)) dnMap.set(id, name);
-  }
+  const dnMap = buildRepoDnMap(sessions, paneSessionMap, nameCache);
 
   for (const win of windowMap.values()) {
     const prefix = desiredPrefix(win.hasAttention, win.hasRunning, win.hasScriptWait);
@@ -411,7 +369,7 @@ async function main(): Promise<void> {
     if (hasCleared) {
       baseName = abbreviateRepo(repo);
     } else if (win.paneIds.length === 1) {
-      // Single-pane: {repo}·{ai-or-pinned-name} or just {repo}
+      // Single-pane: {repo}/{ai-name} or just {repo}
       const sessionId = paneSessionMap[win.paneIds[0]];
       const aiName = sessionId ? (dnMap.get(sessionId) ?? getSessionName(sessionId, nameCache)) : undefined;
       baseName = buildBaseName(repo, aiName ? slugify(aiName) || undefined : undefined);
@@ -469,6 +427,28 @@ async function main(): Promise<void> {
  * Phase 2 — runs after stdout output so tmux doesn't wait.
  * Hook events are already processed in Phase 1. This handles pane cleanup and AI naming.
  */
+/**
+ * Per-repo name disambiguation over every live named session — keyed on sessionId
+ * and fed the same per-repo session set the bridge uses, so tmux and the phone
+ * assign identical " 2"/" 3" suffixes.
+ */
+function buildRepoDnMap(
+  sessions: Session[],
+  paneSessionMap: Record<string, string>,
+  cache: NameCache,
+): Map<string, string> {
+  const items: Array<{ id: string; name: string; repo: string }> = [];
+  for (const s of sessions) {
+    if (!s.tmuxPane) continue;
+    const sid = paneSessionMap[s.tmuxPane.paneId];
+    if (!sid) continue;
+    const nm = getSessionName(sid, cache);
+    if (!nm) continue;
+    items.push({ id: sid, name: nm, repo: repoNameFromPath(s.baseRepoPath) });
+  }
+  return disambiguateByRepo(items);
+}
+
 async function phase2(
   sessions: Session[],
   paneSessionMap: Record<string, string>,
@@ -497,34 +477,16 @@ async function phase2(
   // the map's values are exactly the live sessions — reuse that liveness, no scan.
   reapDeadSessionFiles(new Set(Object.values(paneSessionMap)));
 
-  // AI naming: find one session with a sessionId but no name, skipping recent failures
+  // AI naming: find one session that needs a (re)name, skipping cooldowns.
+  // The cooldown doubles as a post-rename guard so summary churn doesn't
+  // thrash regenerations — it is not auto-cleared when a name exists.
   const namingSkips = await loadNamingSkips();
-  const now = Date.now();
-
-  // Prune expired skip entries
-  let skipsDirty = false;
-  for (const [sid, ts] of Object.entries(namingSkips)) {
-    if (now - ts > NAMING_SKIP_TTL) {
-      delete namingSkips[sid];
-      skipsDirty = true;
-    }
-  }
-
-  // namingSkips doubles as a post-rename cooldown so summary churn doesn't
-  // thrash regenerations. Don't auto-clear it when a name exists.
 
   const unnamed = sessions.find(s => {
     if (!s.tmuxPane) return false;
     const sessionId = paneSessionMap[s.tmuxPane.paneId];
-    if (!sessionId || namingSkips[sessionId]) return false;
-    if (nameCache.pinned[sessionId]) return false; // user-pinned — never regenerate
-    if (!nameCache.names[sessionId]) return true;
-    // Regenerate when the freshest convo signal (lastPrompt > summary) diverges
-    // from the source we last named off of. lastPrompt is needed because Claude
-    // doesn't always update its summary after /rewind or topic shifts.
-    const cachedSource = nameCache.sources[sessionId] || "";
-    const currentSignal = s.lastPrompt || s.summary || "";
-    return !!currentSignal && currentSignal !== cachedSource;
+    if (!sessionId || namingSkips.has(sessionId)) return false;
+    return needsNaming(nameCache, sessionId, s.lastPrompt || s.summary || "");
   });
 
   if (unnamed?.tmuxPane) {
@@ -540,47 +502,47 @@ async function phase2(
           // Get branch for naming context
           let branch = "";
           try { branch = (await Bun.$`git -C ${unnamed.repoPath} branch --show-current`.quiet().text()).trim(); } catch {}
-          const name = await generateAIName(firstPrompt, summary, branch, lastPrompt);
+          const { firstAssistant, lastAssistant } = await readNamingExtras(unnamed.repoPath, sessionId);
+          const name = await generateAIName({ firstPrompt, summary, branch, lastPrompt, firstAssistant, lastAssistant });
           if (name) {
-            // Reload-and-merge fresh pins: a pin set during the ≤15s claude -p run
+            // Reload-and-merge: a name the bridge wrote during the ≤15s claude -p run
             // must not be clobbered by this stale-cache save.
-            nameCache.pinned = (await loadNameCache()).pinned;
+            const fresh = await loadNameCache();
+            nameCache.names = { ...nameCache.names, ...fresh.names };
+            nameCache.sources = { ...nameCache.sources, ...fresh.sources };
             nameCache.names[sessionId] = name;
             // Store the freshest signal we used so future drift checks compare apples-to-apples
             nameCache.sources[sessionId] = lastPrompt || summary || firstPrompt;
+            await pruneNameCacheIfLarge(nameCache, projectsDir);
             await saveNameCache(nameCache);
             // Cooldown — prevents re-running claude -p on every minor summary edit
-            namingSkips[sessionId] = now;
-            skipsDirty = true;
+            await setNamingSkip(sessionId);
             await debugLog(`phase2: named session ${sessionId} → "${name}"`);
 
-            // Apply name to window immediately (with current prefix)
+            // Apply name to window immediately, preserving the current prefix and
+            // running the same per-repo disambiguation as the sync loop so a fresh
+            // collision gets its " 2" now, not one tick later.
             const currentWindowName = unnamed.tmuxPane.windowName;
             const prefix = currentWindowName.startsWith(ATTENTION_PREFIX) ? ATTENTION_PREFIX
               : currentWindowName.startsWith(RUNNING_PREFIX) ? RUNNING_PREFIX
               : currentWindowName.startsWith(SCRIPT_PREFIX) ? SCRIPT_PREFIX : "";
             const repo = repoNameFromPath(unnamed.baseRepoPath);
-            await renameWindow(unnamed.tmuxPane.sessionName, unnamed.tmuxPane.windowIndex, `${prefix}${buildBaseName(repo, slugify(name) || undefined)}`);
+            const dn = buildRepoDnMap(sessions, paneSessionMap, nameCache).get(sessionId) ?? name;
+            await renameWindow(unnamed.tmuxPane.sessionName, unnamed.tmuxPane.windowIndex, `${prefix}${buildBaseName(repo, slugify(dn) || undefined)}`);
           } else {
             // AI naming returned empty — skip for a while
-            namingSkips[sessionId] = now;
-            skipsDirty = true;
+            await setNamingSkip(sessionId);
             await debugLog(`phase2: skipping session ${sessionId} (AI returned empty name)`);
           }
         } else {
           // No session data found — skip for a while
-          namingSkips[sessionId] = now;
-          skipsDirty = true;
+          await setNamingSkip(sessionId);
           await debugLog(`phase2: skipping session ${sessionId} (no session data)`);
         }
       } finally {
         await releaseNamingLock();
       }
     }
-  }
-
-  if (skipsDirty) {
-    await saveNamingSkips(namingSkips);
   }
 }
 

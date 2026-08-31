@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { disambiguateNames } from "./session-label";
+import { disambiguateNames, disambiguateByRepo } from "./session-label";
 
 test("disambiguateNames: unique names map to themselves", () => {
   const m = disambiguateNames([
@@ -73,4 +73,15 @@ test("disambiguateNames: empty names are never suffixed", () => {
   ]);
   expect(m.get("a")).toBe("");
   expect(m.get("b")).toBe("");
+});
+
+test("disambiguateByRepo: collisions suffix within a repo, never across repos", () => {
+  const out = disambiguateByRepo([
+    { id: "a", name: "Fix Auth", repo: "r1" },
+    { id: "b", name: "Fix Auth", repo: "r1" },
+    { id: "c", name: "Fix Auth", repo: "r2" },
+  ]);
+  expect(out.get("a")).toBe("Fix Auth");
+  expect(out.get("b")).toBe("Fix Auth 2");
+  expect(out.get("c")).toBe("Fix Auth");
 });

@@ -41,6 +41,27 @@ export function disambiguateNames(items: Array<{ id: string; name: string }>): M
 }
 
 /**
+ * Per-repo disambiguation: group by repo, suffix collisions within each group.
+ * Every surface (tmux windows, TUI list, phone) feeds the same shape through
+ * this, so the same colliding pair gets the same suffixes everywhere.
+ */
+export function disambiguateByRepo(
+  items: Array<{ id: string; name: string; repo: string }>,
+): Map<string, string> {
+  const byRepo = new Map<string, Array<{ id: string; name: string }>>();
+  for (const { id, name, repo } of items) {
+    const bucket = byRepo.get(repo);
+    if (bucket) bucket.push({ id, name });
+    else byRepo.set(repo, [{ id, name }]);
+  }
+  const out = new Map<string, string>();
+  for (const bucket of byRepo.values()) {
+    for (const [id, name] of disambiguateNames(bucket)) out.set(id, name);
+  }
+  return out;
+}
+
+/**
  * Build a display label: ticket+name > ticket+suffix > name > branch.
  * `nameOverride` (e.g. a disambiguated name) replaces `session.name` when provided;
  * callers must NOT mutate `session.name` since it feeds drift-source comparison,

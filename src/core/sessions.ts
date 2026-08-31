@@ -622,6 +622,116 @@ export async function findActiveSessionInfo(
   return readSessionInfo(projectDir, knownSessionId);
 }
 
+/**
+ * Assistant-reply snippets for AI naming, read lazily at naming time only (never on
+ * discovery sweeps — two extra transcript scans are fine per `claude -p` call, not per
+ * tick). The first assistant reply matters most: for meta-prompts ("grill me on this
+ * plan") it's the only place the actual subject of the work appears.
+ */
+export async function readNamingExtras(
+  repoPath: string,
+  sessionId: string,
+  projectsDir = `${homedir()}/.claude/projects`,
+): Promise<{ firstAssistant: string; lastAssistant: string }> {
+  const none = { firstAssistant: "", lastAssistant: "" };
+  try {
+    const encodedPath = repoPath.replace(/\//g, "-");
+    const projectDir = await resolveProjectDir(projectsDir, encodedPath, sessionId);
+    if (!projectDir) return none;
+    const jsonlPath = `${projectDir}/${sessionId}.jsonl`;
+    return {
+      firstAssistant: await getFirstAssistantReply(jsonlPath),
+      lastAssistant: await getLatestAssistantReply(jsonlPath),
+    };
+  } catch {
+    return none;
+  }
+}
+
+/** First text block from an assistant reply, or "". */
+function assistantText(parsed: { type?: string; message?: { content?: unknown } }): string {
+  if (parsed.type !== "assistant") return "";
+  const content = parsed.message?.content;
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    const block = content.find((b: { type: string; text?: string }) => b.type === "text");
+    return block?.text ?? "";
+  }
+  return "";
+}
+
+/** Stream from the top and return the first assistant text reply (sits near the head). */
+async function getFirstAssistantReply(jsonlPath: string): Promise<string> {
+  try {
+    for await (const line of jsonlLines(jsonlPath)) {
+      if (!line.includes('"type":"assistant"')) continue;
+      try {
+        const text = assistantText(JSON.parse(line));
+        if (!text) continue;
+        const clean = text.replace(/\s+/g, " ").trim();
+        return clean.length > 300 ? clean.slice(0, 300) + "..." : clean;
+      } catch {
+        continue;
+      }
+    }
+    return "";
+  } catch {
+    return "";
+  }
+}
+
+/** Latest assistant text reply via the shared backward tail scan. */
+async function getLatestAssistantReply(jsonlPath: string): Promise<string> {
+  return scanTailForLine(jsonlPath, (line) => {
+    if (!line.includes('"type":"assistant"')) return undefined;
+    try {
+      const text = assistantText(JSON.parse(line));
+      if (!text) return undefined;
+      const clean = text.replace(/\s+/g, " ").trim();
+      return clean.length > 300 ? clean.slice(0, 300) + "..." : clean;
+    } catch {
+      return undefined;
+    }
+  });
+}
+
+/**
+ * Backward doubling-window byte scan over a JSONL file, newest-line-first.
+ * `matcher` runs on each candidate line; return a non-empty string to stop the
+ * scan and return it. Offset math is on BYTES, never decoded text — a multi-byte
+ * character split at the window edge makes UTF-16 lengths lie about file
+ * positions. A mid-file slice starts inside some record — its remainder ends at
+ * the first newline: skipped for parsing, its BYTE length positions the next
+ * window's end. No newline at all means the window sits inside one huge line:
+ * widen and retry with `scannedTo` unchanged so the line is captured whole.
+ */
+async function scanTailForLine(path: string, matcher: (line: string) => string | undefined): Promise<string> {
+  try {
+    const file = Bun.file(path);
+    const stat = await file.stat();
+    if (!stat) return "";
+    let scannedTo = stat.size; // bytes at/after this offset were covered by a previous window
+    for (let window = 64 * 1024; ; window *= 2) {
+      const start = Math.max(0, stat.size - window);
+      const bytes = new Uint8Array(await file.slice(start, scannedTo).arrayBuffer());
+      const firstNl = start > 0 ? bytes.indexOf(0x0a) : -1;
+      if (start > 0 && firstNl === -1) continue;
+      const chunk = new TextDecoder().decode(start > 0 ? bytes.subarray(firstNl + 1) : bytes);
+      const lines = chunk.split("\n");
+      for (let i = lines.length - 1; i >= 0; i--) {
+        if (!lines[i]) continue;
+        const hit = matcher(lines[i]);
+        if (hit) return hit;
+      }
+      if (start === 0) return "";
+      // Re-scan overlap is bounded: the next pass reads [newStart, start+partial).
+      scannedTo = start + firstNl + 1;
+    }
+  } catch {
+    return "";
+  }
+}
+
 /** Find the project dir containing a session's JSONL. Tries expected dir first, then scans. */
 async function resolveProjectDir(projectsDir: string, encodedPath: string, sessionId: string): Promise<string | null> {
   const expectedDir = `${projectsDir}/${encodedPath}`;
@@ -1139,48 +1249,22 @@ async function getFirstUserPrompt(sessionPath: string): Promise<string> {
  * Returns a truncated string (first 200 chars) or empty string on failure.
  */
 export async function getLatestUserPrompt(sessionPath: string): Promise<string> {
-  try {
-    const file = Bun.file(sessionPath);
-    const stat = await file.stat();
-    if (!stat) return "";
-    // Backward doubling-window scan (the readLastPromptAt pattern): the newest
-    // last-prompt record sits near the tail, so this reads KBs of a multi-MB file —
-    // and this runs for EVERY active session on EVERY discovery sweep. Offset math is
-    // done on BYTES (the raw slice), never on decoded text — a multi-byte character
-    // split at the window edge makes UTF-16 lengths lie about file positions.
-    let scannedTo = stat.size; // bytes at/after this offset were covered by a previous window
-    for (let window = 64 * 1024; ; window *= 2) {
-      const start = Math.max(0, stat.size - window);
-      const bytes = new Uint8Array(await file.slice(start, scannedTo).arrayBuffer());
-      // A mid-file slice starts inside some record — its remainder ends at the first
-      // newline. Skip it for parsing; its BYTE length positions the next window's end.
-      // No newline at all means the window sits inside one huge line: widen and retry
-      // with scannedTo unchanged, so the line is eventually captured whole.
-      const firstNl = start > 0 ? bytes.indexOf(0x0a) : -1;
-      if (start > 0 && firstNl === -1) continue;
-      const chunk = new TextDecoder().decode(start > 0 ? bytes.subarray(firstNl + 1) : bytes);
-      const lines = chunk.split("\n");
-      for (let i = lines.length - 1; i >= 0; i--) {
-        const line = lines[i];
-        if (!line || !line.includes('"type":"last-prompt"')) continue;
-        try {
-          const parsed = JSON.parse(line);
-          if (parsed.type !== "last-prompt") continue;
-          const text: string = parsed.lastPrompt || "";
-          if (!text) continue;
-          const clean = text.replace(/\s+/g, " ").trim();
-          return clean.length > 200 ? clean.slice(0, 200) + "..." : clean;
-        } catch {
-          continue;
-        }
-      }
-      if (start === 0) return "";
-      // Re-scan overlap is bounded: the next pass reads [newStart, start+partial).
-      scannedTo = start + firstNl + 1;
+  // Tail scan (the readLastPromptAt pattern): the newest last-prompt record sits
+  // near the end, so this reads KBs of a multi-MB file — and it runs for EVERY
+  // active session on EVERY discovery sweep.
+  return scanTailForLine(sessionPath, (line) => {
+    if (!line.includes('"type":"last-prompt"')) return undefined;
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed.type !== "last-prompt") return undefined;
+      const text: string = parsed.lastPrompt || "";
+      if (!text) return undefined;
+      const clean = text.replace(/\s+/g, " ").trim();
+      return clean.length > 200 ? clean.slice(0, 200) + "..." : clean;
+    } catch {
+      return undefined;
     }
-  } catch {
-    return "";
-  }
+  });
 }
 
 export interface SessionTailInfo {

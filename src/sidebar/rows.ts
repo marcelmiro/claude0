@@ -113,7 +113,7 @@ function sessionLine(
   opts: { right: string; rightColor: string; rightRendered?: string; oneLine?: boolean },
 ): string[] {
   const right = truncate(opts.right, Math.max(2, width - 9));
-  const name = displayName(s.name);
+  const name = displayName(s.name) || s.id.slice(0, 8);
   const rightWidth = plainLen(right);
   const label = truncate(name, width - 1 - rightWidth - 1);
   const labelWidth = plainLen(label);

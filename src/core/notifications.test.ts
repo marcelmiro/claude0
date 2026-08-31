@@ -58,6 +58,14 @@ test('pushLabel humanizes the ai-name → "claude0 · Fix Auth"', () => {
   expect(pushLabel(mkSession({ name: "claude0/fix-auth" }))).toBe("claude0 · Fix Auth");
 });
 
+test("pushLabel prefers the cache's title form over the lossy window slug", () => {
+  const cache = { version: 6 as const, names: { s1: "Notifications Config" }, sources: {} };
+  const s = mkSession({ id: "s1", name: "claude0/notif-cfg" });
+  expect(pushLabel(s, cache)).toBe("claude0 · Notifications Config");
+  // Unresolved session falls back to un-slugging the window name.
+  expect(pushLabel(mkSession({ id: "s2", name: "claude0/notif-cfg" }), cache)).toBe("claude0 · Notif Cfg");
+});
+
 test("pushLabel falls back to repo alone when the window name has no ai-name", () => {
   expect(pushLabel(mkSession({ name: "claude0", repo: "claude0" }))).toBe("claude0");
 });

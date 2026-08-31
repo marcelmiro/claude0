@@ -26,7 +26,7 @@ import {
   type FSWatcher,
 } from "node:fs";
 import { relative } from "node:path";
-import { discoverSessions } from "../core/sessions";
+import { discoverSessions, readNamingExtras } from "../core/sessions";
 import {
   getTranscript,
   getSubagentTranscript,
@@ -84,9 +84,13 @@ import {
   getSessionName,
   acquireNamingLock,
   releaseNamingLock,
+  loadNamingSkips,
+  setNamingSkip,
+  needsNaming,
+  pruneNameCacheIfLarge,
   type NameCache,
 } from "../core/names";
-import { buildSessionLabel, disambiguateNames } from "../core/session-label";
+import { buildSessionLabel, disambiguateByRepo } from "../core/session-label";
 import { loadState, saveState } from "../core/state";
 import { InboxStore } from "../core/inbox-store";
 import { composeSessions, isWakePreset, presetWakeAt, type InboxSession } from "../core/inbox-model";
@@ -251,10 +255,6 @@ function pruneOldUploads(): void {
 // concurrent subprocess swarms.
 // ---------------------------------------------------------------------------
 
-// A "main"/"master" branch tells you nothing about a session; for those, fall
-// back to the conversation summary so the phone shows what each session is about.
-const GENERIC_BRANCH = new Set(["main", "master", "develop", "dev", ""]);
-
 function snippet(text: string, max = 80): string {
   const one = text.replace(/\s+/g, " ").trim();
   return one.length > max ? `${one.slice(0, max - 1)}…` : one;
@@ -262,13 +262,14 @@ function snippet(text: string, max = 80): string {
 
 /**
  * Primary display label: AI name / ticket / branch (via buildSessionLabel), but
- * when that degrades to a bare generic branch (`main`), prefer a summary or
- * first-prompt snippet — the only signal that distinguishes those sessions.
+ * when that degrades to a bare branch — i.e. the session has no name yet — prefer
+ * a first-prompt/summary snippet as the temporary title: what the user asked for
+ * identifies the session better than any branch name.
  */
 function sessionLabel(s: Session): string {
   const base = buildSessionLabel(s);
-  if (base === s.branch && GENERIC_BRANCH.has(s.branch)) {
-    const snip = snippet(s.summary) || snippet(s.firstPrompt);
+  if (base === s.branch) {
+    const snip = snippet(s.firstPrompt) || snippet(s.summary);
     if (snip) return snip;
   }
   return base;
@@ -454,7 +455,7 @@ async function projectSnapshotOnly(
     branch: s.branch ?? "",
     status: "archived",
     name: s.name,
-    label: s.name,
+    label: s.name || s.branch || s.id.slice(0, 8),
     pending: null,
     unread: false,
     messageCount: 0,
@@ -707,21 +708,12 @@ async function computeSessionsPayload(): Promise<unknown> {
       if (isPermissionPrompt(await capturePane(s.tmuxPane.paneId))) approvalIds.add(s.id);
     }),
   );
-  // Apply the cached name (pinned wins over AI-generated), mirroring the TUI/tmux.
+  // Apply the cached AI name, mirroring the TUI/tmux.
   for (const s of tracked) s.name = getSessionName(s.id, nameCache) || s.name;
-  // Disambiguate same-repo name collisions with a -2/-3 suffix, matching the TUI/tmux.
-  const dnMap = new Map<string, string>();
-  const byRepo = new Map<string, Array<{ id: string; name: string }>>();
-  for (const s of tracked) {
-    const bucket = byRepo.get(s.repo);
-    if (bucket) bucket.push({ id: s.id, name: s.name });
-    else byRepo.set(s.repo, [{ id: s.id, name: s.name }]);
-  }
-  for (const items of byRepo.values()) {
-    for (const [id, name] of disambiguateNames(items)) dnMap.set(id, name);
-  }
+  // Disambiguate same-repo name collisions with a " 2"/" 3" suffix, matching the TUI/tmux.
+  const dnMap = disambiguateByRepo(tracked.map((s) => ({ id: s.id, name: s.name, repo: s.repo })));
   // Apply the suffixed name onto the projection so the phone's name-first row title
-  // (listTitle = s.name || s.label) shows `-2`/`-3`, matching the TUI/tmux.
+  // (listTitle = s.name || s.label) shows ` 2`/` 3`, matching the TUI/tmux.
   for (const s of tracked) s.name = dnMap.get(s.id) ?? s.name;
   // Restore state for archived sessions only (disk checks) — computed in an async pass
   // before the sync `.map()`, mirroring the approvalIds loop above.
@@ -824,53 +816,68 @@ async function computeSessionsPayload(): Promise<unknown> {
 }
 
 // --- Background AI naming -------------------------------------------------
-// Generate tmux-style names for sessions the cache hasn't named yet, reusing the
-// monitor's generateAIName + the shared name cache. Lock-coordinated so the bridge
-// and monitor never double-name; failed attempts back off for NAMING_SKIP_TTL.
+// Generate tmux-style names for unnamed AND drifted sessions, reusing the monitor's
+// generateAIName + the shared name cache and skip file. Drift refresh matters here:
+// the monitor only ticks while a tmux client is attached, so on a phone-only day the
+// bridge is the sole naming authority. Lock-coordinated so the bridge and monitor
+// never double-name; every attempt (success or failure) backs off for NAMING_SKIP_TTL.
 
 let namingActive = false;
-const namingSkip = new Map<string, number>(); // sessionId → last failed-attempt ts
-const NAMING_SKIP_TTL = 5 * 60_000;
 const NAMING_BATCH = 3; // keep concurrent `claude -p` low so cold starts don't starve past the timeout
+const PROJECTS_DIR = `${homedir()}/.claude/projects`;
 
 function maybeGenerateNames(sessions: Session[], cache: NameCache): void {
   if (namingActive) return;
-  const now = Date.now();
-  const todo = sessions
-    .filter(
-      (s) =>
-        s.id &&
-        !cache.names[s.id] &&
-        !cache.pinned[s.id] &&
-        now - (namingSkip.get(s.id) ?? 0) > NAMING_SKIP_TTL &&
-        (s.firstPrompt || s.summary || s.lastPrompt),
-    )
-    .slice(0, NAMING_BATCH);
-  if (todo.length === 0) return;
-
   namingActive = true;
+  let locked = false;
   void (async () => {
     try {
-      if (!(await acquireNamingLock())) return; // monitor is naming — skip this cycle
-      const named: Array<[string, string]> = [];
+      const skips = await loadNamingSkips();
+      const todo = sessions
+        .filter(
+          (s) =>
+            s.id &&
+            !skips.has(s.id) &&
+            (s.firstPrompt || s.summary || s.lastPrompt) &&
+            needsNaming(cache, s.id, s.lastPrompt || s.summary || ""),
+        )
+        .slice(0, NAMING_BATCH);
+      if (todo.length === 0) return;
+      locked = await acquireNamingLock();
+      if (!locked) return; // monitor is naming — skip this cycle
+      const named: Array<[id: string, name: string, source: string]> = [];
       await Promise.all(
         todo.map(async (s) => {
-          const name = await generateAIName(s.firstPrompt, s.summary, s.branch, s.lastPrompt);
-          if (name) named.push([s.id, name]);
-          else namingSkip.set(s.id, Date.now());
+          const extras = await readNamingExtras(s.repoPath, s.id);
+          const name = await generateAIName({
+            firstPrompt: s.firstPrompt,
+            summary: s.summary,
+            branch: s.branch,
+            lastPrompt: s.lastPrompt,
+            ...extras,
+          });
+          // Cooldown on success too — the post-rename guard against drift-thrash.
+          await setNamingSkip(s.id);
+          if (name) named.push([s.id, name, s.lastPrompt || s.summary || s.firstPrompt]);
         }),
       );
       if (named.length > 0) {
         // Reload under the lock so we merge onto any names the monitor wrote meanwhile.
         const fresh = await loadNameCache();
-        for (const [id, name] of named) fresh.names[id] = name;
+        for (const [id, name, source] of named) {
+          fresh.names[id] = name;
+          // Written so the monitor's drift check agrees on what this name was
+          // based on — without it, the monitor re-names every bridge-named session.
+          fresh.sources[id] = source;
+        }
+        await pruneNameCacheIfLarge(fresh, PROJECTS_DIR);
         await saveNameCache(fresh);
         kickSessionsPush(); // re-project + push with the new names
       }
     } catch {
       // naming is best-effort — never let it crash the server
     } finally {
-      await releaseNamingLock();
+      if (locked) await releaseNamingLock();
       namingActive = false;
     }
   })();

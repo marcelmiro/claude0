@@ -6,13 +6,13 @@
 import { C } from "./colors";
 import { handleTextInputKey, renderTextWithCursor } from "./text-input";
 
-export type SpaceMenuLevel = "root" | "send-message" | "pin-name";
+export type SpaceMenuLevel = "root" | "send-message";
 
 export interface SpaceMenuState {
   level: SpaceMenuLevel;
   /** Back target when exiting an input level */
   previousLevel?: SpaceMenuLevel;
-  /** Text input state, shared by send-message and pin-name */
+  /** Text input state for send-message */
   messageText: string;
   messageCursor: number;
   /**
@@ -31,9 +31,7 @@ export type SpaceMenuAction =
   | { type: "exec"; command: "copy" | "rename" | "kill" | "fork" }
   | { type: "send-keys"; keys: string[] }
   | { type: "send-text"; text: string }
-  | { type: "start-input" }
-  | { type: "start-pin-input" }
-  | { type: "pin-name"; text: string };
+  | { type: "start-input" };
 
 // --- State lifecycle ---
 
@@ -56,7 +54,6 @@ function renderRoot(canSendMessage: boolean): string {
   const lines = [
     keyLabel("c", "copy"),
     keyLabel("r", "rename"),
-    keyLabel("R", "pin name"),
     keyLabel("x", "kill"),
     keyLabel("f", "fork"),
   ];
@@ -81,8 +78,6 @@ export function renderSpaceMenu(state: SpaceMenuState): string {
       return renderRoot(state.canSendMessage);
     case "send-message":
       return renderTextLevel("Send message", "Enter send \u00b7 Esc back", state.messageText, state.messageCursor);
-    case "pin-name":
-      return renderTextLevel("Pin name", "Enter pin \u00b7 Esc back", state.messageText, state.messageCursor);
   }
 }
 
@@ -91,10 +86,9 @@ export function renderSpaceMenu(state: SpaceMenuState): string {
 export function getMenuDimensions(state: SpaceMenuState): { width: number; height: number } {
   switch (state.level) {
     case "root":
-      // +1 for the "R pin name" line; +1 more when send-message is offered.
-      return { width: 24, height: state.canSendMessage ? 8 : 7 };
+      // +1 when send-message is offered.
+      return { width: 24, height: state.canSendMessage ? 7 : 6 };
     case "send-message":
-    case "pin-name":
       return { width: 42, height: 7 };
   }
 }
@@ -111,8 +105,6 @@ export function handleSpaceMenuKey(
       return handleRootKey(state, keyName, ch);
     case "send-message":
       return handleTextLevelKey(state, keyName, ch, (text) => ({ type: "send-text", text }));
-    case "pin-name":
-      return handleTextLevelKey(state, keyName, ch, (text) => ({ type: "pin-name", text }));
   }
 }
 
@@ -121,7 +113,6 @@ function handleRootKey(state: SpaceMenuState, _keyName: string, ch: string): Spa
     case "m": return state.canSendMessage ? { type: "start-input" } : { type: "noop" };
     case "c": return { type: "exec", command: "copy" };
     case "r": return { type: "exec", command: "rename" };
-    case "R": return { type: "start-pin-input" };
     case "x": return { type: "exec", command: "kill" };
     case "f": return { type: "exec", command: "fork" };
     default: return { type: "close" };

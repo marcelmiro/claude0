@@ -44,11 +44,60 @@ export async function releaseNamingLock(): Promise<void> {
   try { const { unlink } = await import("fs/promises"); await unlink(NAMING_LOCK); } catch {}
 }
 
+// ---------------------------------------------------------------------------
+// Naming skip/cooldown — shared by the monitor and the bridge so a failed or
+// fresh generation backs off across processes. One marker file per sessionId
+// (mtime = when the cooldown started), per the concurrent-writers convention —
+// a shared JSON map would let one process's stale copy clobber the other's
+// just-set cooldown and defeat the drift-thrash guard.
+// ---------------------------------------------------------------------------
+
+const NAMING_SKIP_DIR = `${CLAUDE0_ROOT}/.config/claude0/naming-skip`;
+export const NAMING_SKIP_TTL = 5 * 60_000; // 5 minutes
+
+/** SessionIds with a live cooldown; expired marker files are unlinked as seen. */
+export async function loadNamingSkips(): Promise<Set<string>> {
+  const live = new Set<string>();
+  try {
+    const { readdir, stat, unlink } = await import("fs/promises");
+    const now = Date.now();
+    for (const id of await readdir(NAMING_SKIP_DIR)) {
+      try {
+        if (now - (await stat(`${NAMING_SKIP_DIR}/${id}`)).mtimeMs > NAMING_SKIP_TTL) {
+          await unlink(`${NAMING_SKIP_DIR}/${id}`);
+        } else {
+          live.add(id);
+        }
+      } catch {}
+    }
+  } catch {}
+  return live;
+}
+
+/** Start (or restart) a session's naming cooldown. */
+export async function setNamingSkip(sessionId: string): Promise<void> {
+  try {
+    const { mkdir, writeFile } = await import("fs/promises");
+    await mkdir(NAMING_SKIP_DIR, { recursive: true });
+    await writeFile(`${NAMING_SKIP_DIR}/${sessionId}`, "");
+  } catch {}
+}
+
+/**
+ * True when a session needs a fresh AI name: unnamed, or the freshest convo
+ * signal (lastPrompt > summary) diverges from the source the current name was
+ * generated off of. lastPrompt matters because Claude doesn't always update
+ * its summary after /rewind or topic shifts.
+ */
+export function needsNaming(cache: NameCache, sessionId: string, currentSignal: string): boolean {
+  if (!cache.names[sessionId]) return true;
+  return !!currentSignal && currentSignal !== (cache.sources[sessionId] || "");
+}
+
 export interface NameCache {
-  version: 5;
+  version: 6;
   names: Record<string, string>;     // sessionId → AI-generated name (human-readable, e.g. "Fix Auth")
   sources: Record<string, string>;   // sessionId → summary/prompt used for naming
-  pinned: Record<string, string>;    // sessionId → user-pinned name (wins over `names`)
 }
 
 /**
@@ -87,16 +136,21 @@ export const ABBREV: Record<string, string> = {
  * they read as broken UI, so we reject them and leave the window unnamed until a real
  * signal lands. Matched as case-insensitive prefixes of the raw model output.
  */
-const REFUSAL_PREFIXES = [
+const HARD_REFUSAL_PREFIXES = [
   "i can't", "i cannot", "i can not", "i'm sorry", "i am sorry", "sorry",
   "i need permission", "i don't have", "i do not have", "i'm unable", "i am unable",
   "unable to", "this doesn't appear", "this does not appear", "i'd be happy",
   "i would be happy", "i need clarification", "i need more", "i'll need", "i cannot help",
-  // First-person / conversational openers — a real name is a terse noun/verb phrase
-  // ("Fix Auth"), never a sentence. Catches self-introductions the namer emits when
-  // the source is a non-coding task ("I'm Claude Code, designed for…").
-  "i'm", "i am", "i'll", "i'd", "i've", "as an", "as a", "let me", "here's",
-  "here is", "sure", "certainly", "of course", "hello", "hey", "well,", "actually",
+  // First-person openers — a real name is a terse noun/verb phrase ("Fix Auth"),
+  // never a sentence. Catches self-introductions the namer emits when the source is
+  // a non-coding task ("I'm Claude Code, designed for…").
+  "i'm", "i am", "i'll", "i'd", "i've", "as an", "as a", "let me", "hello", "hey",
+];
+
+// Conversational openers that often PRECEDE a real name ("Sure — Dark Mode") —
+// refusal-shaped, but worth stripping and salvaging what follows.
+const OPENER_PREFIXES = [
+  "here's", "here is", "sure", "certainly", "of course", "well,", "actually",
 ];
 
 // Substrings that only appear when the model answered conversationally, not as a name.
@@ -104,26 +158,52 @@ const NOT_A_NAME_SUBSTRINGS = [
   "claude code", "as an ai", "language model", "ai assistant", "i'm claude", "i am claude",
 ];
 
+/** Prefix match on a word boundary: "sure thing" matches "sure", "Surefire" doesn't. */
+function matchesPrefix(lower: string, p: string): boolean {
+  if (!lower.startsWith(p)) return false;
+  const next = lower[p.length];
+  return next === undefined || /[\s,.:;!?'—–-]/.test(next);
+}
+
 /** True if the model output reads as a refusal/meta-reply rather than a session name. */
 export function looksLikeRefusal(text: string): boolean {
   const lower = text.trim().toLowerCase();
-  if (REFUSAL_PREFIXES.some((p) => lower.startsWith(p))) return true;
+  if (HARD_REFUSAL_PREFIXES.some((p) => matchesPrefix(lower, p))) return true;
+  if (OPENER_PREFIXES.some((p) => matchesPrefix(lower, p))) return true;
   if (NOT_A_NAME_SUBSTRINGS.some((s) => lower.includes(s))) return true;
-  // A name is 1-3 words with no sentence punctuation; a comma or >4 words is a ramble.
+  // A name is 1-4 words with no sentence punctuation; a comma or >4 words is a ramble.
   if (lower.includes(",") || lower.split(/\s+/).filter(Boolean).length > 4) return true;
   return false;
 }
 
 /**
+ * Try to recover a usable name from refusal-shaped output instead of discarding it
+ * ("Sure — Dark Mode Toggle" → "Dark Mode Toggle"): strip one conversational OPENER
+ * (never a hard refusal — those contain no name), clamp to the first 4 words, drop
+ * trailing sentence punctuation. Returns "" when the remainder still reads as a
+ * refusal — a rejected name costs "unnamed for 5 minutes", so salvage tries first.
+ */
+export function salvageName(text: string): string {
+  let t = text.trim();
+  const lower = t.toLowerCase();
+  if (HARD_REFUSAL_PREFIXES.some((p) => matchesPrefix(lower, p))) return "";
+  const opener = OPENER_PREFIXES.find((p) => matchesPrefix(lower, p));
+  if (opener) t = t.slice(opener.length).replace(/^[\s,.:;!—–-]+/, "");
+  t = t.split(/\s+/).filter(Boolean).slice(0, 4).join(" ").replace(/[.,;:!?]+$/, "");
+  return t && !looksLikeRefusal(t) ? t : "";
+}
+
+/**
  * Normalize a name to the human-readable shape stored in the cache and shown on the
  * phone/TUI verbatim: trim, collapse internal whitespace to single spaces, strip
- * control chars and the window separators (`·`/`⚡`/`🔄`/`+`) that would corrupt the
+ * control chars and the window separators (`/`/`⚡`/`🔄`/`+`) that would corrupt the
  * tmux format even after slugify, but KEEP spaces and casing. Capped at 30 chars.
  */
 export function normalizeName(input: string): string {
   const cleaned = input
-    // Control chars, window separators (`·⚡🔄+`), and word-joining punctuation
-    // (`/ \ : _ — –`) → space, so slugify splits on them instead of gluing words
+    // Control chars, window separators (`/·⚡🔄+` — `·` is the retired separator,
+    // still stripped), and word-joining punctuation (`\ : _ — –`) → space, so
+    // slugify splits on them instead of gluing words
     // ("clarification—the" → "clarification the", not "clarificationthe"). Hyphen
     // is intentionally kept (kebab-friendly).
     .replace(/[\x00-\x1f·⚡🔄+/\\:_—–]/gu, " ")
@@ -135,9 +215,6 @@ export function normalizeName(input: string): string {
   const lastSpace = cut.lastIndexOf(" ");
   return (lastSpace >= 15 ? cut.slice(0, lastSpace) : cut).trim();
 }
-
-/** Sanitize a user-typed pinned name — same rules as any stored name. */
-export const sanitizePinnedName = normalizeName;
 
 /**
  * Slugify a human-readable name to the kebab slug shown on tmux windows: lowercase,
@@ -188,14 +265,28 @@ export function extractPlanTitle(prompt: string): string {
   return title.trim();
 }
 
+/** Conversation signals fed to the namer. Assistant replies are optional but matter:
+ *  for meta-prompts ("grill me on this plan") the assistant's reply is the only place
+ *  the actual subject of the work appears. */
+export interface NamingContext {
+  firstPrompt: string;
+  summary?: string;
+  branch?: string;
+  lastPrompt?: string;
+  firstAssistant?: string;
+  lastAssistant?: string;
+  /** Bounds the subprocess — keep it low (15s default) for the background monitor so a
+   *  hung `claude -p` can't stall its poll loop; the interactive TUI rename passes a
+   *  longer budget so a cold haiku start resolves in one attempt. */
+  timeoutMs?: number;
+}
+
 /**
  * AI-powered name generation using `claude -p`. Returns a normalized Title-Case name
- * or empty string on failure/refusal. `timeoutMs` bounds the subprocess — keep it low
- * (15s) for the background monitor so a hung `claude -p` can't stall its poll loop, but
- * the interactive TUI rename passes a longer budget so a cold haiku start resolves in
- * one attempt instead of being killed and leaving the window blank.
+ * or empty string on failure/refusal.
  */
-export async function generateAIName(firstPrompt: string, summary?: string, branch?: string, lastPrompt?: string, timeoutMs = 15_000): Promise<string> {
+export async function generateAIName(ctx: NamingContext): Promise<string> {
+  const { firstPrompt, summary, branch, lastPrompt, firstAssistant, lastAssistant, timeoutMs = 15_000 } = ctx;
   if (!firstPrompt && !summary && !lastPrompt) return "";
 
   try {
@@ -205,11 +296,15 @@ export async function generateAIName(firstPrompt: string, summary?: string, bran
     // vague follow-ups like "IDK, go check that".
     const planTitle = extractPlanTitle(firstPrompt || "");
     if (planTitle) contextParts.push(`Plan title: "${planTitle}"`);
-    if (firstPrompt) contextParts.push(`First message: "${firstPrompt.slice(0, 300)}"`);
+    if (firstPrompt) contextParts.push(`First user message: "${firstPrompt.slice(0, 300)}"`);
+    if (firstAssistant) contextParts.push(`First assistant reply: "${firstAssistant.slice(0, 300)}"`);
     const usefulSummary = summary && summary !== firstPrompt ? summary : "";
     if (usefulSummary) contextParts.push(`Summary: "${usefulSummary}"`);
     if (lastPrompt && lastPrompt !== firstPrompt) {
       contextParts.push(`Most recent user message: "${lastPrompt.slice(0, 300)}"`);
+    }
+    if (lastAssistant && lastAssistant !== firstAssistant) {
+      contextParts.push(`Most recent assistant reply: "${lastAssistant.slice(0, 300)}"`);
     }
     if (branch) {
       // Strip ticket prefix (e.g. "ENG-2687-") for naming context
@@ -217,10 +312,10 @@ export async function generateAIName(firstPrompt: string, summary?: string, bran
       if (branchContext) contextParts.push(`Branch: "${branchContext}"`);
     }
 
-    const namePrompt = `Name this session in Title Case, plain English words. It may be any kind of task (coding or not) — always produce a name from the content; never introduce yourself or explain. Prefer 1-2 words; use 3 only when necessary (keep it short — it also labels a narrow tmux tab). Drop filler words (the, a, for, with, to). Focus on the ACTION and GOAL, not file paths or locations. Do NOT use kebab-case, do NOT abbreviate.
+    const namePrompt = `Name this session in Title Case, plain English words. It may be any kind of task (coding or not) — always produce a name from the content; never introduce yourself or explain. Prefer 1-2 words; use 3-4 only when the subject needs them (keep it short — it also labels a narrow tmux tab). Drop filler words (the, a, for, with, to). Name the SUBJECT of the work — the feature, system, or thing being worked on — never the interaction style alone: for "review/plan/grill/debug X", name X (optionally with the action). Focus on the ACTION and GOAL, not file paths or locations. Do NOT use kebab-case, do NOT abbreviate.
 
-Good: Fix Auth, Dark Mode, Refactor API, Provider Sync, iCloud Photos, Wallet Analysis
-Bad: fix-auth, impl-dark-mode, "I'm Claude Code...", update-index-ts
+Good: Fix Auth, Dark Mode, Refactor API, Provider Sync, iCloud Photos, Session Naming
+Bad: fix-auth, impl-dark-mode, "I'm Claude Code...", Grill Plan, Plan Review, Question Session
 
 Reply with ONLY the name, nothing else.
 
@@ -242,9 +337,11 @@ ${contextParts.join("\n")}`;
     // Reject error/rate-limit messages that survive sanitization
     const lower = result.trim().toLowerCase();
     if (lower.includes("error") || lower.includes("credit") || lower.includes("balance") || lower.includes("rate limit") || lower.includes("unauthorized") || lower.includes("overloaded")) return "";
-    // Reject conversational refusals/meta-replies echoed from a refusal source prompt.
-    if (looksLikeRefusal(result)) return "";
-    const name = normalizeName(result.trim());
+    // Refusal-shaped output: try to salvage a name from it before giving up —
+    // rejection leaves the session unnamed for the whole skip cooldown.
+    const usable = looksLikeRefusal(result) ? salvageName(result) : result.trim();
+    if (!usable) return "";
+    const name = normalizeName(usable);
     return name.length > 0 ? name : "";
   } catch {
     return "";
@@ -255,29 +352,65 @@ export async function loadNameCache(): Promise<NameCache> {
   try {
     const raw = await Bun.file(CACHE_PATH).text();
     const parsed = JSON.parse(raw);
-    if (parsed.version === 5 && parsed.names) return { pinned: {}, ...parsed };
+    if (parsed.version === 6 && parsed.names) return parsed;
     // Any other version: start fresh (names regenerate on the next monitor/bridge cycle).
   } catch {
     // No cache or malformed
   }
-  return { version: 5, names: {}, sources: {}, pinned: {} };
+  return { version: 6, names: {}, sources: {} };
 }
 
 export async function saveNameCache(cache: NameCache): Promise<void> {
   try {
     const dir = CACHE_PATH.replace(/\/[^/]+$/, "");
     await Bun.$`mkdir -p ${dir}`.quiet();
-    await Bun.write(CACHE_PATH, JSON.stringify(cache, null, 2));
+    // Atomic temp+rename: monitor, bridge, and TUI all write this file concurrently.
+    const tmp = `${CACHE_PATH}.tmp-${process.pid}`;
+    await Bun.write(tmp, JSON.stringify(cache, null, 2));
+    const { rename } = await import("fs/promises");
+    await rename(tmp, CACHE_PATH);
   } catch {
     // Non-fatal
   }
 }
 
 /**
- * Get session name from cache: user-pinned name wins over the AI-generated one.
- * Returns empty string if neither is set (window stays "claude" until naming completes).
+ * Drop cache entries whose session no longer exists on disk (transcripts age out on
+ * Claude's retention). Returns true when anything was removed. Callers gate on cache
+ * size so the transcript scan doesn't run on every tick.
+ */
+export function pruneNameCache(cache: NameCache, liveSessionIds: Set<string>): boolean {
+  let pruned = false;
+  for (const id of Object.keys(cache.names)) {
+    if (liveSessionIds.has(id)) continue;
+    delete cache.names[id];
+    delete cache.sources[id];
+    pruned = true;
+  }
+  return pruned;
+}
+
+/**
+ * Prune once the cache is large — drop entries whose transcript no longer exists
+ * (transcripts age out on Claude's retention). Gated on size so the projects scan
+ * doesn't run on every naming write; callers invoke this right before saving.
+ */
+export async function pruneNameCacheIfLarge(cache: NameCache, projectsDir: string): Promise<void> {
+  if (Object.keys(cache.names).length <= 500) return;
+  try {
+    const liveIds = new Set<string>();
+    for await (const p of new Bun.Glob("*/*.jsonl").scan({ cwd: projectsDir })) {
+      liveIds.add(p.slice(p.lastIndexOf("/") + 1, -".jsonl".length));
+    }
+    pruneNameCache(cache, liveIds);
+  } catch {}
+}
+
+/**
+ * Get the AI-generated session name from the cache.
+ * Returns empty string if unset (window stays "{repo}" until naming completes).
  */
 export function getSessionName(sessionId: string, cache: NameCache): string {
-  return cache.pinned?.[sessionId] || cache.names[sessionId] || "";
+  return cache.names[sessionId] || "";
 }
 

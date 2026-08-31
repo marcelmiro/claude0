@@ -33,7 +33,8 @@ test("desiredPrefix precedence: ⚡ > 🔄 > ⏳ > none", () => {
   expect(desiredPrefix(false, false)).toBe("");
 });
 
-test("stripAllPrefixes strips ⏳ like the others", () => {
+test("stripAllPrefixes strips ⏳ like the others, and stacked prefixes fully", () => {
+  expect(stripAllPrefixes("⚡🔄claude0/fix-auth")).toBe("claude0/fix-auth");
   expect(stripAllPrefixes("⏳claude0/fix-auth")).toBe("claude0/fix-auth");
   expect(stripAllPrefixes("⚡claude0")).toBe("claude0");
   expect(stripAllPrefixes("🔄claude0")).toBe("claude0");

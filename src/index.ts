@@ -4,10 +4,10 @@ import { renderStatusBar } from "./ui/status-bar";
 import { buildDisplayRows, renderSessionList, moveSelection, moveToGroup, getSelectableIndices } from "./ui/session-list";
 import { handleTextInputKey, renderTextWithCursor } from "./ui/text-input";
 import { updatePreview, getPreviewPlainText, renderMessage } from "./ui/preview-pane";
-import { discoverSessions, groupSessions, seedPaneSessionCache } from "./core/sessions";
+import { discoverSessions, groupSessions, seedPaneSessionCache, readNamingExtras } from "./core/sessions";
 import { readPreviewMessages, type PendingToolCall, type PendingQuestion } from "./core/jsonl-reader";
 import { switchToPane, getMainSession, killPane, sendKeys, sendKeysSequential, sendTextAndEnter, answerQuestion } from "./core/tmux";
-import { loadNameCache, getSessionName, generateAIName, saveNameCache, normalizeName, slugify, type NameCache } from "./core/names";
+import { loadNameCache, getSessionName, generateAIName, saveNameCache, slugify, type NameCache } from "./core/names";
 import { loadConfig, configCache, DEFAULT_CONFIG } from "./core/config";
 import { loadState, saveState, loadPaneSessions } from "./core/state";
 import { listPendingApprovals, decideApproval, decideQuestion, buildAnswersMap } from "./core/approval";
@@ -50,7 +50,7 @@ let flashTimer: ReturnType<typeof setTimeout> | null = null;
 let isRefreshing = false;
 let previewGeneration = 0;
 let showArchived = false;
-let nameCache: NameCache = { version: 5, names: {}, sources: {}, pinned: {} };
+let nameCache: NameCache = { version: 6, names: {}, sources: {} };
 // Placeholder until loadConfig() resolves at startup; derived from the shipped
 // defaults so this can't drift into a fourth hand-written copy of the shape.
 let notifConfig: Config = structuredClone(DEFAULT_CONFIG);
@@ -236,13 +236,21 @@ function handleRename() {
   const sessionSummary = session.summary;
   const sessionFirstPrompt = session.firstPrompt;
   const sessionLastPrompt = session.lastPrompt;
-  // 30s budget (vs the monitor's 15s) so a cold `claude -p` resolves in one attempt
-  // instead of being killed mid-rename and leaving the window blank.
-  generateAIName(sessionFirstPrompt, sessionSummary, session.branch, sessionLastPrompt, 30_000).then(async (name) => {
-    // Reload-and-merge: capture any pin/name the monitor wrote while `claude -p` ran.
-    // `r` un-pins so the fresh AI name takes over (or regenerates later if it failed).
+  // Fire-and-forget: the TUI stays responsive while `claude -p` runs. 30s budget
+  // (vs the monitor's 15s) so a cold start resolves in one attempt instead of
+  // being killed mid-rename and leaving the window blank.
+  void (async () => {
+    const extras = await readNamingExtras(session.repoPath, sessionId);
+    const name = await generateAIName({
+      firstPrompt: sessionFirstPrompt,
+      summary: sessionSummary,
+      branch: session.branch,
+      lastPrompt: sessionLastPrompt,
+      ...extras,
+      timeoutMs: 30_000,
+    });
+    // Reload-and-merge: capture any name the monitor wrote while `claude -p` ran.
     const fresh = await loadNameCache();
-    delete fresh.pinned[sessionId];
     if (name) {
       fresh.names[sessionId] = name;
       fresh.sources[sessionId] = sessionLastPrompt || sessionSummary || sessionFirstPrompt;
@@ -253,7 +261,7 @@ function handleRename() {
     await saveNameCache(fresh);
     await refresh();
     if (!name) flashStatusMessage(`{${C.dim}-fg}Name generation failed{/${C.dim}-fg}`);
-  });
+  })().catch(() => {});
 }
 
 function renderSearchBar() {
@@ -1305,38 +1313,6 @@ screen.on("keypress", async (_ch: string, key: any) => {
       updateMenuBox();
       screen.render();
       break;
-    case "start-pin-input":
-      spaceMenu.level = "pin-name";
-      spaceMenu.previousLevel = "root";
-      spaceMenu.messageText = "";
-      spaceMenu.messageCursor = 0;
-      updateMenuBox();
-      screen.render();
-      break;
-    case "pin-name": {
-      const clean = normalizeName(action.text);
-      if (!clean || !slugify(clean)) {
-        // Empty or symbol-only input (slugifies to nothing → blank tmux tab) — keep
-        // the input open for retry.
-        flashStatusMessage(`{${C.dim}-fg}Invalid name{/${C.dim}-fg}`);
-        break;
-      }
-      const session = getSelectedSession();
-      const sessionId = session?.id;
-      closeSpaceMenu(); // Close before await to prevent double-fire
-      if (!sessionId) {
-        flashStatusMessage(`{${C.dim}-fg}No session selected{/${C.dim}-fg}`);
-        break;
-      }
-      // Reload-and-merge so a name the monitor wrote meanwhile isn't clobbered.
-      const fresh = await loadNameCache();
-      fresh.pinned[sessionId] = clean;
-      nameCache = fresh;
-      await saveNameCache(fresh);
-      await refresh();
-      flashStatusMessage(`{${C.mint}-fg}Pinned ${clean}{/${C.mint}-fg}`);
-      break;
-    }
     case "send-text": {
       const session = getSelectedSession();
       const text = action.text;

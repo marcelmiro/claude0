@@ -3,7 +3,7 @@ import { CONFIG_DIR } from "../../test/helpers/home";
 import { test, expect } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { getSessionName, loadNameCache, normalizeName, sanitizePinnedName, slugify, looksLikeRefusal, type NameCache } from "./names";
+import { getSessionName, loadNameCache, normalizeName, slugify, looksLikeRefusal, salvageName, pruneNameCache, needsNaming, type NameCache } from "./names";
 
 const CACHE_FILE = join(CONFIG_DIR, "names.json");
 function writeCache(obj: unknown) {
@@ -12,20 +12,15 @@ function writeCache(obj: unknown) {
 }
 
 function cache(over: Partial<NameCache> = {}): NameCache {
-  return { version: 5, names: {}, sources: {}, pinned: {}, ...over };
+  return { version: 6, names: {}, sources: {}, ...over };
 }
 
-test("getSessionName: pinned name wins over AI name", () => {
-  const c = cache({ names: { s1: "AI Name" }, pinned: { s1: "Pinned Name" } });
-  expect(getSessionName("s1", c)).toBe("Pinned Name");
-});
-
-test("getSessionName: falls back to AI name when unpinned", () => {
+test("getSessionName: returns the AI name", () => {
   const c = cache({ names: { s1: "Fix Auth" } });
   expect(getSessionName("s1", c)).toBe("Fix Auth");
 });
 
-test("getSessionName: empty string when neither is set", () => {
+test("getSessionName: empty string when unset", () => {
   expect(getSessionName("s1", cache())).toBe("");
 });
 
@@ -53,11 +48,6 @@ test("normalizeName: over-30 trims at a word boundary, never mid-word", () => {
   expect(out.length).toBeLessThanOrEqual(30);
   expect(out.endsWith(" ")).toBe(false);
   expect(out).toBe("This doesn't appear to be a"); // no dangling "so"
-});
-
-test("sanitizePinnedName: aliases normalizeName (keeps casing/spaces)", () => {
-  expect(sanitizePinnedName("Payments Hotfix")).toBe("Payments Hotfix");
-  expect(sanitizePinnedName("$$$")).toBe("$$$"); // symbols survive normalize; slugify strips later
 });
 
 test("slugify: lowercases, hyphenates, abbreviates via ABBREV", () => {
@@ -109,11 +99,49 @@ test("slugify: strips symbols, empty stays empty", () => {
   expect(slugify("")).toBe("");
 });
 
-test("loadNameCache: any non-v5 cache starts fresh", async () => {
-  writeCache({ version: 4, names: { s1: "old-name" }, sources: {}, pinned: { s2: "payments-hotfix" } });
+test("loadNameCache: any non-v6 cache starts fresh", async () => {
+  writeCache({ version: 5, names: { s1: "old-name" }, sources: {}, pinned: { s2: "payments-hotfix" } });
   const c = await loadNameCache();
-  expect(c.version).toBe(5);
+  expect(c.version).toBe(6);
   expect(c.names).toEqual({});
-  expect(c.pinned).toEqual({});
   rmSync(CACHE_FILE, { force: true });
+});
+
+test("salvageName: strips a conversational prefix and clamps to 4 words", () => {
+  expect(salvageName("Sure — Dark Mode Toggle")).toBe("Dark Mode Toggle");
+  expect(salvageName("Here's Provider Sync.")).toBe("Provider Sync");
+  expect(salvageName("Fix Auth Token Refresh Logic Everywhere")).toBe("Fix Auth Token Refresh");
+});
+
+test("salvageName: still rejects output with no name inside", () => {
+  expect(salvageName("I can't help with this")).toBe("");
+  expect(salvageName("I'm Claude Code, designed for")).toBe("");
+  expect(salvageName("Sorry")).toBe("");
+});
+
+test("pruneNameCache: drops entries with no live transcript, keeps live ones", () => {
+  const c = cache({ names: { live: "Fix Auth", dead: "Old Thing" }, sources: { live: "x", dead: "y" } });
+  const changed = pruneNameCache(c, new Set(["live"]));
+  expect(changed).toBe(true);
+  expect(c.names).toEqual({ live: "Fix Auth" });
+  expect(c.sources).toEqual({ live: "x" });
+  expect(pruneNameCache(c, new Set(["live"]))).toBe(false);
+});
+
+test("looksLikeRefusal: prefixes match on word boundaries only", () => {
+  expect(looksLikeRefusal("Surefire Payments")).toBe(false); // "sure" is not a whole word here
+  expect(looksLikeRefusal("Heyday Analysis")).toBe(false);
+  expect(looksLikeRefusal("Sure thing")).toBe(true);
+});
+
+test("salvageName: never mangles a boundary-adjacent real name", () => {
+  expect(salvageName("Surefire Payments")).toBe("Surefire Payments");
+});
+
+test("needsNaming: unnamed, drifted, and stable cases", () => {
+  const c = cache({ names: { s1: "Fix Auth" }, sources: { s1: "old signal" } });
+  expect(needsNaming(c, "s2", "anything")).toBe(true); // unnamed
+  expect(needsNaming(c, "s1", "new signal")).toBe(true); // drifted
+  expect(needsNaming(c, "s1", "old signal")).toBe(false); // stable
+  expect(needsNaming(c, "s1", "")).toBe(false); // no signal, keep the name
 });

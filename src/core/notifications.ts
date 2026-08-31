@@ -9,6 +9,7 @@ import { sourceForSession } from "./input-source";
 import { pendingToolCall } from "./hook-events";
 import { listPendingApprovals, PENDING_DIR } from "./approval";
 import { CONSUMERS_DIR, sendWebPush } from "./web-push";
+import { getSessionName, type NameCache } from "./names";
 import type { PushPayload } from "../types";
 
 export const ATTENTION_PREFIX = "⚡";
@@ -16,12 +17,20 @@ export const RUNNING_PREFIX = "🔄";
 export const SCRIPT_PREFIX = "⏳";
 export const NAME_SEPARATOR = "/";
 
-/** Strip the ⚡/🔄/⏳ prefix from a window name */
+/** Strip every leading ⚡/🔄/⏳ prefix from a window name (loops, so a racily
+ *  double-prefixed name can never keep a stale marker). */
 export function stripAllPrefixes(name: string): string {
-  if (name.startsWith(ATTENTION_PREFIX)) return name.slice(ATTENTION_PREFIX.length);
-  if (name.startsWith(RUNNING_PREFIX)) return name.slice(RUNNING_PREFIX.length);
-  if (name.startsWith(SCRIPT_PREFIX)) return name.slice(SCRIPT_PREFIX.length);
-  return name;
+  let out = name;
+  for (let stripped = true; stripped; ) {
+    stripped = false;
+    for (const p of [ATTENTION_PREFIX, RUNNING_PREFIX, SCRIPT_PREFIX]) {
+      if (out.startsWith(p)) {
+        out = out.slice(p.length);
+        stripped = true;
+      }
+    }
+  }
+  return out;
 }
 
 /**
@@ -45,7 +54,7 @@ export function abbreviateRepo(repo: string): string {
   return configCache().ui.repoAbbreviations?.[repo] ?? repo;
 }
 
-/** Build the base window name: {repo}[·{ai-name}][+] */
+/** Build the base window name: {repo}[/{ai-name}][+] */
 export function buildBaseName(repo: string, aiName?: string, isFork?: boolean): string {
   let name = abbreviateRepo(repo);
   if (aiName) name += `${NAME_SEPARATOR}${aiName}`;
@@ -53,7 +62,7 @@ export function buildBaseName(repo: string, aiName?: string, isFork?: boolean): 
   return name;
 }
 
-/** Extract AI name from a window name like "{repo}·{ai-name}" or "{repo}·{ai-name}+" */
+/** Extract AI name from a window name like "{repo}/{ai-name}" or "{repo}/{ai-name}+" */
 export function extractAIName(windowName: string): string | null {
   const stripped = stripAllPrefixes(windowName);
   const sepIdx = stripped.indexOf(NAME_SEPARATOR);
@@ -63,7 +72,7 @@ export function extractAIName(windowName: string): string | null {
   return aiName || null;
 }
 
-/** Extract repo name from a window name like "{repo}" or "{repo}·{ai-name}" */
+/** Extract repo name from a window name like "{repo}" or "{repo}/{ai-name}" */
 export function extractRepoFromWindowName(windowName: string): string {
   const stripped = stripAllPrefixes(windowName);
   const sepIdx = stripped.indexOf(NAME_SEPARATOR);
@@ -210,6 +219,7 @@ export function sendNativeNotification(
 export async function dispatchNotifications(
   events: TransitionEvent[],
   config: NotificationConfig,
+  nameCache?: NameCache,
 ): Promise<void> {
   for (const event of events) {
     if (event.classification === "none") continue;
@@ -230,9 +240,13 @@ export async function dispatchNotifications(
       }
     }
 
-    // Tier 3: macOS native notification
+    // Tier 3: macOS native notification. Same label as push: cache-resolved title
+    // form, falling back to the stripped window name for unresolved sessions.
     if (config.nativeNotification) {
-      const name = stripAllPrefixes(session.name || session.tmuxPane.windowName);
+      const nativeTitle = nameCache && session.id ? getSessionName(session.id, nameCache) : "";
+      const name = nativeTitle
+        ? `${session.repo} · ${nativeTitle}`
+        : stripAllPrefixes(session.name || session.tmuxPane.windowName);
       const pane = {
         sessionName: session.tmuxPane.sessionName,
         windowIndex: session.tmuxPane.windowIndex,
@@ -257,7 +271,7 @@ export async function dispatchNotifications(
     if (session.id) {
       const src = sourceForSession(session.id);
       if (src.source === "portkey" && src.deviceId && !deviceConnected(src.deviceId)) {
-        await sendWebPush(src.deviceId, pushPayloadFor(event, session));
+        await sendWebPush(src.deviceId, pushPayloadFor(event, session, nameCache));
       }
     }
   }
@@ -273,7 +287,7 @@ export async function dispatchNotifications(
  * watching-then-backgrounded case heals itself: the sidecar is only written when a
  * push is actually sent, so backgrounding mid-hold pushes on the next tick.
  */
-export async function dispatchHeldApprovalPushes(sessions: Session[]): Promise<void> {
+export async function dispatchHeldApprovalPushes(sessions: Session[], nameCache?: NameCache): Promise<void> {
   for (const hold of listPendingApprovals()) {
     const session = sessions.find((s) => s.id === hold.sessionId);
     if (!session) continue;
@@ -297,7 +311,7 @@ export async function dispatchHeldApprovalPushes(sessions: Session[]): Promise<v
       classification: "blocked",
       session,
     };
-    await sendWebPush(src.deviceId, pushPayloadFor(event, session));
+    await sendWebPush(src.deviceId, pushPayloadFor(event, session, nameCache));
     try {
       writeFileSync(sidecar, holdKey);
     } catch {
@@ -315,11 +329,15 @@ function titleCase(s: string): string {
 }
 
 /**
- * Human-facing, non-sensitive label for a push: `${repo} · ${Name}` where Name is
- * the ai-name humanized (hyphens→spaces, title-cased). Falls back to repo alone
- * when the window name carries no ai-name. Repo stays verbatim (raw dir name).
+ * Human-facing, non-sensitive label for a push: `${repo} · ${Name}`. The name is
+ * resolved title-form from the name cache — never round-tripped through the tmux
+ * slug, whose abbreviations ("Notif Cfg") and 24-char cut are lossy. Falls back to
+ * un-slugging the window name (unresolved session or no cache), then repo alone.
+ * Repo stays verbatim (raw dir name).
  */
-export function pushLabel(session: Session): string {
+export function pushLabel(session: Session, cache?: NameCache): string {
+  const title = cache && session.id ? getSessionName(session.id, cache) : "";
+  if (title) return `${session.repo} · ${title}`;
   const aiName = extractAIName(session.name);
   if (!aiName) return session.repo;
   return `${session.repo} · ${titleCase(aiName.replace(/-/g, " "))}`;
@@ -359,11 +377,11 @@ export function deviceConnected(deviceId: string): boolean {
  * text — only the non-sensitive label + tool-name category (same policy as the
  * ntfy era, even though Web Push is end-to-end encrypted).
  */
-export function pushPayloadFor(event: TransitionEvent, session: Session): PushPayload {
+export function pushPayloadFor(event: TransitionEvent, session: Session, cache?: NameCache): PushPayload {
   // Compact on purpose: iOS appends its own "from portkey" attribution line, so the
   // title (state emoji + session label) is the whole message. Only blocked adds a
   // body — the pending-tool category is the one detail worth a second line.
-  const label = pushLabel(session);
+  const label = pushLabel(session, cache);
   if (event.classification === "blocked") {
     const action = pushAction(session.id);
     return {
