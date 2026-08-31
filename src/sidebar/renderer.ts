@@ -144,8 +144,12 @@ export function runSidebarRenderer(): void {
     const full = !win.modesWritten;
     let out = "";
     if (full) {
-      // hide cursor; SGR mouse + focus reporting (arrive back via the relay)
-      out += "\x1b[?25l\x1b[?1000h\x1b[?1006h\x1b[?1004h\x1b[2J";
+      // alternate screen first: tmux mouse bindings gate on #{alternate_on}
+      // (a stock-style DoubleClick1Pane binding drops a non-alternate pane
+      // into copy-mode instead of forwarding the press — the second click
+      // of a double-click would never reach us); then hide cursor, SGR
+      // mouse + focus reporting (arrive back via the relay)
+      out += "\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h\x1b[?1004h\x1b[2J";
     }
     for (let i = 0; i < view.rows.length; i++) {
       if (!full && win.lastRows[i] === view.rows[i]) continue;

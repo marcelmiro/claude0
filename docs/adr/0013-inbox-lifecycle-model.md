@@ -358,6 +358,21 @@ pill. Both take a copy-only long-press (still not rewind checkpoints).
 An optimistic send bubble that lingers past ~5s grows a "sending…" tag —
 on the happy path it retires into the real turn before the tag appears.
 
+## Addendum 11: the sidebar stub lives in the alternate screen (2026-08-25)
+
+The double-click commit (addendum 9) never fired: tmux turns the second
+press of a double-click into `DoubleClick1Pane` rather than
+`MouseDown1Pane`, and the common host binding for it forwards the press
+(`send-keys -M`) only when `#{alternate_on}` is set — otherwise it drops
+the pane into copy-mode + select-word. The stub was a plain screen, so
+the renderer saw one click (highlight) and the `after-copy-mode` hook
+silently cancelled the rest. A second click slower than tmux's 300 ms
+double-click window worked, which is how it was diagnosed.
+
+The renderer now enters the alternate screen (`?1049h`) at the head of
+its mode preamble. Both the stock tmux binding (gated on
+`mouse_any_flag`) and the alternate-screen-gated variant forward the
+press, so the fix holds without touching host bindings (ADR 23).
 
 ## Addendum: `/clear` files the old session under Recent (2026-08-26)
 
