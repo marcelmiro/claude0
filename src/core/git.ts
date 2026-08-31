@@ -156,10 +156,9 @@ export function cleanBranchToDir(branch: string): string {
 
 /**
  * Base-repo ordering: priority repos first (in configured order), then repos with an
- * active session, then alphabetical. Shared so callers can insert extra entries (e.g.
- * the bridge's "~" home row) into the same order.
+ * active session, then alphabetical.
  */
-export function compareRepos(
+function compareRepos(
   a: { name: string; hasSession?: boolean },
   b: { name: string; hasSession?: boolean },
   priorityRepos: string[],
@@ -198,9 +197,18 @@ export async function discoverRepos(
   // Scan configured repository roots 1-level deep (these are always base repos: a real
   // repo has a `.git/` dir, whereas a worktree's `.git` is a file — so scanning
   // never picks up worktree dirs; those come from `git worktree list` below).
+  // A root that is itself a git repo (e.g. `~/.dotfiles`) counts as one repo and is
+  // not scanned inside — nested repos in a checkout are vendored, not yours.
   for (let rp of repositoryRoots) {
-    rp = rp.replace(/^~/, homedir());
+    rp = rp.replace(/^~/, homedir()).replace(/\/+$/, "");
     try {
+      if (await Bun.file(`${rp}/.git/HEAD`).exists()) {
+        if (!bases.has(rp)) {
+          const name = rp.split("/").filter(Boolean).pop() ?? rp;
+          bases.set(rp, { name, path: rp, hasSession: false });
+        }
+        continue;
+      }
       const glob = new Bun.Glob("*");
       for await (const entry of glob.scan({ cwd: rp, onlyFiles: false })) {
         const fullPath = `${rp}/${entry}`;

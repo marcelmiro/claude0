@@ -56,7 +56,7 @@ import { nativeStatus, parkedJobSessions } from "../core/session-state";
 import { pendingScriptsAt } from "../core/background-tasks";
 import { resolveTranscriptPath } from "../core/last-turn";
 import { homedir } from "os";
-import { discoverRepos, getBaseRepoPath, compareRepos } from "../core/git";
+import { discoverRepos, getBaseRepoPath } from "../core/git";
 import { listSlashCommands } from "../core/skills";
 import { repoRootForSession, safeRepoPath, fileDiff, rangeDiff, branchChanges } from "../core/repo-files";
 import { branchPullRequest, type PullRequestInfo } from "../core/pull-request";
@@ -364,16 +364,7 @@ async function reposPayload(): Promise<Array<{ name: string; path: string; branc
     .filter((s) => s.repoPath)
     .map((s) => ({ name: s.repo, path: s.repoPath }));
   const repos = await discoverRepos(sessionRepos, cfg.repositories.roots, cfg.repositories.priority);
-  const priority = cfg.repositories.priority;
-  // "~" (home dir) is offered as a launch target, sorted among the base repos the same
-  // way discoverRepos orders them (insert before the first base repo it sorts ahead of,
-  // so worktree rows stay nested under their base).
-  const home = { name: "~", currentBranch: "", hasSession: false };
-  let at = repos.findIndex((r) => !r.isWorktree && compareRepos(home, r, priority) < 0);
-  if (at === -1) at = repos.length;
-  const withHome = [...repos];
-  withHome.splice(at, 0, { name: "~", path: homedir(), currentBranch: "" });
-  return withHome.map((r) => ({
+  return repos.map((r) => ({
     name: r.name,
     path: r.path,
     branch: r.currentBranch,
@@ -634,8 +625,9 @@ async function historyPayload(params: URLSearchParams): Promise<unknown> {
   const repoCounts = new Map<string, number>();
   for (const e of matched) repoCounts.set(e.repo, (repoCounts.get(e.repo) ?? 0) + 1);
 
-  // Chips are for YOUR repos: base repo a direct child of a configured repository root
-  // (or $HOME itself, where general sessions live). Months of history accumulate
+  // Chips are for YOUR repos: base repo a direct child of a configured repository root,
+  // a root that is itself a repo (e.g. `~/.dotfiles`), or $HOME itself (where general
+  // sessions live). Months of history accumulate
   // temp/scratch clones Claude spawned — those get no chip (their rows still list
   // under "all" and in search).
   const home = homedir();
@@ -643,7 +635,7 @@ async function historyPayload(params: URLSearchParams): Promise<unknown> {
   const primary = new Set<string>();
   for (const e of matched) {
     const base = (e.baseRepoPath || "").replace(/\/+$/, "");
-    if (base === home || roots.some((r) => base.startsWith(`${r}/`) && !base.slice(r.length + 1).includes("/"))) {
+    if (base === home || roots.some((r) => base === r || (base.startsWith(`${r}/`) && !base.slice(r.length + 1).includes("/")))) {
       primary.add(e.repo);
     }
   }

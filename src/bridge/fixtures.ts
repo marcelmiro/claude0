@@ -445,7 +445,6 @@ export const FIXTURE_REPOS = [
   { name: "claude0", path: "/Users/throxy/dev/claude0", branch: "main", isWorktree: false },
   { name: "customeros", path: "/Users/throxy/dev/customeros", branch: "main", isWorktree: false },
   { name: "customeros", path: "/Users/throxy/dev/customeros/.claude/worktrees/ticket-output-piping", branch: "ticket-output-piping", isWorktree: true },
-  { name: "~", path: "/Users/throxy", branch: "", isWorktree: false },
   { name: "wiki", path: "/Users/throxy/dev/wiki", branch: "main", isWorktree: false },
 ];
 

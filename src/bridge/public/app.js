@@ -1788,7 +1788,7 @@ function NewSession() {
               </button>
             `;
           }
-          // Base repo (and the "~" home entry): a "+" marker + the name.
+          // Base repo: a "+" marker + the name.
           return html`
             <button type="button" class="row" key=${r.path} onClick=${() => launchSession(r)}>
               <span class="addmark">+</span>
