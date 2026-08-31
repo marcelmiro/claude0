@@ -524,3 +524,32 @@ test("a record's timestamp lands on its turn as `at`; records without one carry 
   expect(turns[0]!.at).toBe("2026-08-25T10:00:00.000Z");
   expect("at" in turns[1]!).toBe(false);
 });
+
+test("a bare <agent-message> record (no delivery prefix) is a teammate turn, a quoted one mid-prose is not", () => {
+  const bare = teammateRec('<agent-message from="client-inventory">\n# Report\n\nfindings…\n</agent-message>');
+  const [turn] = parseTranscript(bare);
+  expect(turn!.teammate).toEqual([{ id: "client-inventory", color: undefined, summary: "", body: "# Report\n\nfindings…" }]);
+  expect(turn!.content).toEqual([]);
+  const quoted = teammateRec('look at this: <agent-message from="x">hi</agent-message> — is that a bug?');
+  const [plain] = parseTranscript(quoted);
+  expect(plain!.teammate).toBeUndefined();
+  expect(plain!.content[0]!.type).toBe("text");
+});
+
+test("parseActiveBranch crosses a compact_boundary via logicalParentUuid, keeping pre-compaction turns", () => {
+  // Real shape: the boundary has parentUuid null and links to the pre-compaction tip only
+  // through logicalParentUuid; the summary's parent is the boundary. Walking parentUuid
+  // alone stops at the boundary and drops the whole conversation before it.
+  const raw = [
+    '{"type":"user","uuid":"u1","parentUuid":null,"message":{"role":"user","content":"first prompt"}}',
+    '{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}',
+    '{"type":"system","subtype":"compact_boundary","uuid":"cb","parentUuid":null,"logicalParentUuid":"a1","content":"Conversation compacted"}',
+    '{"type":"user","uuid":"s1","parentUuid":"cb","isCompactSummary":true,"isVisibleInTranscriptOnly":true,"message":{"role":"user","content":"This session is being continued…"}}',
+    '{"type":"user","uuid":"c1","parentUuid":"s1","message":{"role":"user","content":"<command-name>/compact</command-name>"}}',
+  ].join("\n");
+  const turns = parseActiveBranch(raw);
+  expect(turns.map((t) => t.role)).toEqual(["user", "assistant", "user", "user"]);
+  expect(turns[0].content).toEqual([{ type: "text", text: "first prompt" }]);
+  expect(turns[2].compactSummary).toBe(true);
+  expect(turns[3].command).toBe("/compact");
+});

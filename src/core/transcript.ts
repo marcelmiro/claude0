@@ -73,10 +73,14 @@ const BASH_OUTPUT_OPEN = /^\s*<bash-(?:stdout|stderr)>/;
  */
 export const TEAMMATE_PREFIX = /^\s*Another Claude session sent a message:/;
 const TEAMMATE_MESSAGE = /<(teammate-message|agent-message)\b([^>]*)>([\s\S]*?)<\/\1>/g;
+// A direct report delivered with no prefix at all: the record is exactly one tagged block
+// (observed for `SendMessage` to "main" from a named subagent). Nothing surrounds the tag,
+// so a pasted quote — which sits inside the user's own prose — still can't match.
+const BARE_DELIVERY = /^\s*<(teammate-message|agent-message)\b[^>]*>[\s\S]*<\/\1>\s*$/;
 
 /** Parse a teams delivery's tagged blocks; null when the prefix or every tag is absent. */
 function parseTeammateDelivery(text: string): TranscriptTurn["teammate"] | null {
-  if (!TEAMMATE_PREFIX.test(text)) return null;
+  if (!TEAMMATE_PREFIX.test(text) && !BARE_DELIVERY.test(text)) return null;
   const msgs: NonNullable<TranscriptTurn["teammate"]> = [];
   for (const m of text.matchAll(TEAMMATE_MESSAGE)) {
     const attrs = m[2];
@@ -108,16 +112,18 @@ interface RawRecord {
   type?: string;
   uuid?: string;
   parentUuid?: string | null;
+  /** Set on a `compact_boundary` record (whose `parentUuid` is null): the pre-compaction tip. */
+  logicalParentUuid?: string;
   isSidechain?: boolean;
   isMeta?: boolean;
   isCompactSummary?: boolean;
+  timestamp?: string;
   message?: { role?: string; content?: unknown };
   attachment?: { type?: string; prompt?: unknown; commandMode?: string };
 }
 
 /**
  * A message sent while the session is mid-turn sits in Claude Code's input queue. When
-  timestamp?: string;
  * it is consumed MID-turn (inside a tool loop — the common case) it never becomes a
  * `user` record: the queue logs a `remove` op and the message lands on the active branch
  * as a `queued_command` attachment (the next assistant record parents onto its uuid).
@@ -149,18 +155,18 @@ export function isQueuedPromptAttachment(record: {
  * as user bubbles.
  */
 function recordToTurn(record: RawRecord): FoldableTurn | null {
-  if (isQueuedPromptAttachment(record)) {
-    const text = typeof record.attachment?.prompt === "string" ? record.attachment.prompt : "";
-    if (!text || LOCAL_COMMAND_META.test(text) || TASK_NOTIFICATION.test(text)) return null;
-    // A teams delivery consumed mid-turn from the input queue is still a teammate
-    // message, not something the user queued — render it as a teammate turn.
-    const attachedTeammate = parseTeammateDelivery(text);
   const turn = recordToTurnBody(record);
   if (turn && typeof record.timestamp === "string" && record.timestamp) turn.at = record.timestamp;
   return turn;
 }
 
 function recordToTurnBody(record: RawRecord): FoldableTurn | null {
+  if (isQueuedPromptAttachment(record)) {
+    const text = typeof record.attachment?.prompt === "string" ? record.attachment.prompt : "";
+    if (!text || LOCAL_COMMAND_META.test(text) || TASK_NOTIFICATION.test(text)) return null;
+    // A teams delivery consumed mid-turn from the input queue is still a teammate
+    // message, not something the user queued — render it as a teammate turn.
+    const attachedTeammate = parseTeammateDelivery(text);
     if (attachedTeammate) return { role: "user", content: [], teammate: attachedTeammate };
     return { role: "user", content: [{ type: "text", text }], queued: true };
   }
@@ -349,7 +355,14 @@ export function parseActiveBranch(raw: string | string[]): TranscriptTurn[] {
     seen.add(id);
     const record = byId.get(id)!;
     if (!record.isSidechain) chain.push(record);
-    id = typeof record.parentUuid === "string" ? record.parentUuid : null;
+    // A compact_boundary is a tree root (`parentUuid` null) that continues the conversation
+    // through `logicalParentUuid` — without it every turn before the compaction is lost.
+    id =
+      typeof record.parentUuid === "string"
+        ? record.parentUuid
+        : typeof record.logicalParentUuid === "string"
+          ? record.logicalParentUuid
+          : null;
   }
   chain.reverse(); // walked leaf→root; emit oldest-first
 
