@@ -219,7 +219,7 @@ export const FIXTURE_TRANSCRIPT = {
           type: "tool_use",
           id: "t1",
           name: "Edit",
-          input: { file_path: "src/bridge/server.ts" },
+          input: { file_path: "/Users/throxy/dev/claude0/.claude/worktrees/eng-2687/src/bridge/server.ts" },
           result: { ok: true, head: "The file src/bridge/server.ts has been updated.", lines: 1 },
         },
       ],
@@ -273,7 +273,7 @@ export const FIXTURE_TRANSCRIPT = {
           type: "tool_use",
           id: "t5",
           name: "Edit",
-          input: { file_path: "src/bridge/server.ts" },
+          input: { file_path: "/Users/throxy/dev/claude0/.claude/worktrees/eng-2687/src/bridge/server.ts" },
           result: { ok: true, head: "The file src/bridge/server.ts has been updated.", lines: 1 },
         },
       ],
@@ -344,6 +344,25 @@ export const FIXTURE_TRANSCRIPT = {
       at: ago(44 * m),
       content: [{ type: "text", text: "Clean tree and green tests — the deploy can go out." }],
     },
+    // An answered AskUserQuestion → the qa pairs render as a question line + answer
+    // bubble exchange (never an opaque chip, never swallowed into a burst).
+    {
+      role: "assistant",
+      at: ago(42 * m),
+      content: [
+        {
+          type: "tool_use",
+          id: "t-ask1",
+          name: "AskUserQuestion",
+          input: { description: "Which storage should the session token use?" },
+          result: { ok: true, head: "Your questions have been answered: …", lines: 1 },
+          qa: [
+            { q: "Which storage should the session token use?", a: "HttpOnly cookie" },
+            { q: "Keep the legacy token endpoint during rollout?", a: "No — remove it now" },
+          ],
+        },
+      ],
+    },
     // Interrupt marker → dim ⊘ system line, not a bubble.
     {
       role: "user",
@@ -402,6 +421,8 @@ export const FIXTURE_TRANSCRIPT = {
       launchedAt: new Date(Date.now() - 12 * 60_000).toISOString(),
     },
   ],
+  // Worktree cwd: chips strip this prefix so paths render repo-relative.
+  cwd: "/Users/throxy/dev/claude0/.claude/worktrees/eng-2687",
   lastPromptAt: ago(31 * m), // the image prompt above — everything after it is "since your prompt"
   subagents: [
     {

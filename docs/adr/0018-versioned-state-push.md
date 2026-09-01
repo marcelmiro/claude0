@@ -139,3 +139,25 @@ the partial→full swap offsets the scroll position by the height delta when the
 user has scrolled off the bottom. JSON responses are also gzipped now (bridge
 fetch handler) — the tail slice cuts first-paint transfer and render on top of
 that.
+
+## Addendum (2026-08-31): answered questions ride as Q&A pairs
+
+An answered `AskUserQuestion` used to reach the phone as an opaque chip — the
+thread lost both what was asked and what the user chose. The slimming now
+parses the tool_result's `Your questions have been answered: "Q"="A", …` text
+into `qa: [{ q, a }]` on the tool_use block (questions capped like other args),
+and lifts the first question into `input.description` so even the fallback
+chip says what was asked. The client renders `qa` as the exchange it was — a
+muted question line plus a compact user-tinted answer bubble per pair — and
+excludes qa turns from burst tallies (an answer is conversation, not
+plumbing). Declined, interrupted, or unparseable results carry no `qa` and
+fall back to the chip with the result summary.
+
+## Addendum (2026-08-31): chip paths render session-relative
+
+The transcript payload now carries `cwd` (the newest record's `cwd`,
+piggybacked on the cached branch read). Chips strip that prefix for display —
+an absolute worktree path (`…/.claude/worktrees/tf-192/src/x.ts`) is all
+prefix noise on a phone — falling back to `~`-shortening outside the cwd.
+Display-only: `input.file_path` stays absolute, since it is the tap target
+the client sends back to `/diff`.

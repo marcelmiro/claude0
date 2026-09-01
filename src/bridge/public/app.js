@@ -2057,6 +2057,15 @@ function useTick(on) {
   }, [on]);
 }
 
+// Display path for a chip: repo-relative when inside the session's cwd (a worktree's
+// absolute path is all prefix noise — only the repo and filename read), else with the
+// home dir shortened to ~. Display-only; tap targets keep the absolute path.
+function relPath(p, t) {
+  if (!p) return p;
+  if (t && t.cwd && p.startsWith(t.cwd + "/")) return p.slice(t.cwd.length + 1);
+  return p.replace(/^\/Users\/[^/]+\//, "~/");
+}
+
 // One tool call → a compact chip: `▸ Name label`, one ellipsized line. Success is the
 // norm and says nothing; a failed call gets a light trailing "failed". Tapping toggles the full label plus what
 // came back (first line + line count); an Agent chip taps into its subagent instead.
@@ -2068,10 +2077,13 @@ function ToolChip({ b, at }) {
   const [open, setOpen] = useState(false);
   const input = b.input || {};
   const name = b.name || "tool";
-  const path = editedPath(input);
+  const t = transcript.value;
+  const rawPath = editedPath(input);
+  // Display repo-relative when the file sits under the session's cwd — an absolute
+  // worktree path is all prefix noise. The absolute path stays on `input` for taps.
+  const path = relPath(rawPath, t);
   const isEdit = (EDIT_TOOLS.has(name) || name === "Read") && !!path;
   const agent = name === "Agent" ? agentFor(input.description) : null;
-  const t = transcript.value;
   const live = !!(t && t.pendingTool && t.pendingTool.toolUseId === b.id && !b.result);
   useTick(live && !!at);
   const res = b.result;
@@ -2097,12 +2109,11 @@ function ToolChip({ b, at }) {
   // one part that ellipsizes, and the trailing failure notice, timer and chevron never get clipped.
   let label;
   if (isEdit) {
-    const p = path.replace(/^\/Users\/[^/]+\//, "~/");
-    const slash = p.lastIndexOf("/");
+    const slash = path.lastIndexOf("/");
     label = html`<span class="tname">▸ ${name}</span
       ><span class="tpath"
-        ><span class="fl-dir">${slash >= 0 ? p.slice(0, slash + 1) : ""}</span
-        ><span class="fl-base">${slash >= 0 ? p.slice(slash + 1) : p}</span></span
+        ><span class="fl-dir">${slash >= 0 ? path.slice(0, slash + 1) : ""}</span
+        ><span class="fl-base">${slash >= 0 ? path.slice(slash + 1) : path}</span></span
       >`;
   } else {
     label = html`<span class="tname"
@@ -2161,7 +2172,8 @@ function ToolBurst({ turns, collapsed }) {
   </div>`;
 }
 
-// A turn that is nothing but tool calls — the unit ToolBurst groups.
+// A turn that is nothing but tool calls — the unit ToolBurst groups. An answered
+// question (qa) is conversation, not plumbing — never swallowed into a burst tally.
 const isToolOnlyTurn = (turn) =>
   turn.role === "assistant" &&
   !turn.compactSummary &&
@@ -2169,7 +2181,7 @@ const isToolOnlyTurn = (turn) =>
   !turn.bash &&
   !turn.teammate &&
   (turn.content || []).length > 0 &&
-  turn.content.every((b) => b.type === "tool_use");
+  turn.content.every((b) => b.type === "tool_use" && !b.qa);
 
 // Time-gap label between turns: the clock alone today, "Yesterday 13:06", else "24/08 13:06".
 // Hard-coded 24h + dd/MM like shared/wake-abs.js — locale-sensitive Intl formatting is
@@ -2285,7 +2297,16 @@ function Turn({ turn, upCount, canCode }) {
             >${shown}</div>`,
       );
     } else if (b.type === "tool_use") {
-      els.push(html`<${ToolChip} b=${b} at=${turn.at} />`);
+      // An answered question renders as the exchange it was — the question as a muted
+      // left line, the picked answer as a compact right-side bubble — instead of an
+      // opaque AskUserQuestion chip. Unanswered/declined/unparseable fall back to the chip.
+      if (b.qa) {
+        for (const p of b.qa) {
+          els.push(html`<div class="qa-q">${p.q}</div><div class="qa-a">${p.a}</div>`);
+        }
+      } else {
+        els.push(html`<${ToolChip} b=${b} at=${turn.at} />`);
+      }
     }
   }
   return els.length ? html`<div class="turn">${els}</div>` : null;
@@ -2568,7 +2589,8 @@ function liveSince(toolUseId) {
   return liveSeen.get(toolUseId);
 }
 function RunningTool({ tool }) {
-  const detail = tool.command || tool.filePath || tool.pattern || tool.description || "";
+  const detail =
+    tool.command || relPath(tool.filePath, transcript.value) || tool.pattern || tool.description || "";
   const since = liveSince(tool.toolUseId);
   useTick(!!since);
   const elapsed = since ? fmtElapsed(Math.max(0, Math.floor((Date.now() - since) / 1000))) : "";
@@ -3462,7 +3484,7 @@ function Detail() {
       ref=${rootRef}
     >
       <div class="scroll thread" ref=${scrollRef} onScroll=${syncFloat}>
-        ${!t && html`<div class="sub" style="padding:8px">loading…</div>`}
+        ${!t && html`<div class="typing">loading<span class="dots"></span></div>`}
         ${t &&
         t.partial &&
         html`<div class="tail-loading">loading earlier messages…</div>`}
@@ -3585,8 +3607,8 @@ function Detail() {
           </div>`,
           )}
         ${t && t.pendingTool && !blocked && !liveInThread && html`<${RunningTool} tool=${t.pendingTool} />`}
-        ${status === "running" && !blocked && !(t && t.pendingTool) &&
-        html`<${Working} since=${t && t.lastPromptAt} />`}
+        ${t && status === "running" && !blocked && !t.pendingTool &&
+        html`<${Working} since=${t.lastPromptAt} />`}
         ${!archived && html`<${ChangesCard} />`}
       </div>
       <div class="dock">

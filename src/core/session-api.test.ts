@@ -310,6 +310,67 @@ test("slimTurns: tool_result (next user turn) is folded into its tool_use as a s
   expect(open!.result).toBeUndefined(); // no result yet — still running or never returned
 });
 
+test("slimTurns: answered AskUserQuestion → qa pairs + question lifted into description", () => {
+  const turns = [
+    {
+      role: "assistant" as const,
+      content: [
+        {
+          type: "tool_use" as const,
+          id: "q1",
+          name: "AskUserQuestion",
+          input: { questions: [{ question: "Which storage?" }, { question: "Block until live?" }] },
+        },
+      ],
+    },
+    {
+      role: "user" as const,
+      content: [
+        {
+          type: "tool_result" as const,
+          tool_use_id: "q1",
+          content:
+            'Your questions have been answered: "Which storage?"="HttpOnly cookie", "Block until live?"="Yes, block". You can now continue with these answers in mind.',
+        },
+      ],
+    },
+  ];
+  const block = slimTurns(turns)[0]!.content[0] as {
+    input: Record<string, string>;
+    qa?: Array<{ q: string; a: string }>;
+  };
+  expect(block.qa).toEqual([
+    { q: "Which storage?", a: "HttpOnly cookie" },
+    { q: "Block until live?", a: "Yes, block" },
+  ]);
+  expect(block.input.description).toBe("Which storage?");
+});
+
+test("slimTurns: declined/unparseable AskUserQuestion → no qa, chip fallback keeps the result", () => {
+  const turns = [
+    {
+      role: "assistant" as const,
+      content: [
+        { type: "tool_use" as const, id: "q1", name: "AskUserQuestion", input: { questions: [{ question: "Pick one" }] } },
+      ],
+    },
+    {
+      role: "user" as const,
+      content: [
+        { type: "tool_result" as const, tool_use_id: "q1", is_error: true, content: "User declined to answer" },
+      ],
+    },
+  ];
+  const block = slimTurns(turns)[0]!.content[0] as {
+    qa?: unknown;
+    result?: { ok: boolean; head: string; lines: number };
+    input: Record<string, string>;
+  };
+  expect(block.qa).toBeUndefined();
+  expect(block.result).toEqual({ ok: false, head: "User declined to answer", lines: 1 });
+  expect(block.input.description).toBe("Pick one");
+});
+
 test("slimTurns: the turn timestamp rides along", () => {
   const out = slimTurns([{ role: "user", content: [{ type: "text", text: "hi" }], at: "2026-08-25T10:00:00.000Z" }]);
   expect(out[0]!.at).toBe("2026-08-25T10:00:00.000Z");

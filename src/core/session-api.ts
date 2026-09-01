@@ -42,7 +42,7 @@ import { parseBackgroundTasks, liveScripts, type BackgroundTask } from "./backgr
 import { decideQuestion, declineQuestion, buildAnswersMap } from "./approval";
 import { parkedJobSessions } from "./session-state";
 import { jsonlLines, type PendingQuestion, type PendingToolCall } from "./jsonl-reader";
-import type { RestoreState, ToolResultSummary, TranscriptBlock, TranscriptTurn } from "../types";
+import type { QuestionAnswer, RestoreState, ToolResultSummary, TranscriptBlock, TranscriptTurn } from "../types";
 
 export interface SessionTranscript {
   turns: TranscriptTurn[];
@@ -53,6 +53,12 @@ export interface SessionTranscript {
   /** Every question of an open AskUserQuestion (drives the multi-question answer UI). */
   openQuestions?: PendingQuestion[];
   usage?: ContextUsage;
+  /**
+   * The session's working directory (newest record's `cwd`). Display-only on the phone:
+   * chips strip it so an absolute worktree path reads as the repo-relative one the
+   * terminal shows. Tap targets keep the absolute path.
+   */
+  cwd?: string;
   /** Subagents this session fanned out to (sourced from the `subagents/` dir); omitted when none. */
   subagents?: SubagentSummary[];
   /**
@@ -739,6 +745,7 @@ const RESULT_HEAD_CAP = 120;
 function slimToolUse(
   b: Extract<TranscriptBlock, { type: "tool_use" }>,
   result: ToolResultSummary | undefined,
+  qa: QuestionAnswer[] | undefined,
 ): TranscriptBlock {
   const raw = (b.input ?? {}) as Record<string, unknown>;
   const input: Record<string, string> = {};
@@ -749,9 +756,34 @@ function slimToolUse(
         UNCAPPED_FIELDS.has(k) || v.length <= TOOL_ARG_CAP ? v : v.slice(0, TOOL_ARG_CAP) + "…";
     }
   }
+  // An AskUserQuestion's input has none of the generic arg fields — lift the first
+  // question's text into `description` so even the fallback chip says what was asked.
+  if (b.name === "AskUserQuestion" && !input.description) {
+    const qs = raw.questions;
+    const first = Array.isArray(qs) ? (qs[0] as { question?: unknown } | undefined)?.question : undefined;
+    if (typeof first === "string" && first) {
+      input.description = first.length <= TOOL_ARG_CAP ? first : first.slice(0, TOOL_ARG_CAP) + "…";
+    }
+  }
   const slim: TranscriptBlock = { type: "tool_use", id: b.id, name: b.name, input };
   if (result) slim.result = result;
+  if (qa && qa.length) slim.qa = qa;
   return slim;
+}
+
+/**
+ * Question→answer pairs from an answered AskUserQuestion's result text, which reads
+ * `Your questions have been answered: "Q"="A", "Q2"="A2". …`. Empty on any other shape
+ * (declined, interrupted, quotes inside a question) — the caller falls back to the chip.
+ */
+export function parseQuestionAnswers(text: string): QuestionAnswer[] {
+  if (!text.startsWith("Your questions have been answered:")) return [];
+  const out: QuestionAnswer[] = [];
+  for (const m of text.matchAll(/"([^"]+)"="([^"]+)"/g)) {
+    const q = m[1]!;
+    out.push({ q: q.length <= TOOL_ARG_CAP ? q : q.slice(0, TOOL_ARG_CAP) + "…", a: m[2]! });
+  }
+  return out;
 }
 
 /** The text of a tool_result's content: a string, or the text parts of a block array. */
@@ -788,10 +820,10 @@ export function summarizeToolResult(b: Extract<TranscriptBlock, { type: "tool_re
  * genuinely empty turn is preserved (mirrors `parseTranscript`).
  */
 export function slimTurns(turns: TranscriptTurn[]): TranscriptTurn[] {
-  const results = new Map<string, ToolResultSummary>();
+  const results = new Map<string, Extract<TranscriptBlock, { type: "tool_result" }>>();
   for (const t of turns) {
     for (const b of t.content) {
-      if (b.type === "tool_result" && b.tool_use_id) results.set(b.tool_use_id, summarizeToolResult(b));
+      if (b.type === "tool_result" && b.tool_use_id) results.set(b.tool_use_id, b);
     }
   }
   const out: TranscriptTurn[] = [];
@@ -799,7 +831,14 @@ export function slimTurns(turns: TranscriptTurn[]): TranscriptTurn[] {
     const content: TranscriptBlock[] = [];
     for (const b of t.content) {
       if (b.type === "text" || b.type === "image") content.push(b);
-      else if (b.type === "tool_use") content.push(slimToolUse(b, results.get(b.id)));
+      else if (b.type === "tool_use") {
+        const res = results.get(b.id);
+        const qa =
+          res && b.name === "AskUserQuestion" && !res.is_error
+            ? parseQuestionAnswers(toolResultText(res.content))
+            : undefined;
+        content.push(slimToolUse(b, res && summarizeToolResult(res), qa));
+      }
     }
     if (content.length === 0 && t.content.length > 0) continue;
     // Rebuild with only the fields the client uses — the per-turn flags must ride along
@@ -959,19 +998,32 @@ const branchCache = new Map<
     backgroundTasks: BackgroundTask[];
     queuedPending: string[];
     usage: ContextUsage | null;
+    cwd: string | null;
   }
 >();
+
+/** The newest record's `cwd` — scan a few lines from the tail (nearly every record has one). */
+function lastCwd(lines: string[]): string | null {
+  for (let i = lines.length - 1; i >= 0 && i >= lines.length - 20; i--) {
+    try {
+      const r = JSON.parse(lines[i]!) as { cwd?: unknown };
+      if (typeof r.cwd === "string" && r.cwd) return r.cwd;
+    } catch {}
+  }
+  return null;
+}
 
 async function readActiveBranchCached(path: string): Promise<{
   turns: TranscriptTurn[];
   pendingScripts: BackgroundTask[];
   queuedPending: string[];
   usage: ContextUsage | null;
+  cwd: string | null;
 }> {
   try {
     const file = Bun.file(path);
     const stat = await file.stat();
-    if (!stat) return { turns: [], pendingScripts: [], queuedPending: [], usage: null };
+    if (!stat) return { turns: [], pendingScripts: [], queuedPending: [], usage: null, cwd: null };
     const hit = branchCache.get(path);
     // pendingScripts is derived per READ, not cached: the runner-liveness probe must
     // keep running while the file — and thus the cache entry — sits still, or a wait
@@ -982,6 +1034,7 @@ async function readActiveBranchCached(path: string): Promise<{
         pendingScripts: await liveScripts(hit.backgroundTasks),
         queuedPending: hit.queuedPending,
         usage: hit.usage,
+        cwd: hit.cwd,
       };
     // One streamed pass builds the line array all four parsers share: no contiguous
     // multi-MB string, and no re-splitting per parser (each split re-copies every line —
@@ -998,6 +1051,7 @@ async function readActiveBranchCached(path: string): Promise<{
       backgroundTasks: parseBackgroundTasks(lines),
       queuedPending: parseQueuedPending(lines),
       usage: contextUsageFromLines(lines),
+      cwd: lastCwd(lines),
     };
     branchCache.set(path, entry);
     return {
@@ -1005,9 +1059,10 @@ async function readActiveBranchCached(path: string): Promise<{
       pendingScripts: await liveScripts(entry.backgroundTasks),
       queuedPending: entry.queuedPending,
       usage: entry.usage,
+      cwd: entry.cwd,
     };
   } catch {
-    return { turns: [], pendingScripts: [], queuedPending: [], usage: null }; // missing/unreadable transcript
+    return { turns: [], pendingScripts: [], queuedPending: [], usage: null, cwd: null }; // missing/unreadable transcript
   }
 }
 
@@ -1029,7 +1084,7 @@ export async function getTranscript(sessionId: string): Promise<SessionTranscrip
   const [branch, subagents, lastPromptAt] = path
     ? await Promise.all([readActiveBranchCached(path), listSubagents(path), readLastPromptAt(path)])
     : [
-        { turns: [], pendingScripts: [] as BackgroundTask[], queuedPending: [] as string[], usage: null },
+        { turns: [], pendingScripts: [] as BackgroundTask[], queuedPending: [] as string[], usage: null, cwd: null },
         [],
         null,
       ];
@@ -1042,6 +1097,7 @@ export async function getTranscript(sessionId: string): Promise<SessionTranscrip
     if (entry) result.rev = `${entry.size}:${entry.mtimeMs}`;
     // Usage rides the same cached read — no separate tail read of the file.
     if (branch.usage) result.usage = branch.usage;
+    if (branch.cwd) result.cwd = branch.cwd;
     // Omitted entirely when the session fanned out to no subagents.
     if (subagents.length > 0) result.subagents = subagents;
     if (lastPromptAt !== null) result.lastPromptAt = new Date(lastPromptAt).toISOString();
