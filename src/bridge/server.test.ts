@@ -261,3 +261,10 @@ test("/stream/open rejects a sessionId with glob/path metacharacters", async () 
     expect(res.status).toBe(400);
   }
 });
+
+test("GET /transcript rejects a session id with glob metacharacters", async () => {
+  for (const bad of ["*", "..%2F..%2Fetc", "a%2Fb", "**"]) {
+    const res = await get(`/sessions/${bad}/transcript`);
+    expect(res.status).toBe(400);
+  }
+});

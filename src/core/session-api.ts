@@ -13,7 +13,7 @@
 
 import { Glob } from "bun";
 import { homedir } from "os";
-import { resolveTranscriptPath, readLastPromptAt } from "./last-turn";
+import { resolveTranscriptPath, resolveTranscriptPaths, readLastPromptAt } from "./last-turn";
 import { lastAssistantMessage, parseActiveBranch, parseTranscript, TEAMMATE_PREFIX } from "./transcript";
 import { pendingToolCall } from "./hook-events";
 import { loadPaneSessions, savePaneSessions } from "./state";
@@ -627,13 +627,23 @@ interface SubagentMeta {
 }
 
 /**
- * List a session's subagents from its `subagents/` directory: one entry per
- * `agent-<id>.meta.json`, with `status` read from the agent's own jsonl. Sorted by
- * `(spawnDepth ?? 1, description)` for a stable order. Never throws — a missing dir or
- * unreadable meta yields [] / a skipped row.
+ * List a session's subagents from its `subagents/` directories: one entry per
+ * `agent-<id>.meta.json`, with `status` read from the agent's own jsonl. A session that
+ * moved project dirs (see `resolveTranscriptPaths`) has one such dir per transcript file
+ * — agents spawned before the move live under the old dir — so pass every path and the
+ * union is returned. Sorted by `(spawnDepth ?? 1, description)` for a stable order.
+ * Never throws — a missing dir or unreadable meta yields [] / a skipped row.
  */
-export async function listSubagents(transcriptPath: string): Promise<SubagentSummary[]> {
-  const dir = subagentsDir(transcriptPath);
+export async function listSubagents(transcriptPaths: string[]): Promise<SubagentSummary[]> {
+  const out: SubagentSummary[] = [];
+  for (const path of transcriptPaths) out.push(...(await listSubagentsIn(subagentsDir(path))));
+  out.sort(
+    (a, b) => (a.spawnDepth ?? 1) - (b.spawnDepth ?? 1) || a.description.localeCompare(b.description),
+  );
+  return out;
+}
+
+async function listSubagentsIn(dir: string): Promise<SubagentSummary[]> {
   const out: SubagentSummary[] = [];
   try {
     for await (const name of new Glob("agent-*.meta.json").scan({ cwd: dir })) {
@@ -667,9 +677,6 @@ export async function listSubagents(transcriptPath: string): Promise<SubagentSum
   } catch {
     return []; // missing dir / scan failure
   }
-  out.sort(
-    (a, b) => (a.spawnDepth ?? 1) - (b.spawnDepth ?? 1) || a.description.localeCompare(b.description),
-  );
   return out;
 }
 
@@ -690,26 +697,30 @@ export function capOpeningTurn(turns: TranscriptTurn[]): void {
 /**
  * A subagent's full conversation for the drill-in view: `slimTurns(parseTranscript(...))`
  * over `subagents/agent-<agentId>.jsonl`. Linear parse (every subagent record is
- * `isSidechain`, so `parseActiveBranch` falls back to linear anyway). Returns null on a
- * bad agentId (traversal guard), an unresolvable session, or a missing/unreadable file.
+ * `isSidechain`, so `parseActiveBranch` falls back to linear anyway). The agent's file
+ * lives under whichever project dir was live when it spawned, so every transcript file's
+ * dir is tried (newest first — the common case). Returns null on a bad agentId
+ * (traversal guard), an unresolvable session, or a missing/unreadable file.
  */
 export async function getSubagentTranscript(
   sessionId: string,
   agentId: string,
 ): Promise<SessionTranscript | null> {
   if (!isValidAgentId(agentId)) return null;
-  const path = await resolveTranscriptPath(sessionId);
-  if (!path) return null;
-  const agentPath = `${subagentsDir(path)}/agent-${agentId}.jsonl`;
-  const lines: string[] = [];
-  try {
-    for await (const line of jsonlLines(agentPath)) lines.push(line);
-  } catch {
-    return null; // missing/unreadable subagent jsonl
+  const paths = await resolveTranscriptPaths(sessionId);
+  for (let i = paths.length - 1; i >= 0; i--) {
+    const agentPath = `${subagentsDir(paths[i]!)}/agent-${agentId}.jsonl`;
+    const lines: string[] = [];
+    try {
+      for await (const line of jsonlLines(agentPath)) lines.push(line);
+    } catch {
+      continue; // not under this dir — try the next-older one
+    }
+    const turns = slimTurns(parseTranscript(lines));
+    capOpeningTurn(turns);
+    return { turns };
   }
-  const turns = slimTurns(parseTranscript(lines));
-  capOpeningTurn(turns);
-  return { turns };
+  return null;
 }
 
 // The tool_use chip shows a one-line label plus, when tapped open, the other short
@@ -851,20 +862,48 @@ export function pendingToolFields(
 }
 
 /**
- * The transcript file's current disk revision (`size:mtimeMs`, matching the `rev` a full
- * response carries), or null when no transcript exists. The `/transcript?rev=` fast path
- * compares this against the client's held rev — one memoized path lookup + one stat.
+ * One revision string over EVERY file of a session's transcript (a cwd move re-homes the
+ * JSONL, so one session can span several — see `resolveTranscriptPaths`). Only the live
+ * (newest) file ever grows, so `count:totalSize:maxMtime` moves on any append, rewind, or
+ * file flip; the count term covers the flip instant itself, when a brand-new file could
+ * otherwise leave size+mtime looking unchanged.
  */
-export async function transcriptRevAt(sessionId: string): Promise<{ path: string; rev: string } | null> {
-  const path = await resolveTranscriptPath(sessionId);
-  if (!path) return null;
-  try {
-    const stat = await Bun.file(path).stat();
-    if (!stat) return null;
-    return { path, rev: `${stat.size}:${stat.mtimeMs}` };
-  } catch {
-    return null; // vanished between resolve and stat
+function combinedRev(stats: { size: number; mtimeMs: number }[]): string {
+  let size = 0;
+  let mtime = 0;
+  for (const s of stats) {
+    size += s.size;
+    if (s.mtimeMs > mtime) mtime = s.mtimeMs;
   }
+  return `${stats.length}:${size}:${mtime}`;
+}
+
+/**
+ * Stat each path, dropping the ones that vanished between the glob and the stat
+ * (retention cleanup of an old project dir). Order is preserved — oldest→newest in,
+ * oldest→newest out — so the live file stays last.
+ */
+async function statSurvivors(
+  paths: string[],
+): Promise<{ path: string; stat: { size: number; mtimeMs: number } }[]> {
+  const stats = await Promise.all(paths.map((p) => Bun.file(p).stat().catch(() => null)));
+  return paths.flatMap((path, i) => {
+    const stat = stats[i];
+    return stat ? [{ path, stat }] : [];
+  });
+}
+
+/**
+ * The transcript's current disk revision (matching the `rev` a full response carries),
+ * or null when no transcript exists. The `/transcript?rev=` fast path compares this
+ * against the client's held rev — one memoized path lookup + one stat per file.
+ */
+export async function transcriptRevAt(
+  sessionId: string,
+): Promise<{ paths: string[]; rev: string } | null> {
+  const files = await statSurvivors(await resolveTranscriptPaths(sessionId));
+  if (files.length === 0) return null;
+  return { paths: files.map((f) => f.path), rev: combinedRev(files.map((f) => f.stat)) };
 }
 
 /**
@@ -946,15 +985,16 @@ function deliveredAfter(lines: string[], afterLine: number, text: string): boole
   return false;
 }
 
-// Per-path cache of the parsed active branch, keyed by the file's size+mtime. Any change
-// to a JSONL — append OR rewind (which still appends a new branch) — grows the file and
-// bumps mtime, so an unchanged (size, mtime) pair means unchanged content: re-use the
-// parse instead of re-reading and re-parsing a multi-MB log on every refresh.
+// Per-session cache of the parsed active branch, keyed by the joined file paths and
+// validated by every file's size+mtime. Any change — append OR rewind (which still
+// appends a new branch), or a cwd move opening a new file — grows a file, bumps an
+// mtime, or changes the path set, so an unchanged stat vector means unchanged content:
+// re-use the parse instead of re-reading and re-parsing multi-MB logs on every refresh.
 const branchCache = new Map<
   string,
   {
-    size: number;
-    mtimeMs: number;
+    statKey: string;
+    rev: string;
     turns: TranscriptTurn[];
     backgroundTasks: BackgroundTask[];
     queuedPending: string[];
@@ -962,52 +1002,75 @@ const branchCache = new Map<
   }
 >();
 
-async function readActiveBranchCached(path: string): Promise<{
+interface BranchRead {
   turns: TranscriptTurn[];
   pendingScripts: BackgroundTask[];
   queuedPending: string[];
   usage: ContextUsage | null;
-}> {
+  rev: string | null;
+}
+
+// Fresh object per call — callers hold and slim these arrays, so no shared singleton.
+function emptyBranch(): BranchRead {
+  return { turns: [], pendingScripts: [], queuedPending: [], usage: null, rev: null };
+}
+
+/**
+ * Read + parse a session's transcript across EVERY file it spans (oldest→newest —
+ * a cwd move re-homes the JSONL to another project dir, chaining `parentUuid` across
+ * files; see `resolveTranscriptPaths`). One merged line array feeds all four parsers:
+ * the branch walk needs the cross-file uuid index, and the linear parsers (queue replay,
+ * background tasks, usage) see the records in true write order because only the newest
+ * file was ever appended to. Frozen older files are re-streamed when the live file
+ * changes — bounded by what a single large live file already costs.
+ */
+async function readActiveBranchCached(allPaths: string[]): Promise<BranchRead> {
   try {
-    const file = Bun.file(path);
-    const stat = await file.stat();
-    if (!stat) return { turns: [], pendingScripts: [], queuedPending: [], usage: null };
-    const hit = branchCache.get(path);
+    // An older (frozen) file can vanish between the glob and the stat — retention
+    // cleanup, a deleted project dir. Read the survivors rather than blanking the
+    // whole session; the 3s resolve TTL heals the path list right after.
+    const files = await statSurvivors(allPaths);
+    if (files.length === 0) return emptyBranch();
+    const statKey = files.map((f) => `${f.path}:${f.stat.size}:${f.stat.mtimeMs}`).join(";");
+    const cacheKey = files.map((f) => f.path).join(";");
+    const hit = branchCache.get(cacheKey);
     // pendingScripts is derived per READ, not cached: the runner-liveness probe must
-    // keep running while the file — and thus the cache entry — sits still, or a wait
+    // keep running while the files — and thus the cache entry — sit still, or a wait
     // whose runner died would stay visible until the transcript next changes.
-    if (hit && hit.size === stat.size && hit.mtimeMs === stat.mtimeMs)
+    if (hit && hit.statKey === statKey)
       return {
         turns: hit.turns,
         pendingScripts: await liveScripts(hit.backgroundTasks),
         queuedPending: hit.queuedPending,
         usage: hit.usage,
+        rev: hit.rev,
       };
     // One streamed pass builds the line array all four parsers share: no contiguous
     // multi-MB string, and no re-splitting per parser (each split re-copies every line —
     // on macOS the freed copies ratchet the process RSS permanently).
     const lines: string[] = [];
-    for await (const line of jsonlLines(path)) lines.push(line);
+    for (const f of files) for await (const line of jsonlLines(f.path)) lines.push(line);
     const entry = {
-      size: stat.size,
-      mtimeMs: stat.mtimeMs,
+      statKey,
+      rev: combinedRev(files.map((f) => f.stat)),
       turns: parseActiveBranch(lines),
       // Piggybacked on the same read: background tasks, the queued-message replay, and
-      // context usage change only when the file does (all are transcript records), so
+      // context usage change only when the files do (all are transcript records), so
       // one cache covers all of them.
       backgroundTasks: parseBackgroundTasks(lines),
       queuedPending: parseQueuedPending(lines),
       usage: contextUsageFromLines(lines),
     };
-    branchCache.set(path, entry);
+    branchCache.set(cacheKey, entry);
     return {
       turns: entry.turns,
       pendingScripts: await liveScripts(entry.backgroundTasks),
       queuedPending: entry.queuedPending,
       usage: entry.usage,
+      rev: entry.rev,
     };
   } catch {
-    return { turns: [], pendingScripts: [], queuedPending: [], usage: null }; // missing/unreadable transcript
+    return emptyBranch(); // missing/unreadable transcript
   }
 }
 
@@ -1017,36 +1080,43 @@ async function readActiveBranchCached(path: string): Promise<{
  * are not in the transcript before they resolve).
  */
 export async function getTranscript(sessionId: string): Promise<SessionTranscript> {
-  const path = await resolveTranscriptPath(sessionId);
+  const paths = await resolveTranscriptPaths(sessionId);
   // Reconstruct the ACTIVE conversation branch (see `parseActiveBranch`): the JSONL is a
   // tree, and a rewind/edit can SHRINK the logical conversation, so an append-only
-  // byte-delta would leak abandoned-branch turns. We read the whole file and rebuild the
-  // leaf→root path each time, always returning a full replacement (no cursor). The full
-  // re-parse is gated behind a size+mtime cache (any change grows the file), so an idle
-  // session re-uses the prior parse instead of re-reading a multi-MB log every refresh.
-  // Subagent listing and the last-prompt boundary only need the path — overlap them
-  // with the branch read.
-  const [branch, subagents, lastPromptAt] = path
-    ? await Promise.all([readActiveBranchCached(path), listSubagents(path), readLastPromptAt(path)])
-    : [
-        { turns: [], pendingScripts: [] as BackgroundTask[], queuedPending: [] as string[], usage: null },
-        [],
-        null,
-      ];
+  // byte-delta would leak abandoned-branch turns. We read every file the session spans
+  // and rebuild the leaf→root path each time, always returning a full replacement (no
+  // cursor). The full re-parse is gated behind a per-file size+mtime cache (any change
+  // grows the live file), so an idle session re-uses the prior parse instead of
+  // re-reading multi-MB logs every refresh. Subagent listing and the last-prompt
+  // boundary only need the paths — overlap them with the branch read.
+  const [branch, subagents, lastPromptAt] = await Promise.all([
+    readActiveBranchCached(paths),
+    listSubagents(paths),
+    lastPromptAtAcross(paths),
+  ]);
   const result = buildSessionTranscript(slimTurns(branch.turns), pendingToolCall(sessionId));
   if (branch.pendingScripts.length > 0) result.pendingScripts = branch.pendingScripts;
   if (branch.queuedPending.length > 0) result.queuedPending = branch.queuedPending;
-  if (path) {
-    // Reuse the size+mtime the cached read just stat()'d — no extra syscall (see branchCache).
-    const entry = branchCache.get(path);
-    if (entry) result.rev = `${entry.size}:${entry.mtimeMs}`;
-    // Usage rides the same cached read — no separate tail read of the file.
-    if (branch.usage) result.usage = branch.usage;
-    // Omitted entirely when the session fanned out to no subagents.
-    if (subagents.length > 0) result.subagents = subagents;
-    if (lastPromptAt !== null) result.lastPromptAt = new Date(lastPromptAt).toISOString();
-  }
+  if (branch.rev) result.rev = branch.rev;
+  // Usage rides the same cached read — no separate tail read of the file.
+  if (branch.usage) result.usage = branch.usage;
+  // Omitted entirely when the session fanned out to no subagents.
+  if (subagents.length > 0) result.subagents = subagents;
+  if (lastPromptAt !== null) result.lastPromptAt = new Date(lastPromptAt).toISOString();
   return result;
+}
+
+/**
+ * The newest real prompt across the session's files: almost always in the live (last)
+ * file; older files are only consulted when the live one holds no prompt yet — i.e.
+ * right after a cwd move, before the user types again in the new file.
+ */
+async function lastPromptAtAcross(paths: string[]): Promise<number | null> {
+  for (let i = paths.length - 1; i >= 0; i--) {
+    const at = await readLastPromptAt(paths[i]!);
+    if (at !== null) return at;
+  }
+  return null;
 }
 
 /**

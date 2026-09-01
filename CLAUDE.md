@@ -94,3 +94,4 @@ Processes & caches:
 | TUI requires a TTY | [3](docs/adr/0003-tui-requires-a-tty.md) | `src/index.ts` |
 | Offline app shell | [21](docs/adr/0021-offline-app-shell.md) | `bridge/public/sw.js` |
 | History depth | [7](docs/adr/0007-history-depth-is-claudes-retention.md) | `core/transcript.ts` |
+| Transcript stitching across project dirs, compact-link recovery | [29](docs/adr/0029-transcripts-span-project-dirs.md) | `core/last-turn.ts`, `core/transcript.ts`, `core/session-api.ts` |

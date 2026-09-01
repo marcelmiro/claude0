@@ -141,7 +141,7 @@ test("listSubagents: reads fields + per-agent status, sorted by (spawnDepth, des
     agentType: "general-purpose",
     description: "alpha task",
   }); // no spawnDepth → defaults to depth 1 for the sort
-  const list = await listSubagents(tx);
+  const list = await listSubagents([tx]);
   // (depth ?? 1) ties → description alpha < zeta. A done agent's jsonl is immutable, so
   // its mtime is its completion instant — surfaced as finishedAt; running agents omit it.
   expect(list).toEqual([
@@ -158,7 +158,7 @@ test("listSubagents: reads fields + per-agent status, sorted by (spawnDepth, des
 });
 
 test("listSubagents: missing dir → []", async () => {
-  expect(await listSubagents(join(WORK, "no-such-session.jsonl"))).toEqual([]);
+  expect(await listSubagents([join(WORK, "no-such-session.jsonl")])).toEqual([]);
 });
 
 test("listSubagents: corrupt meta is skipped, valid siblings still returned", async () => {
@@ -167,7 +167,7 @@ test("listSubagents: corrupt meta is skipped, valid siblings still returned", as
   const dir = join(WORK, "s2", "subagents");
   writeFileSync(join(dir, "agent-bad.meta.json"), "{not json");
   writeFileSync(join(dir, "agent-bad.jsonl"), asst([txt("done")]) + "\n");
-  expect((await listSubagents(tx)).map((a) => a.agentId)).toEqual(["ok1"]);
+  expect((await listSubagents([tx])).map((a) => a.agentId)).toEqual(["ok1"]);
 });
 
 // --- getSubagentTranscript (guard + unresolvable session) ----------------------

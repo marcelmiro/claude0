@@ -553,3 +553,52 @@ test("parseActiveBranch crosses a compact_boundary via logicalParentUuid, keepin
   expect(turns[2].compactSummary).toBe(true);
   expect(turns[3].command).toBe("/compact");
 });
+
+test("parseActiveBranch recovers from a compact_boundary whose logicalParentUuid dangles", () => {
+  // Observed on a real manual /compact: the boundary's logicalParentUuid references a
+  // uuid that exists nowhere in the file. The true pre-compact tip is the newest
+  // mainline record written before the boundary — splice there instead of dropping
+  // every earlier turn.
+  const raw = [
+    rec({ uuid: "u1", parentUuid: null, role: "user", text: "first prompt" }),
+    rec({ uuid: "a1", parentUuid: "u1", role: "assistant", text: "done" }),
+    // A sidechain written just before the boundary must NOT become the splice target.
+    rec({ uuid: "s1", parentUuid: "a1", role: "user", text: "subagent noise", isSidechain: true }),
+    '{"type":"system","subtype":"compact_boundary","uuid":"cb","parentUuid":null,"logicalParentUuid":"phantom","content":"Conversation compacted"}',
+    '{"type":"user","uuid":"sum","parentUuid":"cb","isCompactSummary":true,"message":{"role":"user","content":"This session is being continued…"}}',
+    rec({ uuid: "c1", parentUuid: "sum", role: "user", text: "after compaction" }),
+  ].join("\n");
+  expect(texts(parseActiveBranch(raw))).toEqual([
+    "first prompt",
+    "done",
+    "This session is being continued…",
+    "after compaction",
+  ]);
+});
+
+test("parseActiveBranch recovers from a compact_boundary with no logicalParentUuid at all", () => {
+  const raw = [
+    rec({ uuid: "u1", parentUuid: null, role: "user", text: "first prompt" }),
+    rec({ uuid: "a1", parentUuid: "u1", role: "assistant", text: "done" }),
+    '{"type":"system","subtype":"compact_boundary","uuid":"cb","parentUuid":null,"content":"Conversation compacted"}',
+    '{"type":"user","uuid":"sum","parentUuid":"cb","isCompactSummary":true,"message":{"role":"user","content":"summary"}}',
+  ].join("\n");
+  expect(texts(parseActiveBranch(raw))).toEqual(["first prompt", "done", "summary"]);
+});
+
+test("parseActiveBranch stitches a session split across files (cwd re-home)", () => {
+  // A cwd move re-homes the JSONL: the new file's first record parents onto a uuid in
+  // the previous file. Callers concatenate the files oldest→newest; the walk must cross
+  // the seam. An abandoned branch in the OLD file stays excluded.
+  const oldFile = [
+    rec({ uuid: "u1", parentUuid: null, role: "user", text: "before move" }),
+    rec({ uuid: "a1", parentUuid: "u1", role: "assistant", text: "reply" }),
+    rec({ uuid: "dead", parentUuid: "u1", role: "assistant", text: "abandoned" }),
+  ];
+  const newFile = [rec({ uuid: "u2", parentUuid: "a1", role: "user", text: "after move" })];
+  expect(texts(parseActiveBranch([...oldFile, ...newFile]))).toEqual([
+    "before move",
+    "reply",
+    "after move",
+  ]);
+});

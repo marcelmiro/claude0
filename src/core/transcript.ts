@@ -110,6 +110,7 @@ interface FoldableTurn extends TranscriptTurn {
 /** A parsed conversational record: the turn plus the tree links used to rebuild a branch. */
 interface RawRecord {
   type?: string;
+  subtype?: string;
   uuid?: string;
   parentUuid?: string | null;
   /** Set on a `compact_boundary` record (whose `parentUuid` is null): the pre-compaction tip. */
@@ -320,8 +321,12 @@ export function parseTranscript(raw: string | string[]): TranscriptTurn[] {
  */
 export function parseActiveBranch(raw: string | string[]): TranscriptTurn[] {
   const byId = new Map<string, RawRecord>();
-  let leaf: string | null = null;
+  // File-scan position per uuid, plus the mainline (leaf-eligible) uuids in file order —
+  // the recovery anchors for a compact_boundary whose logical parent link dangles.
+  const scanIndex = new Map<string, number>();
+  const mainline: { uuid: string; idx: number }[] = [];
   let sawConversational = false;
+  let idx = 0;
   for (const line of typeof raw === "string" ? raw.split("\n") : raw) {
     if (!line.trim()) continue;
     let record: RawRecord;
@@ -330,7 +335,11 @@ export function parseActiveBranch(raw: string | string[]): TranscriptTurn[] {
     } catch {
       continue; // truncated/half-written line — drop it
     }
-    if (typeof record.uuid === "string") byId.set(record.uuid, record);
+    idx++;
+    if (typeof record.uuid === "string") {
+      byId.set(record.uuid, record);
+      scanIndex.set(record.uuid, idx);
+    }
     const conversational = record.type === "user" || record.type === "assistant";
     if (conversational) sawConversational = true;
     // A queued-prompt attachment is leaf-eligible too: between its `remove` op and the
@@ -341,9 +350,10 @@ export function parseActiveBranch(raw: string | string[]): TranscriptTurn[] {
       !record.isSidechain &&
       typeof record.uuid === "string"
     ) {
-      leaf = record.uuid; // newest wins — the active tip is written last
+      mainline.push({ uuid: record.uuid, idx }); // newest wins — the active tip is written last
     }
   }
+  const leaf = mainline[mainline.length - 1]?.uuid ?? null;
 
   // Pre-tree logs (no `uuid` on any conversational record) carry no branch to rebuild —
   // fall back to the linear read so they still render rather than coming back empty.
@@ -353,7 +363,7 @@ export function parseActiveBranch(raw: string | string[]): TranscriptTurn[] {
   const seen = new Set<string>();
   for (let id: string | null = leaf; id && byId.has(id) && !seen.has(id); ) {
     seen.add(id);
-    const record = byId.get(id)!;
+    const record: RawRecord = byId.get(id)!;
     if (!record.isSidechain) chain.push(record);
     // A compact_boundary is a tree root (`parentUuid` null) that continues the conversation
     // through `logicalParentUuid` — without it every turn before the compaction is lost.
@@ -363,6 +373,24 @@ export function parseActiveBranch(raw: string | string[]): TranscriptTurn[] {
         : typeof record.logicalParentUuid === "string"
           ? record.logicalParentUuid
           : null;
+    // Claude Code sometimes writes a compact_boundary whose `logicalParentUuid` exists
+    // nowhere on disk (observed on a real manual /compact: the phantom uuid vs. the
+    // `/compact` command record it should have referenced). The conversation logically
+    // continued through the compaction, so splice to the newest mainline record written
+    // BEFORE the boundary in file order — the true pre-compact tip — instead of silently
+    // truncating everything earlier. Only a boundary gets this recovery: an arbitrary
+    // dangling parent still stops the walk (deepest intact suffix).
+    if (record.subtype === "compact_boundary" && (id === null || !byId.has(id))) {
+      const boundaryIdx = scanIndex.get(record.uuid ?? "") ?? Infinity;
+      id = null;
+      for (let i = mainline.length - 1; i >= 0; i--) {
+        const m = mainline[i]!;
+        if (m.idx < boundaryIdx && !seen.has(m.uuid)) {
+          id = m.uuid;
+          break;
+        }
+      }
+    }
   }
   chain.reverse(); // walked leaf→root; emit oldest-first
 

@@ -1,7 +1,13 @@
 import { test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync, utimesSync } from "fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, utimesSync } from "fs";
 import { tmpdir } from "os";
-import { readLastTurnAt, readLastPromptAt, isPromptRecord } from "./last-turn";
+import {
+  readLastTurnAt,
+  readLastPromptAt,
+  isPromptRecord,
+  resolveTranscriptPath,
+  resolveTranscriptPaths,
+} from "./last-turn";
 
 let dir: string;
 let n = 0;
@@ -151,4 +157,55 @@ test("re-reads once the file changes, serves the memo while it doesn't", async (
   writeFileSync(path, JSON.stringify(turn("assistant", "2026-07-20T09:00:00.000Z")) + "\n");
   utimesSync(path, stat!.atimeMs / 1000, stat!.mtimeMs / 1000);
   expect(await readLastTurnAt(path)).toBe(Date.parse("2026-07-19T09:00:00.000Z"));
+});
+
+// --- resolveTranscriptPaths: one session id, several project dirs ------------
+
+test("resolveTranscriptPaths orders a split session oldest→newest; resolveTranscriptPath is the live file", async () => {
+  // A cwd move re-homed the JSONL: the same id exists under two project dirs, the
+  // newer one being the live file Claude appends to.
+  const id = "11111111-2222-3333-4444-555555555555";
+  mkdirSync(`${dir}/-old-project`);
+  mkdirSync(`${dir}/-new-project`);
+  const oldPath = `${dir}/-old-project/${id}.jsonl`;
+  const newPath = `${dir}/-new-project/${id}.jsonl`;
+  writeFileSync(oldPath, "{}\n");
+  writeFileSync(newPath, "{}\n");
+  utimesSync(oldPath, 1000, 1000);
+  utimesSync(newPath, 2000, 2000);
+  expect(await resolveTranscriptPaths(id, dir)).toEqual([oldPath, newPath]);
+  expect(await resolveTranscriptPath(id, dir)).toBe(newPath);
+
+  // Move back: mtime order flips, so the old-project copy becomes live again.
+  utimesSync(oldPath, 3000, 3000);
+  expect(await resolveTranscriptPaths(id, dir)).toEqual([newPath, oldPath]);
+  expect(await resolveTranscriptPath(id, dir)).toBe(oldPath);
+});
+
+test("resolveTranscriptPaths: unknown session → [] / null", async () => {
+  expect(await resolveTranscriptPaths("66666666-7777-8888-9999-000000000000", dir)).toEqual([]);
+  expect(await resolveTranscriptPath("66666666-7777-8888-9999-000000000000", dir)).toBeNull();
+});
+
+test("resolveTranscriptPaths: mtime ties order by path, not glob yield order", async () => {
+  const id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+  mkdirSync(`${dir}/-z-project`);
+  mkdirSync(`${dir}/-a-project`);
+  writeFileSync(`${dir}/-z-project/${id}.jsonl`, "{}\n");
+  writeFileSync(`${dir}/-a-project/${id}.jsonl`, "{}\n");
+  utimesSync(`${dir}/-z-project/${id}.jsonl`, 5000, 5000);
+  utimesSync(`${dir}/-a-project/${id}.jsonl`, 5000, 5000);
+  expect(await resolveTranscriptPaths(id, dir)).toEqual([
+    `${dir}/-a-project/${id}.jsonl`,
+    `${dir}/-z-project/${id}.jsonl`,
+  ]);
+});
+
+test("resolveTranscriptPaths: a metacharacter id never reaches the glob", async () => {
+  mkdirSync(`${dir}/-some-project`);
+  writeFileSync(`${dir}/-some-project/real-session.jsonl`, "{}\n");
+  for (const bad of ["*", "../*", "a/b", "", "x".repeat(101)]) {
+    expect(await resolveTranscriptPaths(bad, dir)).toEqual([]);
+    expect(await resolveTranscriptPath(bad, dir)).toBeNull();
+  }
 });

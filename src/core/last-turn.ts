@@ -30,11 +30,15 @@ const cache = new Map<string, { mtimeMs: number; at: number | null }>();
  * resolution). `~` does NOT expand, and `Bun.Glob` yields cwd-relative matches, so we
  * rejoin the match with the dir.
  *
- * A session's cwd can move between project dirs (e.g. worktree → base repo), leaving
- * the SAME id as a JSONL in several dirs. Pick the most-recently-written so every
- * reader (transcript, mark-read, restore, age) follows the live conversation rather
- * than a frozen copy — an age read from a stale copy and messages read from the live
- * one would disagree by hours.
+ * A session's cwd can move between project dirs (e.g. base repo → worktree), and Claude
+ * Code RE-HOMES the transcript when it does: a new JSONL with the SAME id opens under the
+ * new project dir and only new records land there, its first record parenting onto a uuid
+ * that lives in the previous file. So the id can match several files, of which only the
+ * newest-written is live (Claude appends nowhere else) — pick it, so every single-file
+ * reader (mark-read, restore, age) follows the live conversation rather than a frozen
+ * copy. Readers that need the WHOLE conversation (the active-branch walk) must instead
+ * read every file via `resolveTranscriptPaths` — the cross-file parent link resolves only
+ * when the uuid index spans all of them.
  *
  * Memoized briefly (default projects dir only — callers passing an explicit dir get a
  * fresh scan; positive hits only, so a brand-new session's JSONL is found the moment it
@@ -43,34 +47,52 @@ const cache = new Map<string, { mtimeMs: number; at: number | null }>();
  * unnoticed.
  */
 const RESOLVE_TTL = 3000;
-const resolveCache = new Map<string, { ts: number; path: string }>();
+const resolveCache = new Map<string, { ts: number; paths: string[] }>();
+
+/**
+ * Session ids are interpolated into the projects Glob below, where a metacharacter
+ * (`*`, `../`) would widen the scan past the named session. Enforced inside the
+ * resolver so no caller — bridge routes included — can forward a hostile id to it.
+ */
+export function isValidSessionId(id: string): boolean {
+  return /^[A-Za-z0-9-]{1,100}$/.test(id);
+}
+
+/** Every JSONL holding this session's records, mtime-ordered oldest→newest (live file last). */
+export async function resolveTranscriptPaths(
+  sessionId: string,
+  projectsDir?: string,
+): Promise<string[]> {
+  if (!isValidSessionId(sessionId)) return [];
+  const dir = projectsDir ?? `${homedir()}/.claude/projects`;
+  if (!projectsDir) {
+    const hit = resolveCache.get(sessionId);
+    if (hit && Date.now() - hit.ts < RESOLVE_TTL) return hit.paths;
+  }
+  try {
+    const found: { path: string; mtime: number }[] = [];
+    for await (const match of new Glob(`*/${sessionId}.jsonl`).scan({ cwd: dir })) {
+      const path = `${dir}/${match}`;
+      found.push({ path, mtime: Bun.file(path).lastModified });
+    }
+    // Path tie-break: mtime ties (coarse filesystems, preserved-timestamp copies) must
+    // not leave the order — and thus which file counts as live — to Glob yield order.
+    found.sort((a, b) => a.mtime - b.mtime || a.path.localeCompare(b.path));
+    const paths = found.map((f) => f.path);
+    if (paths.length > 0 && !projectsDir) resolveCache.set(sessionId, { ts: Date.now(), paths });
+    return paths;
+  } catch {
+    // missing projects dir or scan failure — no transcript
+  }
+  return [];
+}
 
 export async function resolveTranscriptPath(
   sessionId: string,
   projectsDir?: string,
 ): Promise<string | null> {
-  const dir = projectsDir ?? `${homedir()}/.claude/projects`;
-  if (!projectsDir) {
-    const hit = resolveCache.get(sessionId);
-    if (hit && Date.now() - hit.ts < RESOLVE_TTL) return hit.path;
-  }
-  try {
-    let best: string | null = null;
-    let bestMtime = -Infinity;
-    for await (const match of new Glob(`*/${sessionId}.jsonl`).scan({ cwd: dir })) {
-      const path = `${dir}/${match}`;
-      const mtime = Bun.file(path).lastModified;
-      if (mtime > bestMtime) {
-        bestMtime = mtime;
-        best = path;
-      }
-    }
-    if (best && !projectsDir) resolveCache.set(sessionId, { ts: Date.now(), path: best });
-    return best;
-  } catch {
-    // missing projects dir or scan failure — no transcript
-  }
-  return null;
+  const paths = await resolveTranscriptPaths(sessionId, projectsDir);
+  return paths[paths.length - 1] ?? null;
 }
 
 /**

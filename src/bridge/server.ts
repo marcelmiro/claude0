@@ -54,7 +54,7 @@ import {
 } from "../core/session-api";
 import { nativeStatus, parkedJobSessions } from "../core/session-state";
 import { pendingScriptsAt } from "../core/background-tasks";
-import { resolveTranscriptPath } from "../core/last-turn";
+import { isValidSessionId, resolveTranscriptPath } from "../core/last-turn";
 import { homedir } from "os";
 import { discoverRepos, getBaseRepoPath } from "../core/git";
 import { listSlashCommands } from "../core/skills";
@@ -1273,6 +1273,9 @@ async function route(req: Request): Promise<Response> {
   const transcript = path.match(TRANSCRIPT_PATH);
   if (method === "GET" && transcript) {
     const id = decodeURIComponent(transcript[1]!);
+    // Same shape check as /stream/open (and enforced again inside the resolver): a
+    // metacharacter id must 400, not glob its way into other sessions' transcripts.
+    if (!isValidSessionId(id)) return json({ ok: false, reason: "bad-args" }, 400);
     // Fast path: the client holds this exact file revision (`?rev=`), so skip rebuilding
     // and re-shipping the turns — the payload that scales with thread length. Everything
     // that can change WITHOUT the file changing still ships fresh: the pending
@@ -1284,7 +1287,7 @@ async function route(req: Request): Promise<Response> {
       const txId = (await parkedJobSessions()).get(id) ?? id;
       const at = await transcriptRevAt(txId);
       if (at && at.rev === wantRev) {
-        const [pane, subagents] = await Promise.all([resolveSessionPane(id), listSubagents(at.path)]);
+        const [pane, subagents] = await Promise.all([resolveSessionPane(id), listSubagents(at.paths)]);
         const capture = pane ? await capturePane(pane) : "";
         const pt = pendingToolCall(txId);
         const statusline = pane ? await readPaneStatusline(pane, capture) : {};
@@ -1310,7 +1313,7 @@ async function route(req: Request): Promise<Response> {
     const sid = body.sessionId;
     // Shape-check the id like deviceId below: it reaches resolveTranscriptPath's Glob,
     // where metacharacters ("*", "../") would widen the scan past the named session.
-    if (sid !== null && (typeof sid !== "string" || !/^[A-Za-z0-9-]{1,100}$/.test(sid))) {
+    if (sid !== null && (typeof sid !== "string" || !isValidSessionId(sid))) {
       return json({ ok: false, reason: "bad-args" }, 400);
     }
     // Device identity rides the x-claude0-device header here (the app patches fetch);
