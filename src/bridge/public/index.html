@@ -358,6 +358,20 @@
       /* Time gap between turns (5+ min): a centered clock, the chat convention. */
       .timegap { align-self: center; color: var(--dim-text); font-family: var(--mono); font-size: 11px; font-variant-numeric: tabular-nums; margin: 6px 0 10px; }
       /* Slash-command turn: mono and neutral — "I typed a command", not "I said something". */
+      /* An answered question in the thread: the question as a muted left line on a
+         hairline rail, the picked answer as a compact right-side user-tinted bubble —
+         a conversation exchange, not a tool chip. */
+      .qa-q {
+        color: var(--muted); font-size: 13px; max-width: 90%;
+        border-left: 2px solid var(--border); padding: 1px 4px 1px 9px; margin: 2px 0;
+        overflow-wrap: anywhere;
+      }
+      .qa-a {
+        margin: 3px 0 10px auto; width: fit-content; max-width: 85%; font-size: 13px;
+        background: var(--user-bubble); border: 1px solid var(--user-bubble-border);
+        border-radius: 14px; border-bottom-right-radius: 5px; padding: 5px 11px;
+        overflow-wrap: anywhere;
+      }
       /* Slash command with args: normal user bubble, the /name as a small mono chip so the
          args read as the prompt they are. Arg-less command: a neutral receding pill. */
       .cmdchip {
@@ -367,9 +381,11 @@
       }
       .cmdpill {
         margin-left: auto; margin-bottom: 8px; width: fit-content; max-width: 85%;
-        font-family: var(--mono); font-size: 12px; color: var(--muted);
+        font-family: var(--mono); font-size: 13px; color: var(--muted);
         background: var(--surface); border: 1px solid var(--border); border-radius: 999px;
-        padding: 4px 12px; overflow-wrap: anywhere;
+        /* Same vertical metrics as .bubble (9px pad + the body's 15px*1.45 line box) so a
+           command pill sits at exactly one-line-bubble height in the thread. */
+        padding: 9px 13px; line-height: calc(1.45 * 15px); overflow-wrap: anywhere;
         -webkit-touch-callout: none; -webkit-user-select: none; user-select: none;
         transition: transform 0.12s ease;
       }

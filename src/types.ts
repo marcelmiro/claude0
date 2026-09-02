@@ -332,12 +332,19 @@ export type TranscriptBlock =
   | { type: "thinking"; text: string }
   // `result` is attached by the bridge's payload slimming (the tool_result block itself is
   // dropped): outcome + a capped first line + line count, so a chip can say ✓/✗ and show
-  // what came back without shipping the (often huge) full output.
-  | { type: "tool_use"; id: string; name: string; input: unknown; result?: ToolResultSummary }
+  // what came back without shipping the (often huge) full output. `qa` is the slimming's
+  // parse of an answered AskUserQuestion's result — question/answer pairs the thread
+  // renders as a conversation exchange instead of an opaque chip.
+  | { type: "tool_use"; id: string; name: string; input: unknown; result?: ToolResultSummary; qa?: QuestionAnswer[] }
   | { type: "tool_result"; tool_use_id: string; content: unknown; is_error?: boolean }
   // Byte-free marker only: the source's base64 image data is dropped at parse time so it
   // never bloats the transcript payload — the UI just shows a "🖼 image" chip.
   | { type: "image" };
+
+export interface QuestionAnswer {
+  q: string; // the question asked (capped)
+  a: string; // the answer the user picked (or typed, for "Other")
+}
 
 export interface ToolResultSummary {
   ok: boolean; // !is_error
