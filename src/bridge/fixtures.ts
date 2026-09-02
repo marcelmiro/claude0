@@ -300,8 +300,8 @@ export const FIXTURE_TRANSCRIPT = {
     },
     // 27 minutes of silence → a time-gap label before this prompt.
     { role: "user", at: ago(60 * m), content: [{ type: "text", text: "looks good — ship it" }] },
-    // Executed slash commands: arg-less → neutral receding pill; with args → a normal
-    // user bubble whose /name renders as a mono chip (the args are the prompt).
+    // Executed slash commands, with and without args: both a normal user bubble with
+    // the /name as inline mono text.
     { role: "user", at: ago(59 * m), content: [], command: "/pr-triage" },
     {
       role: "user",

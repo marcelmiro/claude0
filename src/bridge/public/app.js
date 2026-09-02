@@ -2216,20 +2216,17 @@ function Turn({ turn, upCount, canCode }) {
     </div>`;
   }
 
-  // An executed slash command. With args ("/loop fix the tests…") the args ARE the
-  // prompt — render a normal user bubble with the command name as a small mono chip so
-  // the substance reads as prose, not system plumbing. Arg-less commands ("/compact")
-  // really are plumbing: a small neutral pill that recedes. Not a rewind checkpoint
-  // (content is empty, so isPromptTurn already excludes it) — long-press is copy-only.
+  // An executed slash command, with or without args. One rendering: a normal user bubble
+  // with the command name as inline mono text, so "/loop fix the tests…" and "/compact"
+  // read as the same kind of thing the user said. Not a rewind checkpoint (content is
+  // empty, so isPromptTurn already excludes it) — long-press is copy-only.
   if (turn.command) {
     const sp = turn.command.indexOf(" ");
     const name = sp === -1 ? turn.command : turn.command.slice(0, sp);
     const args = sp === -1 ? "" : turn.command.slice(sp + 1).trim();
+    // Single-line template: .bubble is pre-wrap, so template newlines would render.
     return html`<div class="turn">
-      ${args
-        ? // Single-line template: .bubble is pre-wrap, so template newlines would render.
-          html`<div class="bubble user" ...${lpProps(lpStartCopyOnly(turn.command))}><span class="cmdchip">${name}</span> ${args}</div>`
-        : html`<div class="cmdpill" ...${lpProps(lpStartCopyOnly(turn.command))}>${name}</div>`}
+      <div class="bubble user" ...${lpProps(lpStartCopyOnly(turn.command))}><span class="cmdname">${name}</span>${args && ` ${args}`}</div>
     </div>`;
   }
 

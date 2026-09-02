@@ -351,10 +351,11 @@ covers only the thinking/writing stretches between calls, and carries
 elapsed time counted from `lastPromptAt` so a glance answers "quick reply
 or long haul".
 
-Slash-command turns split on the first space. With args the args are the
-prompt: a normal user bubble whose `/name` renders as a small mono chip.
-Arg-less commands (`/compact`, `/clear`) are plumbing: a neutral receding
-pill. Both take a copy-only long-press (still not rewind checkpoints).
+Slash-command turns render as a normal user bubble with the `/name` as
+inline mono text, with or without args (2026-09-02: the earlier split — mono
+chip inside a bubble with args, neutral receding pill without — made the same
+kind of turn look like two different objects). Copy-only long-press (still
+not rewind checkpoints).
 An optimistic send bubble that lingers past ~5s grows a "sending…" tag —
 on the happy path it retires into the real turn before the tag appears.
 
