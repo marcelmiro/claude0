@@ -24,6 +24,7 @@ import { readLastPromptAt, resolveTranscriptPath } from "../core/last-turn";
 import { resolveRestoreTarget } from "../core/resurrect";
 import { PATHS, configCache, parseTmuxKey, tmuxKeys } from "../core/config";
 import { SHELL_NAMES } from "../core/tmux";
+import { USER_SHELL } from "../core/launch-command";
 import { parseInput, type InputEvent } from "./input";
 import { renderView, SNOOZE_UNITS, type ViewState, type VisibleRow } from "./rows";
 import { fmtWakeAbs } from "./ansi";
@@ -516,7 +517,9 @@ export function runSidebarRenderer(): void {
       // ONE string, not word-split argv: tmux direct-execs a multi-arg
       // command with no shell, and the daemon's PATH has no claude — the
       // single string goes through `$SHELL -c`, where zshenv restores PATH
-      const cmd = `exec claude -r ${s.id}`;
+      // No `exec`: the trailing login shell keeps the window alive after claude
+      // exits, so /exit lands on a prompt instead of closing the pane.
+      const cmd = `claude -r ${s.id}; exec ${USER_SHELL} -l`;
       const spawned = (
         await Bun.$`tmux new-window -d -a -P -F ${"#{window_id}"} -t ${win.windowId} -c ${dir} ${cmd}`.quiet().text()
       ).trim();
@@ -751,7 +754,7 @@ export function runSidebarRenderer(): void {
             // -d and the single-string command for the same reasons as
             // resumeSession: non-detached new-window hangs the tty-less
             // daemon, and a word-split command skips the shell (no PATH)
-            const cmd = `exec claude -r ${s.id} --fork-session`;
+            const cmd = `claude -r ${s.id} --fork-session; exec ${USER_SHELL} -l`;
             const spawned = (
               parentWin
                 ? await Bun.$`tmux new-window -d -a -P -F ${"#{window_id}"} -t ${parentWin} -c ${dir} ${cmd}`.quiet().text()

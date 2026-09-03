@@ -9,6 +9,7 @@
  */
 import type { DispositionRow, InboxStore } from "./inbox-store";
 import { loadConfig } from "./config";
+import { USER_SHELL } from "./launch-command";
 import { snoozeSpan, wakeBanner } from "./inbox-model";
 import { sendNativeNotification } from "./notifications";
 import { resolveRestoreTarget } from "./resurrect";
@@ -134,8 +135,9 @@ async function spawnWakeWindow(
   // should say WHY it exists (safe chars only — it runs through a shell).
   // Separator is printable on purpose: tmux sanitizes control chars (\t) to
   // `_` for clients running outside tmux — i.e. this daemon, always.
+  // Trailing login shell (not `exec claude`) so the window survives claude exiting.
   const out = (
-    await Bun.$`tmux new-window -d -P -F ${"#{pane_id}<|>#{session_name}<|>#{window_index}"} -c ${dir} -n ${`⚡${repo}`} ${`echo '${banner}'; exec claude -r ${sessionId}`}`.text()
+    await Bun.$`tmux new-window -d -P -F ${"#{pane_id}<|>#{session_name}<|>#{window_index}"} -c ${dir} -n ${`⚡${repo}`} ${`echo '${banner}'; claude -r ${sessionId}; exec ${USER_SHELL} -l`}`.text()
   ).trim();
   const [paneId, sessionName, windowIndex] = out.split("<|>");
   if (!paneId || !sessionName || windowIndex === undefined) return null;

@@ -1568,13 +1568,10 @@ async function handleWizardLaunch(
     if (cmd === "") {
       // Shell-only with no git setup: plain window on the default shell.
       await Bun.$`tmux new-window -a -t ${targetSession} -n ${windowName} -c ${repo.path}`.quiet();
-    } else if (cmd === "claude") {
-      // Simple case: launch claude directly as the window command (no shell race)
-      await Bun.$`tmux new-window -a -t ${targetSession} -n ${windowName} -c ${repo.path} claude`.quiet();
     } else {
-      // Compound command: run via the user's shell (`-c`) to avoid send-keys race with shell
-      // init (prompt frameworks can swallow keystrokes). The trailing exec keeps the shell
-      // open after claude exits.
+      // Run via the user's shell (`-c`) to avoid send-keys race with shell init (prompt
+      // frameworks can swallow keystrokes). The trailing exec keeps the shell open after
+      // claude exits — without it tmux closes the window on `/exit`.
       const wrapped = `${cmd}; exec ${USER_SHELL} -l`;
       await Bun.$`tmux new-window -a -t ${targetSession} -n ${windowName} -c ${repo.path} ${USER_SHELL} -c ${wrapped}`.quiet();
     }
