@@ -76,10 +76,12 @@ interface ContentBlock {
  * ratchets the process RSS — a long-lived process (the bridge) re-reading live
  * transcripts each refresh plateaued near 1GB from exactly that. Decoding goes
  * through a streaming TextDecoder so a multi-byte character split across chunk
- * boundaries survives intact. Early `break` by the consumer cancels the read.
+ * boundaries survives intact. Early `break` by the consumer cancels the read. `start` is a
+ * byte offset for incremental readers that already consumed the file up to there.
  */
-export async function* jsonlLines(path: string): AsyncGenerator<string> {
-  const reader = Bun.file(path).stream().getReader();
+export async function* jsonlLines(path: string, start = 0): AsyncGenerator<string> {
+  const file = Bun.file(path);
+  const reader = (start ? file.slice(start) : file).stream().getReader();
   const decoder = new TextDecoder();
   let carry = "";
   try {

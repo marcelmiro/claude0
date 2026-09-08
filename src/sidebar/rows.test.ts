@@ -197,3 +197,18 @@ test("prompt-sitters render under NEEDS YOU", () => {
   expect(view.rows.join("")).toContain("idle-one");
   expect(view.visible.find((v) => v.id === "o1")?.section).toBe("needs-you");
 });
+
+test("PR chip: #N colored by state on the branch line, the edited checkout's branch over the pane's", () => {
+  const row = (pr: InboxSession["pr"]) =>
+    renderView([sess({ id: "p", branch: "main", pr })], vs(), { width: 40, height: 10 }, NOW).rows.join("\n");
+  const open = row({ number: 12, state: "open", branch: "feat/x", fetchedAt: NOW });
+  expect(open).toContain("claude0/feat/x");
+  expect(open).toContain("\x1b[38;2;160;160;160m#12"); // muted
+  expect(row({ number: 12, state: "merged", branch: "feat/x", fetchedAt: NOW })).toContain("\x1b[38;2;203;166;248m#12"); // purple
+  expect(row({ number: 12, state: "draft", branch: "feat/x", fetchedAt: NOW })).toContain("\x1b[38;2;80;80;80m#12"); // dim
+  expect(row({ number: 12, state: "closed", branch: "feat/x", fetchedAt: NOW })).toContain("\x1b[38;2;255;128;128m#12"); // red
+  const none = row({ state: "local-only", branch: "feat/x", fetchedAt: NOW });
+  expect(none).toContain("claude0/feat/x");
+  expect(none).not.toContain("#");
+  expect(row({ state: "none", fetchedAt: NOW })).toContain("claude0/main");
+});

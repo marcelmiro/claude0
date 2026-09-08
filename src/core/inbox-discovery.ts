@@ -14,6 +14,7 @@ import { discoverSessions } from "./sessions";
 import { loadNameCache, getSessionName } from "./names";
 import { snippet } from "./session-label";
 import { branchPullRequest } from "./pull-request";
+import { liveEditDir, scanEditDir } from "./edit-dir";
 import { detectScriptWaits } from "./script-wait";
 import { readLastPromptAt, resolveTranscriptPath } from "./last-turn";
 import { pendingToolCall } from "./hook-events";
@@ -132,26 +133,38 @@ export async function discoveryTick(store: InboxStore): Promise<void> {
       store.transition(s.id, now, p.real?.status ?? null, eff);
     }
     row.pr = p?.pr; // carried; refreshed below on its own cadence
+    row.editScan = p?.editScan;
     byId.set(s.id, row);
   }
 
   // PR numbers: `gh` per repo is slow (~0.5s), so refresh at most 5 stale rows
   // per tick (oldest first, 60s TTL) — the store is the cache, since each
   // tick is a fresh process. A "none" result is cached too (no re-hammering).
-  const repoPathById = new Map(
-    sessions.filter((s) => byId.has(s.id)).map((s) => [s.id, s.repoPath]),
+  // A pane sitting in the base checkout is keyed on the checkout the session
+  // last EDITED in: a worktree created without cd'ing into it is invisible to
+  // cwd. A pane already inside a worktree is explicit intent and wins as-is.
+  const pathsById = new Map(
+    sessions.filter((s) => byId.has(s.id)).map((s) => [s.id, { pane: s.repoPath, base: s.baseRepoPath }]),
   );
-  const prStale = [...repoPathById.keys()]
+  const prStale = [...pathsById.keys()]
     .filter((id) => now - (byId.get(id)!.pr?.fetchedAt ?? 0) > 60_000)
     .sort((a, b) => (byId.get(a)!.pr?.fetchedAt ?? 0) - (byId.get(b)!.pr?.fetchedAt ?? 0))
     .slice(0, 5);
   await Promise.all(
     prStale.map(async (id) => {
       try {
-        const pr = await branchPullRequest(repoPathById.get(id)!);
-        byId.get(id)!.pr = {
+        const row = byId.get(id)!;
+        const { pane, base } = pathsById.get(id)!;
+        let dir = pane;
+        if (pane === base) {
+          row.editScan = (await scanEditDir(id, base, row.editScan)) ?? undefined;
+          dir = await liveEditDir(row.editScan, pane);
+        }
+        const pr = await branchPullRequest(dir);
+        row.pr = {
           number: "number" in pr ? pr.number : undefined,
           state: pr.state,
+          branch: "branch" in pr ? pr.branch : undefined,
           fetchedAt: now,
         };
       } catch {}

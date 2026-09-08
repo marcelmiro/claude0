@@ -20,6 +20,9 @@ export const C = {
   peach: "#FFC799",
   mint: "#99FFE4",
   red: "#FF8080",
+  // merged-PR chip: GitHub's merged purple (Catppuccin mauve), so a landed
+  // branch reads as "landed", not as running (mint) or attention (peach)
+  purple: "#CBA6F8",
 } as const;
 
 function rgb(hex: string): [number, number, number] {

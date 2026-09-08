@@ -5,6 +5,9 @@
 // is DERIVED here at read time from timestamps, so concurrent renderers
 // never race to write transitions.
 
+import type { EditScan } from "./edit-dir";
+import type { PullRequestInfo } from "./pull-request";
+
 export type Disposition =
   | { kind: "snoozed"; until: number } // ms timestamp; Mac day snoozes are exact 24h offsets, phone day presets land at 8AM local
   | { kind: "blocked"; note: string };
@@ -32,8 +35,14 @@ export interface InboxSession {
   script?: boolean;
   /** When the script-wait state began (⧗ rows age from this, not the prompt). */
   scriptSince?: number;
-  /** Branch PR, refreshed lazily by discovery (number absent = no PR). */
-  pr?: { number?: number; state: string; fetchedAt: number };
+  /**
+   * PR of the checkout the session last edited in (a worktree the pane never cd'd
+   * into counts), refreshed lazily by discovery. `branch` is that checkout's, which
+   * can differ from the pane's; number absent = no PR.
+   */
+  pr?: { number?: number; state: PullRequestInfo["state"]; branch?: string; fetchedAt: number };
+  /** Incremental transcript-scan cursor behind `pr` — where the session's edits land. */
+  editScan?: EditScan;
 }
 
 export type Section = "needs-you" | "running" | "parked" | "done";

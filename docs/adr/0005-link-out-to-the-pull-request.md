@@ -53,3 +53,26 @@ Nothing from ADR 1's "out" list is built. The row is an exit, not a feature.
 ## See also
 
 - [0001 — changed-files is a glance surface](0001-changed-files-is-a-glance-surface.md)
+
+## Addendum (2026-09-08): the sidebar keys the PR on the edited checkout, not the pane's cwd
+
+The sidebar's branch line carries the same lookup (`core/pull-request.ts`, refreshed by
+inbox discovery at ≤5 rows per tick on a 60s TTL). Keying it on the tmux pane's cwd went
+blind on most sessions: a session that runs `git worktree add` and then edits by absolute
+path keeps its pane in the base checkout, so it reported `main` and no PR. On 2026-09-08,
+five of eight live "main" sessions were working in a worktree that way.
+
+Discovery now resolves the checkout of the session's **last in-repo edit** (Edit / Write /
+MultiEdit / NotebookEdit under the base repo, `.plans/` excluded — `core/edit-dir.ts`), scanned
+incrementally from a byte cursor cached on the snapshot row, and runs the PR lookup there.
+Edits are the ownership signal; reading or listing a worktree is not. The scan applies only
+to panes sitting in the base checkout — a pane already inside a worktree is explicit intent
+and wins as-is (a session that edited base before moving would otherwise be dragged back).
+The branch line shows that checkout's branch; a worktree removed after its PR landed falls
+back to the pane's checkout. Validated against the live sessions before building: every session with a
+judgeable answer picked its own worktree, and the naive "last edit anywhere" variant was
+rejected because it lands on memory files and scratchpad scripts.
+
+Chip: always `#N`, colored by state — open muted, draft dim, merged purple (GitHub's merged
+color), closed red. The earlier merged-only `✓` dropped the number and, in mint, read as
+"running"; the number stays so the landed PR is identifiable at a glance.

@@ -135,19 +135,14 @@ function sessionLine(
   const wrap = (l: string) => (sel ? bg(C.sel, `${l} `) : l);
   if (opts.oneLine) return [wrap(line1)];
 
-  // `repo/branch` (tmux short repo names), dim, aligned with the name.
-  // PR chip: open → #N (alive, actionable); merged → ✓ alone (landed — the
-  // Claude0 "clear me" cue); anything else → nothing.
-  const repo = abbreviateRepo(s.repo) + (s.branch ? `/${s.branch}` : "");
-  let prText = "";
-  let prColor: string = C.dim;
-  if (s.pr?.number && s.pr.state === "merged") {
-    prText = "✓";
-    prColor = C.mint;
-  } else if (s.pr?.number && s.pr.state === "open") {
-    prText = `#${s.pr.number}`;
-    prColor = C.muted;
-  }
+  // `repo/branch` (tmux short repo names), dim, aligned with the name. The
+  // branch is the one the session edits in (its worktree), else the pane's.
+  // PR chip: #N colored by state — open muted, draft dim, merged purple (the
+  // Claude0 "clear me" cue), closed red; no PR → nothing.
+  const branch = s.pr?.branch ?? s.branch;
+  const repo = abbreviateRepo(s.repo) + (branch ? `/${branch}` : "");
+  const prColor = (s.pr?.number && PR_CHIP_COLOR[s.pr.state]) || "";
+  const prText = prColor ? `#${s.pr!.number}` : "";
   const prWidth = plainLen(prText);
   const repoLabel = truncate(repo, width - 1 - prWidth - 1);
   const repoWidth = plainLen(repoLabel);
@@ -155,6 +150,13 @@ function sessionLine(
   const line2 = `${marker}${fg(C.dim, repoLabel)}${pad2}${prText ? fg(prColor, prText) : ""}`;
   return [wrap(line1), wrap(line2)];
 }
+
+const PR_CHIP_COLOR: Partial<Record<NonNullable<InboxSession["pr"]>["state"], string>> = {
+  open: C.muted,
+  draft: C.dim,
+  merged: C.purple,
+  closed: C.red,
+};
 
 export function renderView(
   sessions: InboxSession[],
