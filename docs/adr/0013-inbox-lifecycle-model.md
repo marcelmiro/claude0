@@ -386,3 +386,27 @@ usual 24h. Detection compares against the persisted snapshot, not an in-memory
 id-change signal — each tick is a fresh process. The same rule catches a `claude`
 relaunched by hand in an exited session's pane; a pane that is simply killed is not a
 replacement and behaves as before.
+
+## Addendum: emoji glyphs, ⚡ unread, flat Needs You sort (2026-09-08)
+
+Reverses two rules above, from living with them.
+
+**Needs You is one band again.** Addendum 7's question/approval band floated a
+one-minute-old question above a day-old ready session, which read as the sidebar
+reordering itself under you. The band is gone from `deriveSections`: Needs You is
+oldest-ignored first, full stop, on the sidebar and on portkey (still one sort, shared).
+What *kind* of reply is due moves entirely into the row glyph.
+
+**Emoji are allowed in the sidebar.** The "measured-1-cell set only" rule was paid for
+in blessed, which the sidebar renderer bypasses — it writes raw SGR into a tmux pane and
+clears each line before repainting. tmux 3.4 and `Bun.stringWidth` both measure the
+glyphs below as two cells (verified with `#{cursor_x}` in a throwaway session), so
+`plainLen`/`truncate` stay right and the right slot stays flush. Ghostty renders them.
+The TUI (blessed) keeps the old rule.
+
+**Right-slot grammar.** `⚡` = unread: the monitor's `needsAttention` flag for the row's
+pane, read from `state.json` each discovery tick — the same flag that prefixes the tmux
+window name and glows the portkey row, so all three clear together (focusing the pane,
+or the phone's read-on-open). Then the reply due: `❓` question (open
+AskUserQuestion), `✋` approval, `⏰` snooze wake; a plain ready session shows only its
+age. `⚡❓ 4h` = an unread question ignored for four hours.

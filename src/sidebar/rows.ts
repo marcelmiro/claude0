@@ -209,7 +209,12 @@ export function renderView(
   for (const s of needsYou) {
     const woken = isWoken(s, now) || s.fromSnooze;
     const age = fmtAge(now - effectiveSince(s, now));
-    const glyph = woken ? "↺ " : s.reason === "question" ? "? " : s.reason === "approval" ? "! " : "";
+    // ⚡ = unread (the window-name flag), then the reply due: ❓ question,
+    // ✋ approval, ⏰ snooze wake. Emoji are two cells; tmux 3.4 and
+    // Bun.stringWidth agree on that, so the width math holds (the ADR's
+    // one-cell rule was about blessed, which this renderer bypasses).
+    const marks = (s.unread ? "⚡" : "") + (woken ? "⏰" : s.reason === "question" ? "❓" : s.reason === "approval" ? "✋" : "");
+    const glyph = marks ? `${marks} ` : "";
     // names stay white — peach is reserved for signal: the reason glyph, and
     // a stale (>1d) age, escalating to red past 3d (ignored debt should
     // burn). The whole point is not losing these.

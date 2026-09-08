@@ -1668,7 +1668,7 @@ function List() {
   ];
   const inboxGroups = SECTIONS.map(([key, title]) => {
     // rows keep the server's order within their displayed section: deriveSections owns
-    // the needs-you band sort (question/approval first), shared with the sidebar
+    // the sort (needs-you oldest-ignored first), shared with the sidebar
     const rows = all.filter((s) => s.inbox && displaySection(s.inbox.section, s.status, s.pendingScripts) === key);
     return { key, title, rows };
   }).filter((g) => g.rows.length > 0);

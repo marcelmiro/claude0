@@ -179,7 +179,7 @@ describe("deriveSections", () => {
     expect(sections.done.map((s) => s.id)).toEqual(["d2", "d1"]);
   });
 
-  test("needs-you floats question/approval above plain prompt-sitters, oldest first per band", () => {
+  test("needs-you sorts oldest-ignored first regardless of reason", () => {
     const sections = deriveSections(
       [
         sess({ id: "done-old", since: NOW - D }),
@@ -189,7 +189,7 @@ describe("deriveSections", () => {
       ],
       NOW,
     );
-    expect(sections.needsYou.map((s) => s.id)).toEqual(["appr-old", "q-young", "done-old", "done-young"]);
+    expect(sections.needsYou.map((s) => s.id)).toEqual(["done-old", "appr-old", "done-young", "q-young"]);
   });
 });
 

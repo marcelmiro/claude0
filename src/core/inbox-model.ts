@@ -33,6 +33,8 @@ export interface InboxSession {
   autoResumed?: boolean;
   /** Turn is over but a live run_in_background script is still going (the ⏳ tier). */
   script?: boolean;
+  /** The monitor's attention flag (state.json) — the same ⚡ the tmux window name and portkey show. */
+  unread?: boolean;
   /** When the script-wait state began (⧗ rows age from this, not the prompt). */
   scriptSince?: number;
   /**
@@ -166,22 +168,16 @@ export interface InboxSections {
   done: InboxSession[];
 }
 
-// Needs You is two bands: sessions holding an open question/approval float
-// above plain prompt-sitters — answering one unblocks compute, a ready
-// session just waits for more instructions. Oldest first within each band.
-function needsYouBand(s: InboxSession): number {
-  return s.reason === "question" || s.reason === "approval" ? 0 : 1;
-}
-
 export function deriveSections(sessions: InboxSession[], now: number): InboxSections {
   const by = (sec: Section) => sessions.filter((s) => sectionOf(s, now) === sec);
   // running sorts longest-first on the same anchor its age displays
   // (script-waiters age from the handover, turns from the prompt)
   const runningSince = (s: InboxSession) => (s.script ? (s.scriptSince ?? s.since) : s.since);
   return {
-    needsYou: by("needs-you").sort(
-      (a, b) => needsYouBand(a) - needsYouBand(b) || effectiveSince(a, now) - effectiveSince(b, now),
-    ),
+    // oldest-ignored first, whatever the reason: the question/approval glyph
+    // on the row says what kind of reply is due, the order says how long
+    // you've owed it
+    needsYou: by("needs-you").sort((a, b) => effectiveSince(a, now) - effectiveSince(b, now)),
     running: by("running").sort((a, b) => runningSince(a) - runningSince(b)),
     // snoozed before blocked; snoozed by wake (soonest first), blocked by
     // time spent blocked (least first — since is when the block was set)
