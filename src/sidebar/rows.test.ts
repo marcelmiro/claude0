@@ -48,6 +48,20 @@ describe("renderView", () => {
     }
   });
 
+  test("needs-you glyphs: ⚡ unread, ❓ question, ✋ approval, plain turn-done", () => {
+    const rows = [
+      sess({ id: "u", name: "unread-q", reason: "question", unread: true, since: NOW - 4 * H }),
+      sess({ id: "a", name: "approve", reason: "approval", since: NOW - 3 * H }),
+      sess({ id: "t", name: "plain", since: NOW - 2 * H }),
+    ];
+    const view = renderView(rows, vs(), { width: 24, height: 12 }, NOW);
+    const plain = view.rows.map((r) => r.replace(/\x1b\[[0-9;]*m/g, ""));
+    expect(plain.find((r) => r.includes("unread-q"))).toContain("⚡❓ 4h");
+    expect(plain.find((r) => r.includes("approve"))).toContain("✋ 3h");
+    expect(plain.find((r) => r.includes("plain"))).toMatch(/plain\s+2h/);
+    for (const row of view.rows) expect(plainLen(row)).toBeLessThanOrEqual(24);
+  });
+
   test("wide emoji, CJK, and combining marks do not overflow a row", () => {
     const unicode = [
       sess({ id: "unicode", name: "⚡ Fix 日本 e\u0301 rendering", since: NOW - 2 * H }),

@@ -17,6 +17,7 @@ import { branchPullRequest } from "./pull-request";
 import { detectScriptWaits } from "./script-wait";
 import { readLastPromptAt, resolveTranscriptPath } from "./last-turn";
 import { pendingToolCall } from "./hook-events";
+import { loadState } from "./state";
 import type { InboxStore } from "./inbox-store";
 import { peekEngaged, stripOverlay, type InboxSession } from "./inbox-model";
 
@@ -30,6 +31,9 @@ export async function discoveryTick(store: InboxStore): Promise<void> {
   const readyIds = sessions.filter((s) => s.tmuxPane && s.status === "ready").map((s) => s.id);
   const scriptWaits = readyIds.length ? await detectScriptWaits(readyIds) : new Set<string>();
   const now = Date.now();
+  // ⚡ unread = the monitor's per-pane attention flag, read once per tick so
+  // the sidebar, the window name and portkey clear together
+  const state = await loadState();
   const disp = store.dispositions();
   const arch = store.archivedAt();
   const peeks = store.peeks();
@@ -69,8 +73,8 @@ export async function discoveryTick(store: InboxStore): Promise<void> {
       } catch {}
     }
     // an open AskUserQuestion outranks the coarse status read — same hook-log
-    // source as the bridge's pendingKind, so the two inboxes agree on what
-    // floats to the top of Needs You
+    // source as the bridge's pendingKind, so the two inboxes agree on the
+    // row's reason glyph
     const pending = pendingToolCall(s.id);
     const row: InboxSession = {
       id: s.id,
@@ -97,6 +101,7 @@ export async function discoveryTick(store: InboxStore): Promise<void> {
       // the transcript's last record for scripts already waiting at startup
       scriptSince: undefined, // filled below once `script` is known
       fromSnooze: p?.fromSnooze,
+      unread: state.sessions[s.tmuxPane.paneId]?.needsAttention || undefined,
       real: {
         paneId: s.tmuxPane.paneId,
         target: `${s.tmuxPane.sessionName}:${s.tmuxPane.windowIndex}`,
