@@ -362,8 +362,10 @@ export function runSidebarRenderer(): void {
       if (panes.length === 0) {
         if (win === from.windowId) await handOffTo(nextId ?? null, win);
         wins.delete(win);
+        console.error(`[sidebar] kill-window ${win} reason=disposition session=${s.id}`);
         await Bun.$`tmux kill-window -t ${win}`.quiet();
       } else {
+        console.error(`[sidebar] kill-pane ${s.real.paneId} reason=disposition session=${s.id}`);
         await Bun.$`tmux kill-pane -t ${s.real.paneId}`.quiet();
       }
     } catch {}
@@ -1029,6 +1031,7 @@ export function runSidebarRenderer(): void {
         const pid = pids.get(p.paneId);
         if (pid && !ppids.has(pid)) {
           try {
+            console.error(`[sidebar] kill-pane ${p.paneId} reason=corpse-stub`);
             await Bun.$`tmux kill-pane -t ${p.paneId}`.quiet();
           } catch {}
         }
@@ -1056,6 +1059,7 @@ export function runSidebarRenderer(): void {
             const win = wins.get(winId);
             if (!win || Date.now() - win.stubBornAt > 3000) {
               wins.delete(winId);
+              console.error(`[sidebar] kill-window ${winId} reason=sidebar-only`);
               await Bun.$`tmux kill-window -t ${winId}`.quiet();
             }
             return;
@@ -1249,6 +1253,7 @@ export function runSidebarRenderer(): void {
         if (win?.stubPane) paneToWin.delete(win.stubPane);
         wins.delete(peek.windowId);
         try {
+          console.error(`[sidebar] kill-window ${peek.windowId} reason=peek-unengaged session=${id}`);
           await Bun.$`tmux kill-window -t ${peek.windowId}`.quiet();
         } catch {}
         applyVerb(() => {
