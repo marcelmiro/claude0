@@ -632,21 +632,43 @@ export async function readNamingExtras(
   repoPath: string,
   sessionId: string,
   projectsDir = `${homedir()}/.claude/projects`,
-): Promise<{ firstAssistant: string; lastAssistant: string; middlePrompts: string[] }> {
-  const none = { firstAssistant: "", lastAssistant: "", middlePrompts: [] };
+): Promise<{ firstAssistant: string; lastAssistant: string; middlePrompts: string[]; compactIntent: string; transcriptBytes: number; dominantBranch: string }> {
+  const none = { firstAssistant: "", lastAssistant: "", middlePrompts: [], compactIntent: "", transcriptBytes: 0, dominantBranch: "" };
   try {
     const encodedPath = repoPath.replace(/\//g, "-");
     const projectDir = await resolveProjectDir(projectsDir, encodedPath, sessionId);
     if (!projectDir) return none;
     const jsonlPath = `${projectDir}/${sessionId}.jsonl`;
+    const { middlePrompts, dominantBranch } = await scanTranscriptForNaming(jsonlPath);
     return {
       firstAssistant: await getFirstAssistantReply(jsonlPath),
       lastAssistant: await getLatestAssistantReply(jsonlPath),
-      middlePrompts: await getMiddleUserPrompts(jsonlPath),
+      middlePrompts,
+      dominantBranch,
+      compactIntent: await getCompactIntent(jsonlPath),
+      // Growth since the last naming decides whether that name still fits.
+      transcriptBytes: await Bun.file(jsonlPath).size,
     };
   } catch {
     return none;
   }
+}
+
+/**
+ * Mid-sample noise: user messages that carry no subject and, when sampled, crowd
+ * out the ones that do. Observed in real transcripts: compaction continuations,
+ * relayed subagent/teammate notification JSON, answer-keys ("11. a / 12. yes"),
+ * and terse ops commands ("proceed", "merge pr").
+ */
+function isNamingNoise(clean: string): boolean {
+  if (clean.length < 20) return true;
+  if (clean.startsWith("{") || clean.startsWith("[")) return true;
+  if (/^this session is being continued/i.test(clean)) return true;
+  if (clean.includes("idle_notification") || clean.includes("task-notification")) return true;
+  if (clean.startsWith("Base directory for this skill")) return true;
+  if (clean.startsWith("Another Claude session sent") || clean.includes("<teammate-message")) return true;
+  if (/^\d+[.)]\s/.test(clean)) return true; // answer-key replies to numbered questions
+  return false;
 }
 
 /**
@@ -655,14 +677,28 @@ export async function readNamingExtras(
  * "yes and run /pr-triage") while the middle of the arc names the actual work —
  * without these the namer degrades to generic labels for long sessions.
  */
-async function getMiddleUserPrompts(jsonlPath: string): Promise<string[]> {
+/**
+ * One pass for the two whole-file naming signals: mid-session user messages and
+ * the branch this session actually worked on.
+ *
+ * The branch must come from the transcript, not from the checkout's current HEAD:
+ * in a base checkout shared by several agents, HEAD is whoever checked out last,
+ * and naming a session after a *different* session's branch is exactly the failure
+ * this avoids. The mode (most entries) beats the last value for the same reason.
+ */
+async function scanTranscriptForNaming(jsonlPath: string): Promise<{ middlePrompts: string[]; dominantBranch: string }> {
   try {
     const prompts: string[] = [];
+    const branchCounts = new Map<string, number>();
     for await (const line of jsonlLines(jsonlPath)) {
       if (!line.includes('"type":"user"')) continue;
       try {
         const parsed = JSON.parse(line);
         if (parsed.type !== "user") continue;
+        const b = parsed.gitBranch;
+        if (typeof b === "string" && b && b !== "main" && b !== "master") {
+          branchCounts.set(b, (branchCounts.get(b) ?? 0) + 1);
+        }
         const content = parsed.message?.content;
         let text = "";
         if (typeof content === "string") text = content;
@@ -672,18 +708,23 @@ async function getMiddleUserPrompts(jsonlPath: string): Promise<string[]> {
         }
         if (!text || text.startsWith("[Request interrupted") || text.trimStart().startsWith("<")) continue;
         const clean = text.replace(/\s+/g, " ").trim();
-        if (clean) prompts.push(clean.length > 150 ? clean.slice(0, 150) + "..." : clean);
+        if (!clean || isNamingNoise(clean)) continue;
+        prompts.push(clean.length > 150 ? clean.slice(0, 150) + "..." : clean);
       } catch {
         continue;
       }
     }
-    if (prompts.length <= 2) return []; // only first/last exist — already covered
+    let dominantBranch = "";
+    let best = 0;
+    for (const [b, n] of branchCounts) if (n > best) { best = n; dominantBranch = b; }
+
+    if (prompts.length <= 2) return { middlePrompts: [], dominantBranch }; // only first/last exist — already covered
     const middle = prompts.slice(1, -1);
-    if (middle.length <= 3) return middle;
+    if (middle.length <= 3) return { middlePrompts: middle, dominantBranch };
     const picks = [0.25, 0.5, 0.75].map((f) => middle[Math.floor(f * (middle.length - 1))]);
-    return [...new Set(picks)];
+    return { middlePrompts: [...new Set(picks)], dominantBranch };
   } catch {
-    return [];
+    return { middlePrompts: [], dominantBranch: "" };
   }
 }
 
@@ -699,24 +740,66 @@ function assistantText(parsed: { type?: string; message?: { content?: unknown } 
   return "";
 }
 
-/** Stream from the top and return the first assistant text reply (sits near the head). */
+/**
+ * Stream from the top and return the first SUBSTANTIVE assistant text reply.
+ * Skill/ticket sessions open with meta acknowledgments ("I'll load both skills
+ * first") — the reply that actually states the subject (usually right after the
+ * ticket fetch) comes a few turns later, so scan up to the first 15 assistant
+ * replies for one ≥100 chars and fall back to the first non-empty one.
+ */
 async function getFirstAssistantReply(jsonlPath: string): Promise<string> {
   try {
+    let fallback = "";
+    let seen = 0;
     for await (const line of jsonlLines(jsonlPath)) {
       if (!line.includes('"type":"assistant"')) continue;
       try {
         const text = assistantText(JSON.parse(line));
         if (!text) continue;
         const clean = text.replace(/\s+/g, " ").trim();
-        return clean.length > 300 ? clean.slice(0, 300) + "..." : clean;
+        if (!clean) continue;
+        if (clean.length >= 100) return clean.length > 300 ? clean.slice(0, 300) + "..." : clean;
+        if (!fallback) fallback = clean;
+        if (++seen >= 15) break;
       } catch {
         continue;
       }
     }
-    return "";
+    return fallback;
   } catch {
     return "";
   }
+}
+
+/**
+ * Latest compaction continuation's "Primary Request and Intent" section — the
+ * single best statement of a long session's global subject. Sessions that open
+ * with a slash-command/ticket-ID prompt often have NO other input that names the
+ * work; without this the namer degrades to naming the delivery-phase tail
+ * ("PR Review Triage" for a pipeline feature).
+ */
+async function getCompactIntent(jsonlPath: string): Promise<string> {
+  return scanTailForLine(jsonlPath, (line) => {
+    if (!line.includes("Primary Request and Intent")) return undefined;
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed.type !== "user") return undefined;
+      const content = parsed.message?.content;
+      let text = "";
+      if (typeof content === "string") text = content;
+      else if (Array.isArray(content)) {
+        const block = content.find((b: { type: string; text?: string }) => b.type === "text");
+        if (block?.text) text = block.text;
+      }
+      const m = text.match(/Primary Request and Intent:?\**\s*([\s\S]*?)(?=\n\s*(?:#{1,4}\s*)?\**\s*2\.|\n#{1,4}\s|$)/);
+      if (!m) return undefined;
+      const clean = m[1].replace(/\s+/g, " ").trim();
+      if (!clean) return undefined;
+      return clean.length > 500 ? clean.slice(0, 500) + "..." : clean;
+    } catch {
+      return undefined;
+    }
+  });
 }
 
 /** Latest assistant text reply via the shared backward tail scan. */
@@ -1262,8 +1345,11 @@ async function getFirstUserPrompt(sessionPath: string): Promise<string> {
           return intent.length > 200 ? intent.slice(0, 200) + "..." : intent;
         }
 
-        // Skip system/meta messages and anything starting with XML tags
-        if (!text || text.startsWith("[Request interrupted") || text.trimStart().startsWith("<")) {
+        // Skip system/meta messages and anything starting with XML tags.
+        // Skill-tool invocations arrive as plain-text scaffolding ("Base
+        // directory for this skill: …") with no subject in the first 200 chars —
+        // skip to the first substantive message instead.
+        if (!text || text.startsWith("[Request interrupted") || text.trimStart().startsWith("<") || text.startsWith("Base directory for this skill")) {
           continue;
         }
 

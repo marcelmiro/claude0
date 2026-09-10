@@ -89,6 +89,7 @@ import {
   inNamingCooldown,
   needsNaming,
   pruneNameCacheIfLarge,
+  shouldRebaseline,
   type NameCache,
 } from "../core/names";
 import { buildSessionLabel, disambiguateByRepo, snippet } from "../core/session-label";
@@ -843,30 +844,40 @@ function maybeGenerateNames(sessions: Session[], cache: NameCache): void {
       if (todo.length === 0) return;
       locked = await acquireNamingLock();
       if (!locked) return; // monitor is naming — skip this cycle
-      const named: Array<[id: string, name: string, source: string]> = [];
+      const named: Array<[id: string, name: string, source: string, bytes: number]> = [];
       await Promise.all(
         todo.map(async (s) => {
-          const extras = await readNamingExtras(s.repoPath, s.id);
+          const { transcriptBytes, ...extras } = await readNamingExtras(s.repoPath, s.id);
           const name = await generateAIName({
             firstPrompt: s.firstPrompt,
             summary: s.summary,
-            branch: s.branch,
             lastPrompt: s.lastPrompt,
             ...extras,
+            // Transcript branch over live HEAD (see the monitor's note).
+            branch: extras.dominantBranch || s.branch,
+            siblingNames: sessions
+              .filter((o) => o.id !== s.id && o.repoPath === s.repoPath)
+              .map((o) => cache.names[o.id] ?? "")
+              .filter(Boolean),
+            // Withheld once the session has outgrown its name, so a stale one can
+            // self-correct instead of anchoring forever (see `shouldRebaseline`).
+            currentName: shouldRebaseline(cache, s.id, transcriptBytes) ? undefined : cache.names[s.id],
           });
           // Cooldown on success too — the post-rename guard against drift-thrash.
           await setNamingSkip(s.id);
-          if (name) named.push([s.id, name, s.lastPrompt || s.summary || s.firstPrompt]);
+          if (name) named.push([s.id, name, s.lastPrompt || s.summary || s.firstPrompt, transcriptBytes]);
         }),
       );
       if (named.length > 0) {
         // Reload under the lock so we merge onto any names the monitor wrote meanwhile.
         const fresh = await loadNameCache();
-        for (const [id, name, source] of named) {
+        fresh.sizes ??= {};
+        for (const [id, name, source, bytes] of named) {
           fresh.names[id] = name;
           // Written so the monitor's drift check agrees on what this name was
           // based on — without it, the monitor re-names every bridge-named session.
           fresh.sources[id] = source;
+          fresh.sizes[id] = bytes;
         }
         await pruneNameCacheIfLarge(fresh, PROJECTS_DIR);
         await saveNameCache(fresh);

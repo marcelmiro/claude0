@@ -109,6 +109,24 @@ export interface NameCache {
   version: 6;
   names: Record<string, string>;     // sessionId → AI-generated name (human-readable, e.g. "Fix Auth")
   sources: Record<string, string>;   // sessionId → summary/prompt used for naming
+  /** sessionId → transcript bytes when the name was written. Drives the
+   *  re-baseline rule (see `shouldRebaseline`); absent for pre-existing entries,
+   *  which simply keep their anchor until their next rename records a size. */
+  sizes?: Record<string, number>;
+}
+
+/** A session that has more than doubled since it was named has usually outgrown
+ *  that name — an opening bug question that became a page redesign. Renames pass
+ *  the current name as a stability anchor, and the anchor is strong enough that a
+ *  stale name never self-corrects; past this growth factor we drop it and let the
+ *  namer re-derive the subject from scratch. */
+const REBASELINE_GROWTH = 2;
+
+/** True when the anchor should be withheld so the name is re-derived from scratch. */
+export function shouldRebaseline(cache: NameCache, sessionId: string, transcriptBytes: number): boolean {
+  const prior = cache.sizes?.[sessionId];
+  if (!prior || transcriptBytes <= 0) return false; // unknown baseline — keep the anchor
+  return transcriptBytes >= prior * REBASELINE_GROWTH;
 }
 
 /**
@@ -158,7 +176,7 @@ export const ABBREV: Record<string, string> = {
  */
 const HARD_REFUSAL_PREFIXES = [
   "i can't", "i cannot", "i can not", "i'm sorry", "i am sorry", "sorry",
-  "i need permission", "i don't have", "i do not have", "i'm unable", "i am unable",
+  "i need permission", "i don't", "i do not", "i'm unable", "i am unable",
   "unable to", "this doesn't appear", "this does not appear", "i'd be happy",
   "i would be happy", "i need clarification", "i need more", "i'll need", "i cannot help",
   // First-person openers — a real name is a terse noun/verb phrase ("Fix Auth"),
@@ -174,9 +192,19 @@ const OPENER_PREFIXES = [
 ];
 
 // Substrings that only appear when the model answered conversationally, not as a name.
+// "claude code" is NOT here: claude0 manages Claude Code, so sessions about it are
+// legitimately named after it ("Claude Code Health Check"). Self-introductions are
+// caught by the "i'm claude" entry and the first-person prefixes above.
 const NOT_A_NAME_SUBSTRINGS = [
-  "claude code", "as an ai", "language model", "ai assistant", "i'm claude", "i am claude",
+  "as an ai", "language model", "ai assistant", "i'm claude", "i am claude",
 ];
+
+// A name ending in one of these is a clipped sentence ("Need PR details to").
+// "this"/"that" are deliberately absent — they end real names ("Chat About This")
+// far more often than they signal a clipped sentence.
+const DANGLING_LAST_WORDS = new Set([
+  "to", "an", "a", "the", "of", "for", "with", "and", "or", "on", "in", "by", "from", "is", "are",
+]);
 
 /** Prefix match on a word boundary: "sure thing" matches "sure", "Surefire" doesn't. */
 function matchesPrefix(lower: string, p: string): boolean {
@@ -193,6 +221,10 @@ export function looksLikeRefusal(text: string): boolean {
   if (NOT_A_NAME_SUBSTRINGS.some((s) => lower.includes(s))) return true;
   // A name is 1-4 words with no sentence punctuation; a comma or >4 words is a ramble.
   if (lower.includes(",") || lower.split(/\s+/).filter(Boolean).length > 4) return true;
+  // A trailing filler word means a truncated sentence, not a name ("Need PR
+  // details to", "I don't see an") — real names never end mid-phrase.
+  const words = lower.replace(/[.,;:!?]+$/, "").split(/\s+/).filter(Boolean);
+  if (DANGLING_LAST_WORDS.has(words[words.length - 1] ?? "")) return true;
   return false;
 }
 
@@ -298,6 +330,18 @@ export interface NamingContext {
   /** User messages sampled from the middle of the transcript — often the only
    *  place the actual subject appears when first/last are meta ("begin the task"). */
   middlePrompts?: string[];
+  /** "Primary Request and Intent" from the latest compaction summary — the best
+   *  global-subject statement for long sessions whose first prompt is a bare
+   *  ticket ID or slash-command boilerplate. */
+  compactIntent?: string;
+  /** Existing cached name, passed on drift renames so a still-accurate name is
+   *  kept instead of being re-derived from (and biased toward) the current tail. */
+  currentName?: string;
+  /** Names already given to other sessions in the same repo. A name is a list
+   *  label, so it only works if it is distinguishable from its neighbours — without
+   *  these, sessions covering one PR of a long migration all land on the migration's
+   *  own name and become indistinguishable in the list. */
+  siblingNames?: string[];
   /** Bounds the subprocess — keep it low (15s default) for the background monitor so a
    *  hung `claude -p` can't stall its poll loop; the interactive TUI rename passes a
    *  longer budget so a cold haiku start resolves in one attempt. */
@@ -306,13 +350,23 @@ export interface NamingContext {
 
 /** Assemble the `claude -p` naming prompt from the conversation signals. */
 export function buildNamingPrompt(ctx: NamingContext): string {
-  const { firstPrompt, summary, branch, lastPrompt, firstAssistant, lastAssistant } = ctx;
+  const { firstPrompt, summary, branch, lastPrompt, firstAssistant, lastAssistant, compactIntent, currentName } = ctx;
   const contextParts: string[] = [];
   // Always anchor on firstPrompt — it's the most reliable signal of intent.
   // Dropping it when summary/lastPrompt exist caused hallucinated names from
   // vague follow-ups like "IDK, go check that".
   const planTitle = extractPlanTitle(firstPrompt || "");
   if (planTitle) contextParts.push(`Plan title: "${planTitle}"`);
+  if (branch) {
+    // Strip ticket prefix (e.g. "ENG-2687-") for naming context. Listed early:
+    // ticket-branch slugs state the deliverable verbatim and are the single most
+    // reliable subject carrier in real transcripts.
+    const branchContext = branch.replace(new RegExp(`^${TICKET_ID_SOURCE}-?`, "i"), "");
+    if (branchContext && branchContext !== "main" && branchContext !== "master") {
+      contextParts.push(`Branch: "${branchContext}"`);
+    }
+  }
+  if (compactIntent) contextParts.push(`Session intent (from an in-session summary): "${compactIntent}"`);
   if (firstPrompt) contextParts.push(`First user message: "${firstPrompt.slice(0, 300)}"`);
   if (firstAssistant) contextParts.push(`First assistant reply: "${firstAssistant.slice(0, 300)}"`);
   const usefulSummary = summary && summary !== firstPrompt ? summary : "";
@@ -326,15 +380,19 @@ export function buildNamingPrompt(ctx: NamingContext): string {
   if (lastAssistant && lastAssistant !== firstAssistant) {
     contextParts.push(`Most recent assistant reply: "${lastAssistant.slice(0, 300)}"`);
   }
-  if (branch) {
-    // Strip ticket prefix (e.g. "ENG-2687-") for naming context
-    const branchContext = branch.replace(new RegExp(`^${TICKET_ID_SOURCE}-?`, "i"), "");
-    if (branchContext) contextParts.push(`Branch: "${branchContext}"`);
+  if (currentName) contextParts.push(`Current name: "${currentName}"`);
+  const siblings = (ctx.siblingNames ?? []).filter((n) => n && n !== currentName).slice(0, 8);
+  if (siblings.length > 0) {
+    contextParts.push(`Other sessions in this repo are already named: ${siblings.map((n) => `"${n}"`).join(", ")}`);
   }
 
   return `Name this session in Title Case, plain English words. It may be any kind of task (coding or not) — always produce a name from the content; never introduce yourself or explain. Prefer 2-3 words; up to 4 when the subject needs them (it labels a narrow tmux tab). Drop filler words (the, a, for, with, to).
 
-Name the session's OVERALL subject — the specific feature, system, or deliverable being worked on. The most recent messages show the current step; use them to identify the subject, never as the name itself. Never name the interaction style alone: for "review/plan/grill/debug X", name X. Never use a ticket ID (TF-123, ENG-45) as the name — name what the ticket is about. Avoid words generic enough to fit any session (Analytics, Cleanup, Config, Optimization, Task) unless paired with the specific subject. Ignore meta text about continuing or compacting a previous conversation. Focus on the GOAL, not file paths or locations. Do NOT use kebab-case, do NOT abbreviate.
+Name the session's OVERALL subject — the specific feature, system, or deliverable being worked on. When the conversation spans several topics or phases, name the umbrella goal that explains most of it — never a single sub-fix, side thread, or detour, however recent or vivid, and never the first small question if the session outgrew it. The session intent and branch name, when present, usually state the deliverable — trust them over recent messages; if they disagree with each other, prefer the session intent (a worktree branch can be left over from different work). The most recent messages show the current step; use them to identify the subject, never as the name itself. Delivery-phase activity (PR review, triage, merging, closing tickets, cleanup) is never the subject — name the thing being delivered. Name the whole change, not one of its properties or one step inside it, and keep the word that makes the work distinctive rather than the repo's general subject ("Web Push", not "Notifications"). Only if that name would be a bare label for a long-running project that many other sessions share, add one word for the part this session covered. When the session covers several unrelated topics, name the one that takes up most of it. Never name the interaction style alone: for "review/plan/grill/debug X", name X. Never use a ticket ID (TF-123, ENG-45) as the name — name what the ticket is about. Avoid words generic enough to fit any session (Analytics, Cleanup, Config, Optimization, Task) unless paired with the specific subject. Ignore meta text about continuing or compacting a previous conversation. Focus on the GOAL, not file paths or locations. Do NOT use kebab-case, do NOT abbreviate.
+
+If a current name is given and it still matches the overall subject, reply with it UNCHANGED — rename only when the session's subject itself has changed.
+
+If other sessions in the repo are listed, your name must not be confusable with them: when the name you would give fits one of those sessions equally well, name instead the specific part this session worked on.
 
 Good: Fix Auth, Dark Mode Toggle, Provider Sync, iCloud Photos, Employment Verification
 Bad: fix-auth, TF-245 Cleanup, Analytics, Grill Plan, Plan Review, "I'm Claude Code..."
@@ -345,13 +403,60 @@ ${contextParts.join("\n")}`;
 }
 
 /**
+ * How many candidates to draw per naming. The same context re-run gives materially
+ * different names on long multi-topic sessions ("Contact Self-Heal Flow" vs "SNS
+ * Restructure" vs a refusal), so one draw is a coin flip on exactly the sessions
+ * that are hardest to name. Draws run concurrently — wall time stays one call.
+ */
+const NAME_SAMPLES = 3;
+
+/** Word set of a name, for candidate agreement scoring. */
+function nameWords(name: string): Set<string> {
+  return new Set(name.toLowerCase().split(/\s+/).filter(Boolean));
+}
+
+/**
+ * Pick the candidate the others most agree with (highest summed Jaccard overlap):
+ * the shared subject survives across draws while each draw's idiosyncratic word
+ * does not, so the medoid is the consensus name. Ties go to the earlier draw.
+ */
+export function pickConsensusName(candidates: string[]): string {
+  const names = candidates.filter(Boolean);
+  if (names.length <= 1) return names[0] ?? "";
+  const sets = names.map(nameWords);
+  let bestIdx = 0;
+  let bestScore = -1;
+  for (let i = 0; i < names.length; i++) {
+    let score = 0;
+    for (let j = 0; j < names.length; j++) {
+      if (i === j) continue;
+      let shared = 0;
+      for (const w of sets[i]) if (sets[j].has(w)) shared++;
+      const union = sets[i].size + sets[j].size - shared;
+      score += union > 0 ? shared / union : 0;
+    }
+    if (score > bestScore) { bestScore = score; bestIdx = i; }
+  }
+  return names[bestIdx];
+}
+
+/**
  * AI-powered name generation using `claude -p`. Returns a normalized Title-Case name
- * or empty string on failure/refusal.
+ * or empty string on failure/refusal. Draws `NAME_SAMPLES` candidates and returns the
+ * one the others agree with most.
  */
 export async function generateAIName(ctx: NamingContext): Promise<string> {
-  const { firstPrompt, summary, lastPrompt, timeoutMs = 15_000 } = ctx;
+  const { firstPrompt, summary, lastPrompt } = ctx;
   if (!firstPrompt && !summary && !lastPrompt) return "";
+  const candidates = await Promise.all(
+    Array.from({ length: NAME_SAMPLES }, () => generateOneName(ctx)),
+  );
+  return pickConsensusName(candidates);
+}
 
+/** One `claude -p` draw. */
+async function generateOneName(ctx: NamingContext): Promise<string> {
+  const { timeoutMs = 15_000 } = ctx;
   try {
     const namePrompt = buildNamingPrompt(ctx);
     const proc = Bun.spawn([CLAUDE_PATH, "-p", "--model", "haiku", "--no-session-persistence"], {
@@ -423,6 +528,7 @@ export function pruneNameCache(cache: NameCache, liveSessionIds: Set<string>): b
     if (liveSessionIds.has(id)) continue;
     delete cache.names[id];
     delete cache.sources[id];
+    if (cache.sizes) delete cache.sizes[id];
     pruned = true;
   }
   return pruned;

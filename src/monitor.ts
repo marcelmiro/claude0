@@ -21,7 +21,7 @@ import { classifyActivity } from "./core/presence";
 import { detectScriptWaits } from "./core/script-wait";
 import { getBaseRepoPath } from "./core/git";
 import { repoNameFromPath } from "./core/sessions";
-import { loadNameCache, saveNameCache, generateAIName, getSessionName, slugify, acquireNamingLock, releaseNamingLock, pruneNameCacheIfLarge, loadNamingSkips, setNamingSkip, needsNaming, inNamingCooldown, type NameCache } from "./core/names";
+import { loadNameCache, saveNameCache, generateAIName, getSessionName, slugify, acquireNamingLock, releaseNamingLock, pruneNameCacheIfLarge, loadNamingSkips, setNamingSkip, needsNaming, inNamingCooldown, shouldRebaseline, type NameCache } from "./core/names";
 import { disambiguateByRepo } from "./core/session-label";
 import { findActiveSessionInfo, readNamingExtras } from "./core/sessions";
 import { homedir } from "os";
@@ -502,8 +502,20 @@ async function phase2(
           // Get branch for naming context
           let branch = "";
           try { branch = (await Bun.$`git -C ${unnamed.repoPath} branch --show-current`.quiet().text()).trim(); } catch {}
-          const { firstAssistant, lastAssistant } = await readNamingExtras(unnamed.repoPath, sessionId);
-          const name = await generateAIName({ firstPrompt, summary, branch, lastPrompt, firstAssistant, lastAssistant });
+          const { transcriptBytes, ...extras } = await readNamingExtras(unnamed.repoPath, sessionId);
+          // Anchor on the existing name so a delivery-phase tail can't rename a
+          // good session — unless the transcript has outgrown it, in which case
+          // re-derive from scratch (see `shouldRebaseline`).
+          const anchor = shouldRebaseline(nameCache, sessionId, transcriptBytes) ? undefined : nameCache.names[sessionId];
+          // The transcript's own branch beats the checkout's HEAD — a base checkout
+          // shared with other agents may sit on someone else's branch right now.
+          // Names already taken in this repo, so the new one is distinguishable
+          // from them rather than a second copy of the project's own label.
+          const siblingNames = sessions
+            .filter((s) => s.repoPath === unnamed.repoPath && s.tmuxPane && paneSessionMap[s.tmuxPane.paneId] !== sessionId)
+            .map((s) => nameCache.names[paneSessionMap[s.tmuxPane!.paneId]] ?? "")
+            .filter(Boolean);
+          const name = await generateAIName({ firstPrompt, summary, lastPrompt, ...extras, branch: extras.dominantBranch || branch, currentName: anchor, siblingNames });
           if (name) {
             // Reload: names the bridge wrote (or pruned) during the ≤15s claude -p
             // run must not be clobbered or resurrected by this stale in-memory copy —
@@ -511,9 +523,11 @@ async function phase2(
             const fresh = await loadNameCache();
             nameCache.names = fresh.names;
             nameCache.sources = fresh.sources;
+            nameCache.sizes = fresh.sizes ?? {};
             nameCache.names[sessionId] = name;
             // Store the freshest signal we used so future drift checks compare apples-to-apples
             nameCache.sources[sessionId] = lastPrompt || summary || firstPrompt;
+            nameCache.sizes[sessionId] = transcriptBytes;
             await pruneNameCacheIfLarge(nameCache, projectsDir);
             await saveNameCache(nameCache);
             // Cooldown — prevents re-running claude -p on every minor summary edit

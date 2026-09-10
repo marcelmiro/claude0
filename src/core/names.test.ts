@@ -3,7 +3,7 @@ import { CONFIG_DIR } from "../../test/helpers/home";
 import { test, expect } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { getSessionName, loadNameCache, normalizeName, slugify, looksLikeRefusal, salvageName, pruneNameCache, needsNaming, inNamingCooldown, buildNamingPrompt, saveNameCache, type NameCache } from "./names";
+import { getSessionName, loadNameCache, normalizeName, slugify, looksLikeRefusal, salvageName, pruneNameCache, needsNaming, inNamingCooldown, shouldRebaseline, pickConsensusName, buildNamingPrompt, saveNameCache, type NameCache } from "./names";
 
 const CACHE_FILE = join(CONFIG_DIR, "names.json");
 function writeCache(obj: unknown) {
@@ -137,6 +137,25 @@ test("looksLikeRefusal: prefixes match on word boundaries only", () => {
   expect(looksLikeRefusal("Sure thing")).toBe(true);
 });
 
+test("looksLikeRefusal: clipped sentences and I-don't replies are rejected", () => {
+  // real garbage that reached names.json in the wild
+  expect(looksLikeRefusal("I don't see an")).toBe(true);
+  expect(looksLikeRefusal("Need PR details to")).toBe(true);
+  expect(salvageName("I don't see an")).toBe("");
+  expect(salvageName("Need PR details to")).toBe("");
+  // trailing-word guard doesn't hit real names
+  expect(looksLikeRefusal("Add Direction Column")).toBe(false);
+  expect(looksLikeRefusal("Dial Targets Scoring")).toBe(false);
+});
+
+test("looksLikeRefusal: keeps real names that mention Claude Code or end in 'this'", () => {
+  // claude0 manages Claude Code, so these are legitimate subjects, not self-introductions
+  expect(looksLikeRefusal("Claude Code Health Check")).toBe(false);
+  expect(looksLikeRefusal("Chat About This")).toBe(false);
+  // self-introductions still rejected
+  expect(looksLikeRefusal("I'm Claude Code, designed for")).toBe(true);
+});
+
 test("salvageName: never mangles a boundary-adjacent real name", () => {
   expect(salvageName("Surefire Payments")).toBe("Surefire Payments");
 });
@@ -165,6 +184,66 @@ test("buildNamingPrompt: assistant replies land in the prompt, deduped and trunc
   // Identical first/last assistant reply appears once.
   const dup = buildNamingPrompt({ firstPrompt: "x", firstAssistant: "same", lastAssistant: "same" });
   expect(dup).not.toContain("Most recent assistant reply");
+});
+
+test("buildNamingPrompt: branch leads the context, main/master are omitted", () => {
+  const p = buildNamingPrompt({ firstPrompt: "read tf-283 and begin", branch: "tf-283-client-provisioning-v2" });
+  expect(p.indexOf('Branch: "client-provisioning-v2"')).toBeLessThan(p.indexOf("First user message"));
+  expect(buildNamingPrompt({ firstPrompt: "x", branch: "main" })).not.toContain("Branch:");
+  expect(buildNamingPrompt({ firstPrompt: "x", branch: "master" })).not.toContain("Branch:");
+});
+
+test("buildNamingPrompt: compact intent and current name land in the prompt", () => {
+  const p = buildNamingPrompt({
+    firstPrompt: "/grill-with-docs TF-285",
+    compactIntent: "Build Onboard Client v2: provision through Throxy and spawn the ticket chain",
+    currentName: "Onboard Client V2",
+  });
+  expect(p).toContain('Session intent (from an in-session summary): "Build Onboard Client v2');
+  expect(p).toContain('Current name: "Onboard Client V2"');
+  expect(p).toContain("reply with it UNCHANGED");
+  const bare = buildNamingPrompt({ firstPrompt: "x" });
+  expect(bare).not.toContain("Session intent");
+  expect(bare).not.toContain("Current name:");
+});
+
+test("buildNamingPrompt: sibling names are listed, capped, and never echo the current name", () => {
+  const p = buildNamingPrompt({
+    firstPrompt: "x",
+    currentName: "Postgres Migration",
+    siblingNames: ["Postgres Migration", "Dial Targets Scoring", ""],
+  });
+  expect(p).toContain('Other sessions in this repo are already named: "Dial Targets Scoring"');
+  expect(p).not.toContain('already named: "Postgres Migration"'); // own name filtered out
+  const many = buildNamingPrompt({ firstPrompt: "x", siblingNames: Array.from({ length: 12 }, (_, i) => `Name ${i}`) });
+  expect(many).toContain("Name 7");
+  expect(many).not.toContain("Name 8"); // capped at 8
+  expect(buildNamingPrompt({ firstPrompt: "x" })).not.toContain("Other sessions in this repo");
+});
+
+test("pickConsensusName: returns the draw the others agree with most", () => {
+  // two draws share the subject, the third is an outlier — consensus wins
+  expect(pickConsensusName(["Contact Self-Heal Flow", "Contact Self-Heal", "SNS Restructure"]))
+    .toBe("Contact Self-Heal Flow");
+  expect(pickConsensusName(["", "Web Push Notifications", ""])).toBe("Web Push Notifications");
+  expect(pickConsensusName(["", "", ""])).toBe("");
+  // no overlap at all: first draw, deterministically
+  expect(pickConsensusName(["Alpha One", "Beta Two", "Gamma Three"])).toBe("Alpha One");
+});
+
+test("shouldRebaseline: drops the anchor only once a session outgrows its name", () => {
+  const c = cache({ names: { s1: "Ticket Queue Load" }, sizes: { s1: 1000 } });
+  expect(shouldRebaseline(c, "s1", 1500)).toBe(false); // normal growth — keep the anchor
+  expect(shouldRebaseline(c, "s1", 2000)).toBe(true); // doubled — re-derive
+  expect(shouldRebaseline(c, "s1", 9000)).toBe(true);
+  expect(shouldRebaseline(c, "unknown", 9000)).toBe(false); // no baseline recorded
+  expect(shouldRebaseline(c, "s1", 0)).toBe(false); // unreadable transcript
+});
+
+test("pruneNameCache: drops the size baseline alongside the name", () => {
+  const c = cache({ names: { dead: "Old" }, sources: { dead: "x" }, sizes: { dead: 10 } });
+  pruneNameCache(c, new Set<string>());
+  expect(c.sizes).toEqual({});
 });
 
 test("saveNameCache: round-trips atomically with no temp file left behind", async () => {
