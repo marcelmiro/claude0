@@ -230,14 +230,14 @@ export function renderView(
   lines.push("");
   header("RUNNING", running.length, running.length ? C.mint : C.dim);
   for (const s of running) {
-    // mode rides the right slot: ⧗ = turn done but a background script still
+    // mode rides the right slot: ⏳ = turn done but a background script still
     // runs, aged from when the script-wait began; bare age = turn in flight,
     // since your last prompt.
     const age = fmtAge(now - (s.script ? (s.scriptSince ?? s.since) : s.since));
     push(s, "running", sessionLine(s, vs, width, C.fg, {
-      right: `${s.script ? "⧗ " : ""}${age}`,
+      right: `${s.script ? "⏳ " : ""}${age}`,
       rightColor: C.dim,
-      rightRendered: (s.script ? fg(C.mint, "⧗ ") : "") + fg(C.dim, age),
+      rightRendered: (s.script ? fg(C.mint, "⏳ ") : "") + fg(C.dim, age),
     }));
   }
 

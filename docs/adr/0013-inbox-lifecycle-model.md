@@ -410,3 +410,7 @@ window name and glows the portkey row, so all three clear together (focusing the
 or the phone's read-on-open). Then the reply due: `❓` question (open
 AskUserQuestion), `✋` approval, `⏰` snooze wake; a plain ready session shows only its
 age. `⚡❓ 4h` = an unread question ignored for four hours.
+
+**Script-wait is `⏳`** (2026-09-10), the same glyph as the tmux window prefix for that
+state — one state, one mark. Parked's `☾`/`✗` deliberately stay one-cell: emoji there
+would give parked rows the visual weight the section tiers exist to take away.
