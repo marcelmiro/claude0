@@ -19,7 +19,8 @@
  */
 import { openSync, writeSync, closeSync } from "node:fs";
 import { InboxStore } from "../core/inbox-store";
-import { composeSessions, peekEngaged, peekVerdict, sectionOf, wakeAt, type InboxSession } from "../core/inbox-model";
+import { composeSessions, overlayAttention, peekEngaged, peekVerdict, sectionOf, wakeAt, type InboxSession } from "../core/inbox-model";
+import { loadState } from "../core/state";
 import { readLastPromptAt, resolveTranscriptPath } from "../core/last-turn";
 import { resolveRestoreTarget } from "../core/resurrect";
 import { PATHS, configCache, parseTmuxKey, tmuxKeys } from "../core/config";
@@ -1415,6 +1416,12 @@ export function runSidebarRenderer(): void {
     try {
       const dv = store.dataVersion();
       if (dv !== lastDataVersion) reloadSessions();
+    } catch {}
+    // ⚡ tracks the monitor's flag directly so the row and the window name
+    // clear on the same tick, not one discovery pass apart
+    phase = "attention";
+    try {
+      overlayAttention(sessions, (await loadState()).sessions);
     } catch {}
     const minute = Math.floor(Date.now() / 60_000);
     if (minute !== lastMinute) lastMinute = minute;

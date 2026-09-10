@@ -237,6 +237,19 @@ export function stripOverlay(s: InboxSession): InboxSession {
   return rest;
 }
 
+/**
+ * Refresh `unread` from the monitor's live attention flags. The snapshot's
+ * copy is one discovery tick behind (monitor → state.json → discovery →
+ * snapshot), so the window name would drop ⚡ seconds before the row did;
+ * reading state.json per paint closes that gap. Pane-less rows keep the
+ * snapshot value — they have no pane to key on.
+ */
+export function overlayAttention(sessions: InboxSession[], flags: Record<string, { needsAttention: boolean }>): void {
+  for (const s of sessions) {
+    if (s.real) s.unread = flags[s.real.paneId]?.needsAttention || undefined;
+  }
+}
+
 /** Compose render state: snapshot rows + authored overlay from the tables. */
 export function composeSessions(store: InboxStore): InboxSession[] {
   const sessions: InboxSession[] = [];

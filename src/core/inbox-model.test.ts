@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { addDays, isDue, localMidnight, snoozeSpan, wakeAt, wakeBanner } from "./inbox-model";
+import { addDays, isDue, localMidnight, overlayAttention, snoozeSpan, wakeAt, wakeBanner } from "./inbox-model";
 
 // A fixed local moment: 2026-08-11 14:30 local time.
 const NOW = new Date(2026, 7, 11, 14, 30).getTime();
@@ -237,5 +237,24 @@ describe("prompt-sitters file under needs-you", () => {
 
   test("a derived finish (finishAt passed) is needs-you too", () => {
     expect(sectionOf(sess({ running: { finishAt: NOW - M } }), NOW)).toBe("needs-you");
+  });
+});
+
+describe("overlayAttention", () => {
+  const row = (id: string, paneId: string | null, unread?: boolean): InboxSession => ({
+    id, repo: "r", name: id, reason: "turn-done", since: NOW, unread,
+    real: paneId ? { paneId, target: "main:1", status: "ready" } : undefined,
+  });
+
+  test("live rows take the monitor's flag: set, cleared, and absent-from-state all win over the snapshot", () => {
+    const rows = [row("set", "%1", false), row("cleared", "%2", true), row("unknown", "%3", true)];
+    overlayAttention(rows, { "%1": { needsAttention: true }, "%2": { needsAttention: false } });
+    expect(rows.map((r) => r.unread)).toEqual([true, undefined, undefined]);
+  });
+
+  test("pane-less rows keep the snapshot's value", () => {
+    const rows = [row("parked", null, true), row("plain", null)];
+    overlayAttention(rows, {});
+    expect(rows.map((r) => r.unread)).toEqual([true, undefined]);
   });
 });

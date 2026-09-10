@@ -414,3 +414,20 @@ age. `⚡❓ 4h` = an unread question ignored for four hours.
 **Script-wait is `⏳`** (2026-09-10), the same glyph as the tmux window prefix for that
 state — one state, one mark. Parked's `☾`/`✗` deliberately stay one-cell: emoji there
 would give parked rows the visual weight the section tiers exist to take away.
+
+## Addendum: ⚡ reads the monitor's flag per paint, and rides ⏳ (2026-09-10)
+
+**The sidebar overlays `unread` from `state.json` on every 1s paint** instead of
+trusting the snapshot's copy. The snapshot inherits the flag one discovery pass late
+(monitor tick → `state.json` → next `--discover-once` → snapshot → paint), so the tmux
+window dropped ⚡ two to four seconds before the row did — the only glyph with a
+strictly serial path; running/script-wait are classified by discovery itself and can
+only be one tick off in either direction. `overlayAttention` (inbox-model) keys rows
+with a live pane by pane id; pane-less rows keep the snapshot value, which portkey and
+newborn placement still use. Discovery keeps stamping `unread` for the bridge.
+
+**RUNNING rows show `⚡⏳`** when a script-wait's turn still carries the attention flag:
+the window prefix ranks ⚡ above ⏳ and the status bar counts it, so a bare `⏳` row
+under-reported the status bar. ⚡ never rides an in-flight turn — the monitor clears the
+flag on running, and gating on `script` covers the tick where its write lags the paint.
+
