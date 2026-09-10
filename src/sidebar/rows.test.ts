@@ -62,6 +62,21 @@ describe("renderView", () => {
     for (const row of view.rows) expect(plainLen(row)).toBeLessThanOrEqual(24);
   });
 
+  test("running glyphs: ⚡⏳ unread script-wait, ⏳ script-wait, bare in-flight even when unread", () => {
+    const run = { finishAt: Number.MAX_SAFE_INTEGER };
+    const rows = [
+      sess({ id: "us", name: "unread-script", running: run, script: true, scriptSince: NOW - 4 * M, unread: true, real: { paneId: "%1", target: "main:1", status: "running" } }),
+      sess({ id: "s", name: "script", running: run, script: true, scriptSince: NOW - 3 * M, real: { paneId: "%2", target: "main:2", status: "running" } }),
+      sess({ id: "f", name: "inflight", running: run, since: NOW - 2 * M, unread: true, real: { paneId: "%3", target: "main:3", status: "running" } }),
+    ];
+    const view = renderView(rows, vs(), { width: 26, height: 14 }, NOW);
+    const plain = view.rows.map((r) => r.replace(/\x1b\[[0-9;]*m/g, ""));
+    expect(plain.find((r) => r.includes("unread-script"))).toContain("⚡⏳ 4m");
+    expect(plain.find((r) => r.includes("script") && !r.includes("unread"))).toMatch(/[^⚡]⏳ 3m/);
+    expect(plain.find((r) => r.includes("inflight"))).toMatch(/inflight\s+2m$/);
+    for (const row of view.rows) expect(plainLen(row)).toBeLessThanOrEqual(26);
+  });
+
   test("wide emoji, CJK, and combining marks do not overflow a row", () => {
     const unicode = [
       sess({ id: "unicode", name: "⚡ Fix 日本 e\u0301 rendering", since: NOW - 2 * H }),

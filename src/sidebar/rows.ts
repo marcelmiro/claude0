@@ -232,12 +232,16 @@ export function renderView(
   for (const s of running) {
     // mode rides the right slot: ⏳ = turn done but a background script still
     // runs, aged from when the script-wait began; bare age = turn in flight,
-    // since your last prompt.
+    // since your last prompt. ⚡ joins ⏳ when the turn's attention flag is
+    // still set (the window name and status bar count it, so the row must
+    // too); it never rides an in-flight turn — the monitor clears the flag on
+    // running, and its tick may lag this one.
     const age = fmtAge(now - (s.script ? (s.scriptSince ?? s.since) : s.since));
+    const unread = s.script && s.unread;
     push(s, "running", sessionLine(s, vs, width, C.fg, {
-      right: `${s.script ? "⏳ " : ""}${age}`,
+      right: `${unread ? "⚡" : ""}${s.script ? "⏳ " : ""}${age}`,
       rightColor: C.dim,
-      rightRendered: (s.script ? fg(C.mint, "⏳ ") : "") + fg(C.dim, age),
+      rightRendered: (unread ? fg(C.peach, "⚡") : "") + (s.script ? fg(C.mint, "⏳ ") : "") + fg(C.dim, age),
     }));
   }
 
