@@ -44,7 +44,7 @@ export interface InboxSession {
    */
   pr?: { number?: number; state: PullRequestInfo["state"]; branch?: string; fetchedAt: number };
   /** Incremental transcript-scan cursor behind `pr` — where the session's edits land. */
-  editScan?: EditScan;
+  workScan?: EditScan;
 }
 
 export type Section = "needs-you" | "running" | "parked" | "done";

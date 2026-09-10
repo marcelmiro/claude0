@@ -50,10 +50,64 @@ async function git(root: string, args: string[]): Promise<string> {
   }
 }
 
+/** `owner/repo` of the checkout's origin, "" when it has none or it isn't GitHub. */
+export const repoSlug = async (root: string) => githubSlug(await git(root, ["remote", "get-url", "origin"]));
+
+/** `gh pr view` for a branch name or PR number; "" when gh is missing or finds nothing. */
+async function ghView(slug: string, ref: string): Promise<string> {
+  try {
+    const r = await Bun.$`gh pr view ${ref} -R ${slug} --json number,state,isDraft,title,url,reviewDecision,additions,deletions,headRefName`
+      .nothrow()
+      .quiet();
+    return r.exitCode === 0 ? r.stdout.toString().trim() : "";
+  } catch {
+    return ""; // gh not installed
+  }
+}
+
+function parsePr(raw: string): Extract<PullRequestInfo, { number: number }> | null {
+  try {
+    const pr = JSON.parse(raw) as {
+      number: number;
+      state: string;
+      isDraft: boolean;
+      title: string;
+      url: string;
+      reviewDecision?: string;
+      additions: number;
+      deletions: number;
+      headRefName: string;
+    };
+    const state = pr.isDraft && pr.state === "OPEN" ? "draft" : (pr.state.toLowerCase() as "open" | "merged" | "closed");
+    return {
+      state,
+      branch: pr.headRefName,
+      number: pr.number,
+      title: pr.title,
+      url: pr.url,
+      add: pr.additions,
+      del: pr.deletions,
+      ...(pr.reviewDecision ? { reviewDecision: pr.reviewDecision } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A PR by number — for a session whose worktree is already gone (the branch landed and
+ * was cleaned up), where no checkout exists to key on. `none` when it can't be resolved.
+ */
+export async function pullRequestByNumber(root: string, number: number): Promise<PullRequestInfo> {
+  const slug = await repoSlug(root);
+  if (!slug) return { state: "none" };
+  return parsePr(await ghView(slug, String(number))) ?? { state: "none" };
+}
+
 export async function branchPullRequest(root: string): Promise<PullRequestInfo> {
   const branch = await git(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
   if (!branch || branch === "HEAD") return { state: "none" }; // detached
-  const slug = githubSlug(await git(root, ["remote", "get-url", "origin"]));
+  const slug = await repoSlug(root);
   if (!slug) return { state: "none" };
 
   // The default branch has no PR to link and none to open — `compare/main` would propose
@@ -62,44 +116,8 @@ export async function branchPullRequest(root: string): Promise<PullRequestInfo> 
   if (branch === (def || "main")) return { state: "none" };
 
   const repoUrl = `https://github.com/${slug}`;
-  let raw = "";
-  try {
-    const r =
-      await Bun.$`gh pr view ${branch} -R ${slug} --json number,state,isDraft,title,url,reviewDecision,additions,deletions`
-        .nothrow()
-        .quiet();
-    if (r.exitCode === 0) raw = r.stdout.toString().trim();
-  } catch {
-    return { state: "none" }; // gh not installed
-  }
-
-  if (raw) {
-    try {
-      const pr = JSON.parse(raw) as {
-        number: number;
-        state: string;
-        isDraft: boolean;
-        title: string;
-        url: string;
-        reviewDecision?: string;
-        additions: number;
-        deletions: number;
-      };
-      const state = pr.isDraft && pr.state === "OPEN" ? "draft" : (pr.state.toLowerCase() as "open" | "merged" | "closed");
-      return {
-        state,
-        branch,
-        number: pr.number,
-        title: pr.title,
-        url: pr.url,
-        add: pr.additions,
-        del: pr.deletions,
-        ...(pr.reviewDecision ? { reviewDecision: pr.reviewDecision } : {}),
-      };
-    } catch {
-      return { state: "none" };
-    }
-  }
+  const pr = parsePr(await ghView(slug, branch));
+  if (pr) return { ...pr, branch };
 
   const pushed = (await git(root, ["rev-parse", "--verify", "--quiet", `origin/${branch}`])) !== "";
   return pushed ? { state: "no-pr", branch, compareUrl: compareUrl(repoUrl, branch) } : { state: "local-only", branch };

@@ -63,16 +63,27 @@ path keeps its pane in the base checkout, so it reported `main` and no PR. On 20
 five of eight live "main" sessions were working in a worktree that way.
 
 Discovery now resolves the checkout of the session's **last in-repo edit** (Edit / Write /
-MultiEdit / NotebookEdit under the base repo, `.plans/` excluded — `core/edit-dir.ts`), scanned
-incrementally from a byte cursor cached on the snapshot row, and runs the PR lookup there.
-Edits are the ownership signal; reading or listing a worktree is not. The scan applies only
-to panes sitting in the base checkout — a pane already inside a worktree is explicit intent
-and wins as-is (a session that edited base before moving would otherwise be dragged back).
-The branch line shows that checkout's branch; a worktree removed after its PR landed falls
-back to the pane's checkout. Validated against the live sessions before building: every session with a
+MultiEdit / NotebookEdit under the base repo — `core/edit-dir.ts`), scanned incrementally
+from a byte cursor cached on the snapshot row, and runs the PR lookup there. Edits are the
+ownership signal; reading or listing a worktree is not. Any edit inside a worktree counts,
+`.plans/` included (a session moving on to a new worktree plans there first — one live
+session was keyed to a landed PR instead of its open one until this was allowed); a `.plans/`
+edit in the base checkout does not (pre-worktree planning and the cleanup move-back both
+trail the code). The scan applies only to panes sitting in the base checkout — a pane already
+inside a worktree is explicit intent and wins as-is (a session that edited base before moving
+would otherwise be dragged back). The branch line shows that checkout's branch.
+
+**A removed worktree keys on the last PR the session printed.** Landed-and-cleaned-up is
+exactly when the merged chip matters (ADR 5's kill signal), and there is no checkout left to
+key on. The same scan keeps the last `github.com/<slug>/pull/N` for the repo's slug the
+transcript mentions — a session prints its own PR's URL when it creates it — and discovery
+resolves that number by `gh pr view`. Checked against nine live sessions: the last URL was the
+session's own PR in every case that had one, including a session whose worktree hosted two
+successive branches (it names the later PR). Validated against the live sessions before building: every session with a
 judgeable answer picked its own worktree, and the naive "last edit anywhere" variant was
 rejected because it lands on memory files and scratchpad scripts.
 
-Chip: always `#N`, colored by state — open muted, draft dim, merged purple (GitHub's merged
-color), closed red. The earlier merged-only `✓` dropped the number and, in mint, read as
+Chip: always `#N`, colored by state — open white (muted read as inert metadata at the weight
+of a sub-day age; GitHub's green is mint here, which means running), draft dim, merged purple
+(GitHub's merged color), closed red. The earlier merged-only `✓` dropped the number and, in mint, read as
 "running"; the number stays so the landed PR is identifiable at a glance.

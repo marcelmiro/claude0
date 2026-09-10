@@ -5,11 +5,17 @@
  * pane in the base checkout, so pane cwd reports the default branch and every branch-keyed
  * lookup (the PR chip) goes blind. Edits are the ownership signal — reading or listing a
  * worktree is not — so this follows the last Edit/Write/MultiEdit/NotebookEdit whose path
- * sits under the base repo, ignoring `.plans/` (scratch that trails the code it planned).
+ * sits under the base repo. Any edit inside a worktree counts, its `.plans/` included (a
+ * session that moves on to a new worktree plans there first); a `.plans/` edit in the base
+ * checkout does not (planning before the worktree exists, or moving the plan back on
+ * cleanup, both trail the code they belong to).
+ *
+ * The scan also keeps the last same-repo PR URL the transcript mentions: once a worktree
+ * is removed after its PR landed there is no checkout left to key on, and the PR the
+ * session itself created is the last one it printed.
  *
  * Incremental: the transcript is streamed once from the cached byte offset, so a multi-MB
- * log costs one full pass ever and a tail read thereafter. A worktree removed after its
- * PR landed resolves to the base checkout again.
+ * log costs one full pass ever and a tail read thereafter.
  */
 import { stat } from "node:fs/promises";
 import { jsonlLines } from "./jsonl-reader";
@@ -21,23 +27,29 @@ export interface EditScan {
   offset: number;
   /** Checkout of the last in-repo edit; absent when the scan found none yet. */
   dir?: string;
+  /** Last `github.com/<slug>/pull/N` the transcript mentioned, for this repo's slug. */
+  lastPr?: number;
 }
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 
 /** The worktree (by the `.claude/worktrees/<name>` convention) or base checkout a path falls in. */
 export function editCheckout(filePath: string, base: string): string | null {
-  if (!filePath.startsWith(`${base}/`) || filePath.includes("/.plans/")) return null;
-  const m = filePath.slice(base.length).match(/^\/\.claude\/worktrees\/[^/]+/);
-  return m ? base + m[0] : base;
+  if (!filePath.startsWith(`${base}/`)) return null;
+  const rest = filePath.slice(base.length);
+  const m = rest.match(/^\/\.claude\/worktrees\/[^/]+/);
+  if (m) return base + m[0];
+  return rest.startsWith("/.plans/") ? null : base;
 }
 
 export async function scanEditDir(
   sessionId: string,
-  base: string,
+  repo: { base: string; slug: string },
   prev?: EditScan,
   projectsDir?: string,
 ): Promise<EditScan | null> {
+  const { base, slug } = repo;
+  const prUrl = slug ? new RegExp(`github\\.com/${slug.replace(/[.]/g, "\\.")}/pull/(\\d+)`, "g") : null;
   try {
     const path = await resolveTranscriptPath(sessionId, projectsDir);
     if (!path) return null;
@@ -45,6 +57,7 @@ export async function scanEditDir(
     const scan: EditScan = prev?.path === path && prev.offset <= size ? { ...prev } : { path, offset: 0 };
     if (scan.offset >= size) return scan;
     for await (const line of jsonlLines(path, scan.offset)) {
+      if (prUrl) for (const m of line.matchAll(prUrl)) scan.lastPr = Number(m[1]);
       if (!line.includes('"tool_use"')) continue;
       let rec: { message?: { content?: unknown } };
       try {

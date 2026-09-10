@@ -13,7 +13,7 @@
 import { discoverSessions } from "./sessions";
 import { loadNameCache, getSessionName } from "./names";
 import { snippet } from "./session-label";
-import { branchPullRequest } from "./pull-request";
+import { branchPullRequest, pullRequestByNumber, repoSlug } from "./pull-request";
 import { liveEditDir, scanEditDir } from "./edit-dir";
 import { detectScriptWaits } from "./script-wait";
 import { readLastPromptAt, resolveTranscriptPath } from "./last-turn";
@@ -138,7 +138,7 @@ export async function discoveryTick(store: InboxStore): Promise<void> {
       store.transition(s.id, now, p.real?.status ?? null, eff);
     }
     row.pr = p?.pr; // carried; refreshed below on its own cadence
-    row.editScan = p?.editScan;
+    row.workScan = p?.workScan;
     byId.set(s.id, row);
   }
 
@@ -148,9 +148,13 @@ export async function discoveryTick(store: InboxStore): Promise<void> {
   // A pane sitting in the base checkout is keyed on the checkout the session
   // last EDITED in: a worktree created without cd'ing into it is invisible to
   // cwd. A pane already inside a worktree is explicit intent and wins as-is.
+  // With that worktree gone (landed and cleaned up), the last PR the session
+  // printed stands in — merged is the "clear me" cue, so it must outlive cleanup.
   const pathsById = new Map(
     sessions.filter((s) => byId.has(s.id)).map((s) => [s.id, { pane: s.repoPath, base: s.baseRepoPath }]),
   );
+  const slugByBase = new Map<string, string>();
+  for (const { base } of pathsById.values()) if (!slugByBase.has(base)) slugByBase.set(base, await repoSlug(base));
   const prStale = [...pathsById.keys()]
     .filter((id) => now - (byId.get(id)!.pr?.fetchedAt ?? 0) > 60_000)
     .sort((a, b) => (byId.get(a)!.pr?.fetchedAt ?? 0) - (byId.get(b)!.pr?.fetchedAt ?? 0))
@@ -160,12 +164,14 @@ export async function discoveryTick(store: InboxStore): Promise<void> {
       try {
         const row = byId.get(id)!;
         const { pane, base } = pathsById.get(id)!;
-        let dir = pane;
+        let pr;
         if (pane === base) {
-          row.editScan = (await scanEditDir(id, base, row.editScan)) ?? undefined;
-          dir = await liveEditDir(row.editScan, pane);
+          row.workScan = (await scanEditDir(id, { base, slug: slugByBase.get(base)! }, row.workScan)) ?? undefined;
+          const dir = await liveEditDir(row.workScan, pane);
+          if (dir !== pane) pr = await branchPullRequest(dir);
+          else if (row.workScan?.lastPr) pr = await pullRequestByNumber(pane, row.workScan.lastPr);
         }
-        const pr = await branchPullRequest(dir);
+        pr ??= await branchPullRequest(pane);
         row.pr = {
           number: "number" in pr ? pr.number : undefined,
           state: pr.state,

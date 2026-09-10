@@ -137,8 +137,8 @@ function sessionLine(
 
   // `repo/branch` (tmux short repo names), dim, aligned with the name. The
   // branch is the one the session edits in (its worktree), else the pane's.
-  // PR chip: #N colored by state — open muted, draft dim, merged purple (the
-  // Claude0 "clear me" cue), closed red; no PR → nothing.
+  // PR chip: #N colored by state — open white (alive, someone's move), draft
+  // dim, merged purple (the Claude0 "clear me" cue), closed red; no PR → nothing.
   const branch = s.pr?.branch ?? s.branch;
   const repo = abbreviateRepo(s.repo) + (branch ? `/${branch}` : "");
   const prColor = (s.pr?.number && PR_CHIP_COLOR[s.pr.state]) || "";
@@ -152,7 +152,7 @@ function sessionLine(
 }
 
 const PR_CHIP_COLOR: Partial<Record<NonNullable<InboxSession["pr"]>["state"], string>> = {
-  open: C.muted,
+  open: C.fg,
   draft: C.dim,
   merged: C.purple,
   closed: C.red,

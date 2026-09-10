@@ -10,7 +10,8 @@ test("editCheckout: worktree edits map to the worktree, base edits to base, othe
   expect(editCheckout(`${WT}/src/a.ts`, BASE)).toBe(WT);
   expect(editCheckout(`${BASE}/src/a.ts`, BASE)).toBe(BASE);
   expect(editCheckout(`${BASE}/.claude/worktrees/tf-1`, BASE)).toBe(WT);
-  expect(editCheckout(`${WT}/.plans/x/plan.md`, BASE)).toBeNull(); // scratch trails the code
+  expect(editCheckout(`${WT}/.plans/x/plan.md`, BASE)).toBe(WT); // planning in a worktree = working there
+  expect(editCheckout(`${BASE}/.plans/x/plan.md`, BASE)).toBeNull(); // base plans trail the code (pre-worktree, or moved back on cleanup)
   expect(editCheckout(`/home/u/.claude/projects/memory/x.md`, BASE)).toBeNull();
   expect(editCheckout(`${BASE}-other/src/a.ts`, BASE)).toBeNull(); // prefix, not a child
 });
@@ -30,36 +31,47 @@ const edit = (tool: string, file_path: string) =>
   JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: tool, input: { file_path } }] } }) + "\n";
 const read = (file_path: string) =>
   JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "Read", input: { file_path } }] } }) + "\n";
+const say = (text: string) => JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text }] } }) + "\n";
+const REPO = { base: BASE, slug: "acme/repo" };
 
 test("scanEditDir: follows the last in-repo edit, ignores reads and off-repo edits, resumes from the cached offset", async () => {
   appendFileSync(transcript, edit("Edit", `${BASE}/src/a.ts`) + edit("Write", `${WT}/src/b.ts`) + read(`${BASE}/src/c.ts`));
-  const first = await scanEditDir(SID, BASE, undefined, dir);
+  const first = await scanEditDir(SID, REPO, undefined, dir);
   expect(first?.dir).toBe(WT);
   expect(first?.offset).toBe(Bun.file(transcript).size);
 
   // only the appended bytes are read: a base edit after the cursor flips the pick back
   appendFileSync(transcript, edit("Edit", "/home/u/.claude/projects/memory/note.md") + edit("MultiEdit", `${BASE}/src/a.ts`));
-  const second = await scanEditDir(SID, BASE, first!, dir);
+  const second = await scanEditDir(SID, REPO, first!, dir);
   expect(second?.dir).toBe(BASE);
   expect(second?.offset).toBeGreaterThan(first!.offset);
 
   // nothing new → same cursor, same pick
-  expect(await scanEditDir(SID, BASE, second!, dir)).toEqual(second!);
+  expect(await scanEditDir(SID, REPO, second!, dir)).toEqual(second!);
 });
 
 test("scanEditDir: a partial trailing line is skipped, not counted, and re-read next pass", async () => {
   const half = edit("Edit", `${WT}/src/b.ts`);
   appendFileSync(transcript, half.slice(0, 20));
-  const first = await scanEditDir(SID, BASE, undefined, dir);
+  const first = await scanEditDir(SID, REPO, undefined, dir);
   expect(first?.dir).toBeUndefined();
   appendFileSync(transcript, half.slice(20));
   // the cursor sits inside the line, so the rest alone is unparseable: the pick lands on the next full edit
   appendFileSync(transcript, edit("Edit", `${WT}/src/c.ts`));
-  expect((await scanEditDir(SID, BASE, first!, dir))?.dir).toBe(WT);
+  expect((await scanEditDir(SID, REPO, first!, dir))?.dir).toBe(WT);
 });
 
 test("scanEditDir: no transcript → null; unknown session keeps the previous scan", async () => {
-  expect(await scanEditDir("no-such-session", BASE, undefined, dir)).toBeNull();
+  expect(await scanEditDir("no-such-session", REPO, undefined, dir)).toBeNull();
+});
+
+test("scanEditDir: keeps the last same-repo PR url, ignoring other repos' PRs", async () => {
+  appendFileSync(transcript, say("opened https://github.com/acme/repo/pull/41") + say("see https://github.com/acme/other/pull/99"));
+  const first = await scanEditDir(SID, REPO, undefined, dir);
+  expect(first?.lastPr).toBe(41);
+  appendFileSync(transcript, say("https://github.com/acme/repo/pull/42 and https://github.com/acme/repo/pull/43"));
+  expect((await scanEditDir(SID, REPO, first!, dir))?.lastPr).toBe(43);
+  expect((await scanEditDir(SID, { base: BASE, slug: "" }, undefined, dir))?.lastPr).toBeUndefined();
 });
 
 test("liveEditDir: falls back when the picked worktree is gone", async () => {

@@ -217,7 +217,7 @@ test("PR chip: #N colored by state on the branch line, the edited checkout's bra
     renderView([sess({ id: "p", branch: "main", pr })], vs(), { width: 40, height: 10 }, NOW).rows.join("\n");
   const open = row({ number: 12, state: "open", branch: "feat/x", fetchedAt: NOW });
   expect(open).toContain("claude0/feat/x");
-  expect(open).toContain("\x1b[38;2;160;160;160m#12"); // muted
+  expect(open).toContain("\x1b[38;2;255;255;255m#12"); // white
   expect(row({ number: 12, state: "merged", branch: "feat/x", fetchedAt: NOW })).toContain("\x1b[38;2;203;166;248m#12"); // purple
   expect(row({ number: 12, state: "draft", branch: "feat/x", fetchedAt: NOW })).toContain("\x1b[38;2;80;80;80m#12"); // dim
   expect(row({ number: 12, state: "closed", branch: "feat/x", fetchedAt: NOW })).toContain("\x1b[38;2;255;128;128m#12"); // red
