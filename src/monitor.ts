@@ -12,7 +12,7 @@ import { detectStatus, type SessionStatus } from "./core/status";
 import { eventSourcedStatus } from "./core/hook-events";
 import { nativeStatus, resolveStatus } from "./core/session-state";
 import { reapDeadSessionFiles } from "./core/approval";
-import { loadConfig, configCache } from "./core/config";
+import { loadConfig, configCache, PATHS } from "./core/config";
 import { debugLog } from "./core/debug";
 import { loadState, saveState, computeAggregate, buildSessionStates, loadPaneSessions, savePaneSessions, processHookEvents } from "./core/state";
 import { detectTransitions, dispatchNotifications, dispatchHeldApprovalPushes, syncWindowPrefix, ATTENTION_PREFIX, RUNNING_PREFIX, SCRIPT_PREFIX, stripAllPrefixes, desiredPrefix, buildBaseName, abbreviateRepo, NAME_SEPARATOR } from "./core/notifications";
@@ -25,6 +25,7 @@ import { loadNameCache, saveNameCache, generateAIName, getSessionName, slugify, 
 import { disambiguateByRepo } from "./core/session-label";
 import { findActiveSessionInfo, readNamingExtras } from "./core/sessions";
 import { homedir } from "os";
+import { readFileSync, unlinkSync, writeFileSync } from "fs";
 import type { Session, AggregateStatus, PaneInfo, ClaudeProcess } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -123,6 +124,39 @@ async function quickDiscoverActive(
   return { sessions, allPanes: panes, resumeIds, forkPaneIds };
 }
 
+// tmux runs status-line `#()` jobs once PER ATTACHED CLIENT, so N clients spawn N
+// monitors in the same instant. Each would read the same pre-transition state.json
+// and dispatch the same push/notification before any of them saves — one lock file
+// (O_EXCL, so the race can't split) makes the tick single-flight; losers print the
+// saved aggregate. Held for phase 1 only: phase 2 has its own naming lock.
+const MONITOR_LOCK = `${PATHS.dir}/monitor.lock`;
+
+function acquireMonitorLock(): boolean {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      writeFileSync(MONITOR_LOCK, JSON.stringify({ pid: process.pid, ts: Date.now() }), { flag: "wx" });
+      return true;
+    } catch {
+      // Held. Stale if the holder is dead or older than the monitor's own 20s
+      // force-exit — then reclaim once.
+      try {
+        const { pid, ts } = JSON.parse(readFileSync(MONITOR_LOCK, "utf8"));
+        let alive = true;
+        try { process.kill(pid, 0); } catch { alive = false; }
+        if (alive && Date.now() - ts < 20_000) return false;
+        unlinkSync(MONITOR_LOCK);
+      } catch {
+        return false;
+      }
+    }
+  }
+  return false;
+}
+
+function releaseMonitorLock(): void {
+  try { unlinkSync(MONITOR_LOCK); } catch {}
+}
+
 function formatStatus(aggregate: AggregateStatus): string {
   const parts: string[] = [];
   if (aggregate.needsAttention > 0) parts.push(`⚡ ${aggregate.needsAttention}`);
@@ -131,6 +165,11 @@ function formatStatus(aggregate: AggregateStatus): string {
 }
 
 async function main(): Promise<void> {
+  if (!acquireMonitorLock()) {
+    process.stdout.write(formatStatus(computeAggregate(await loadState())));
+    return;
+  }
+
   const [config, state, paneSessionMap, nameCache] = await Promise.all([
     // An invalid config must not kill the monitor tick — status-right would go
     // blank until the file is fixed. Degrade to defaults and say so on stderr.
@@ -405,6 +444,7 @@ async function main(): Promise<void> {
     await debugLog(`freshState bail: state modified by another process during poll`);
     const aggregate = computeAggregate(freshState);
     process.stdout.write(formatStatus(aggregate));
+    releaseMonitorLock();
     // Still run Phase 2 (lsof + naming) — it writes to separate files
     phase2(sessions, paneSessionMap, nameCache, hookChanged || forkCorrected).catch(() => {});
     return;
@@ -418,6 +458,7 @@ async function main(): Promise<void> {
   // Output status text to stdout — tmux renders this in the status bar
   const aggregate = computeAggregate(newState);
   process.stdout.write(formatStatus(aggregate));
+  releaseMonitorLock();
 
   // Phase 2: hook events + AI naming (runs after stdout, doesn't block tmux)
   phase2(sessions, paneSessionMap, nameCache, hookChanged || forkCorrected).catch(() => {});
