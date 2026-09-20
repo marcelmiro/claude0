@@ -3464,8 +3464,8 @@ function Detail() {
       (b) => el.scrollTop + b.getBoundingClientRect().top - cTop,
     );
     if (!tops.length) return;
-    // A jumped prompt lands `pad + GAP` below the container top (pad carries the status-bar
-    // safe-area inset in standalone PWA mode, so it never butts against the top edge). The
+    // A jumped prompt lands `pad + GAP` below the container top. The app shell clears
+    // the status-bar safe area, so the prompt never butts against the top edge. The
     // prompt currently in focus therefore sits at offset `scrollTop + pad + GAP` — compare
     // next/prev against THAT line, not raw scrollTop, or the focused prompt reads as "below
     // us" and the next-search keeps re-selecting it (the stuck-button bug).

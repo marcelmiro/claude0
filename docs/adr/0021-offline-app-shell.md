@@ -61,3 +61,61 @@ would previously have hung or failed.
 - **Intercepting `/stream` or API GETs in the SW**: streaming through respondWith
   is a known iOS hazard, and serving stale data as if current would lie —
   the app's own banner + versioned push already handle data-plane gaps.
+
+## 2026-09-19: iOS status-bar appearance
+
+Portkey adopts Court Watcher's status-bar workaround for the reported iOS 27
+top-edge blur: `apple-mobile-web-app-status-bar-style=default` and a real,
+fixed, non-interactive 1px element at the top, coloured with `--bg`. The element
+lives outside Preact's root so it survives mounting. Portkey keeps its existing
+dark colour scheme and matching `#101010` page, theme and manifest colours.
+
+Remove the standalone page-height extension used for `black-translucent`.
+The shell now stays at `100dvh`, with the top safe-area inset applied once to
+the shell. Standalone list content still clears the bottom home indicator.
+No extra header spacing is added. Apple's [meta-tag reference](https://developer.apple.com/library/archive/documentation/AppleApplications/Reference/SafariHTMLRef/Articles/MetaTags.html)
+distinguishes the default content area from the translucent status-bar overlay.
+
+This ports the workaround, not a verified fix for native iOS rendering. Browser
+layout checks cannot reproduce the installed iOS 27 effect. Existing installs
+may need removal and re-adding from Safari for the status-bar metadata to change;
+then check the top edge, bottom controls and notification permission on-device.
+The network-first shell cache continues to update on a reachable reload.
+
+## 2026-09-20: keep controls below the native blur
+
+The user still sees blur after reinstalling Portkey and now prefers clearance
+over further attempts to disable it. Installed iPhone apps use
+`--app-top-clearance = env(safe-area-inset-top, 0px) + 24px`. The 24px allowance
+is a starting value for on-device verification, not a measurement of the blur.
+The [safe-area inset](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Values/env)
+describes viewport obstructions; it does not expose a blur radius or boundary.
+
+Set the iPhone standalone class before first paint. Apply the same clearance to
+the app shell, file and subagent overlays, and action-sheet bounds. The fixed
+background strip covers that area so content cannot enter it during transitions.
+Keep the shell at `100dvh` with border-box sizing: clearance reduces the content
+area rather than pushing the composer below the viewport. Long action sheets
+scroll within the remaining height; the dock also shrinks and scrolls when a
+tall question would otherwise push its controls below the viewport. Safari
+tabs and other devices retain their
+previous spacing. This is an HTML/CSS change, so a reachable reload is enough;
+there is no new installation metadata to pick up.
+
+### Follow-up: clearance scrolls away
+
+The user found 24px excessive and the opaque top strip created a hard cutoff
+while scrolling. Reduce the allowance to 12px and return the strip to 1px.
+On the iPhone PWA, the app shell has no top padding. Home and transcript scroll
+regions reach the viewport top; their initial padding contains the safe-area
+inset plus the 12px allowance and scrolls away with the content. Content may
+enter the native blur as it approaches the top edge, as requested.
+
+Screens with a fixed top toolbar retain the smaller clearance on the toolbar
+or overlay so navigation controls remain accessible. Bottom controls and the
+short-viewport dock behaviour stay unchanged.
+
+On-device feedback still showed a few blurred pixels at rest, especially on
+New Session. Increase the allowance from 12px to 16px, and the direct toolbar's
+base top padding from 2px to 6px. Home gains 4px; New Session and History gain
+8px. The clearance still scrolls away on Home and in conversations.

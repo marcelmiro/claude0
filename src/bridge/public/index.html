@@ -14,7 +14,18 @@
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="apple-mobile-web-app-title" content="portkey" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <script>
+      // Set before first paint, including the static boot screen.
+      const installedDisplay = matchMedia("(display-mode: standalone)");
+      const updateIPhoneDisplay = () => document.documentElement.classList.toggle(
+        "iphone-pwa",
+        /iPhone|iPod/.test(navigator.userAgent) &&
+          (installedDisplay.matches || navigator.standalone === true),
+      );
+      updateIPhoneDisplay();
+      installedDisplay.addEventListener("change", updateIPhoneDisplay);
+    </script>
     <!-- Resolve the bare specifiers the vendored dist files import (preact, etc.).
          MUST precede the modulepreload links: a preload can start module resolution
          before an import map placed later is processed, and Chrome then disregards the
@@ -45,6 +56,8 @@
     <link rel="modulepreload" href="/wake-format.js" />
     <style>
       :root {
+        --ios-blur-clearance: 0px;
+        --app-top-clearance: calc(env(safe-area-inset-top, 0px) + var(--ios-blur-clearance));
         --bg: #101010;
         --fg: #ffffff;
         --muted: #a0a0a0;
@@ -82,6 +95,9 @@
         --tm-blue: #89ddff; /* teammate byline tints for harness color names the */
         --tm-purple: #c792ea; /* Vesper palette lacks (blue/cyan, purple) */
       }
+      /* Give the first content a little clearance at rest; scrolling may carry it
+         into iOS's native blur. This allowance is not a measured blur boundary. */
+      :root.iphone-pwa { --ios-blur-clearance: 16px; }
       * { box-sizing: border-box; }
       html, body {
         margin: 0;
@@ -103,35 +119,36 @@
         -webkit-text-size-adjust: 100%;
         text-size-adjust: 100%;
       }
+      /* Real element, outside the app root, for iOS status-bar background sampling. */
+      .status-bar-background {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 1px;
+        background: var(--bg);
+        pointer-events: none;
+        z-index: 50;
+      }
       /* Full-height shell. dvh tracks Safari's shrinking viewport (address bar / keyboard)
          so the page never overflows up or down. */
       #app {
         height: 100dvh;
         max-width: 680px;
         margin: 0 auto;
-        padding-top: env(safe-area-inset-top);
+        padding-top: var(--app-top-clearance);
         display: flex;
         flex-direction: column;
         overflow: hidden;
         background: var(--bg); /* guard against a white pre-paint flash on the root */
       }
-      /* Installed PWA (standalone) — the iOS `black-translucent` gap. That status-bar style
-         renders content from the physical top (under the Dynamic Island) but hands the app
-         a viewport SHORTER than the screen by the status-bar height, leaving that height as
-         dead space at the BOTTOM. Web Inspector confirmed it: innerH 793 = screenH 852 − 59
-         (the top inset). No viewport-filling CSS can touch it (the gap is outside innerH);
-         the fix is to EXTEND the shell by safe-area-inset-top so the document spans the full
-         screen and fills the strip. Safe-area insets then move onto the scroll CONTENT, so
-         it rests in the safe zone yet scrolls edge-to-edge under the system UI (full-bleed).
-         Scoped to standalone; in-browser keeps 100dvh. */
+      /* On iPhone, the scroll region reaches the viewport edge. Its initial
+         clearance scrolls away with the content instead of leaving a blank shelf. */
+      .iphone-pwa #app { padding-top: 0; }
+      .iphone-pwa #app > .screen > .scroll:first-child { padding-top: calc(6px + var(--app-top-clearance)); }
+      .iphone-pwa #app > .screen > .listhead:first-child { padding-top: calc(6px + var(--app-top-clearance)); }
+      /* The default status-bar style uses the viewport as supplied by iOS. */
       @media (display-mode: standalone) {
-        html { height: calc(100% + env(safe-area-inset-top)); }
-        #app { height: 100%; padding-top: 0; }
-        /* scroll view that reaches the TOP edge: first content sits below the status bar
-           at rest but slides under it when scrolled */
-        .screen > .scroll:first-child { padding-top: calc(6px + env(safe-area-inset-top)); }
-        /* fixed top header (new-session picker) clears the status bar */
-        .screen > .listhead { padding-top: calc(2px + env(safe-area-inset-top)); }
         /* scroll view that reaches the BOTTOM edge clears the home indicator (detail
            screens get this from the dock's own inset instead) */
         .screen > .scroll:last-child { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
@@ -552,6 +569,10 @@
         padding: 8px 16px calc(env(safe-area-inset-bottom) / 2);
       }
       .dock-inner { max-width: 680px; margin: 0 auto; }
+      /* Tall questions must fit the space left below the top clearance, including
+         when the keyboard or landscape orientation reduces the viewport. */
+      .iphone-pwa .dock { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; }
+      .iphone-pwa .dock-inner { width: 100%; min-height: 0; overflow-y: auto; }
       /* Floating button stack — hugs the top edge of the dock, right side. Sits in the dock's
          positioning context so it tracks the dock's top regardless of dock height (composer
          vs. tall question card). Holds the always-on prev/next-prompt pill plus the jump-to-
@@ -949,6 +970,7 @@
         flex-direction: column;
         justify-content: flex-end;
         padding: 8px;
+        padding-top: max(8px, var(--app-top-clearance));
         padding-bottom: calc(8px + env(safe-area-inset-bottom));
         /* the sheet appears under a finger that's still down from the long-press —
            keep that finger from selecting the sheet's labels */
@@ -967,6 +989,7 @@
         animation: sheet-up 0.24s cubic-bezier(0.2, 0.85, 0.25, 1) both;
       }
       .sheetgroup { background: var(--sheet-bg); border-radius: 14px; overflow: hidden; }
+      .iphone-pwa .sheet { max-height: 100%; overflow-y: auto; }
       .sheet button {
         display: block;
         width: 100%;
@@ -1201,7 +1224,7 @@
         background: var(--bg);
         display: flex;
         flex-direction: column;
-        padding-top: env(safe-area-inset-top);
+        padding-top: var(--app-top-clearance);
         touch-action: pan-y; /* our handler owns horizontal (back-swipe); vertical scrolls */
         animation: push-in 0.26s cubic-bezier(0.2, 0.85, 0.25, 1);
       }
@@ -1255,7 +1278,7 @@
         background: var(--bg);
         display: flex;
         flex-direction: column;
-        padding-top: env(safe-area-inset-top);
+        padding-top: var(--app-top-clearance);
         touch-action: pan-y;
         animation: push-in 0.26s cubic-bezier(0.2, 0.85, 0.25, 1);
       }
@@ -1368,6 +1391,7 @@
     </style>
   </head>
   <body>
+    <div class="status-bar-background" aria-hidden="true"></div>
     <!-- Static boot spinner: shows on the dark bg the instant the HTML paints, before
          app.js + vendor modules finish loading (slow over Tailscale). Preact's render()
          replaces #app's contents on boot, so this is wiped the moment the app mounts. -->
