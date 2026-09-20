@@ -926,8 +926,11 @@
       /* live statusline + permission mode, scraped from the pane (shown in the dock) */
       .statusbar { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; padding: 0 4px 8px; font-size: 11px; color: var(--muted); }
       .modebadge { flex: none; color: var(--mint); border: 1px solid currentColor; border-radius: 10px; padding: 0 7px; font-weight: 600; white-space: nowrap; }
-      /* fill the row and right-align so usage+branch hug the right edge, badge stays left */
-      .sltext { flex: 1; min-width: 0; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+      /* branch: the row's identity line — dimmest of the three, takes the slack, ellipsized
+         from the tail (the leaf's head is the identifying part) */
+      .slbranch { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--dim-text); }
+      /* context percent: the row's only number, pinned right, quiet until a threshold colors it */
+      .ctx { flex: none; margin-left: auto; font-variant-numeric: tabular-nums; }
       /* sessions-list ⏳: a ready session mid-background-wait — inline left of the name,
          inside .name so only the title line carries it (the sub line keeps the column's
          left edge); vertical-align centers the smaller emoji against the name's x-height

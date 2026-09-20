@@ -1576,10 +1576,46 @@ function gotoNextAttention() {
   open(next.id);
 }
 
-// Token-usage readout, mirroring the Mac statusline (current/size pct%), colored at
-// the same 50/75% thresholds.
-function usageColor(p) {
-  return p > 75 ? "var(--red)" : p > 50 ? "var(--peach)" : "var(--mint)";
+// Context-window readout: the bare percent, neutral until it's worth reacting to. The
+// thresholds are ABSOLUTE token counts, not percentages — what degrades a session is how
+// much context it's carrying, and the same percent means different loads on a 200k vs a
+// 1M window.
+function usageColor(tokens) {
+  return tokens > 500_000 ? "var(--red)" : tokens > 300_000 ? "var(--peach)" : "var(--muted)";
+}
+
+// "313.7k" / "1.0M" / "45000" from the statusline's token segment → a number.
+function parseTokenCount(s) {
+  const m = /([\d.]+)\s*([km])?/i.exec(s);
+  if (!m) return null;
+  const mult = m[2] ? (m[2].toLowerCase() === "m" ? 1e6 : 1e3) : 1;
+  return Number(m[1]) * mult;
+}
+
+// Branch as it fits a phone dock row: the leaf only. The namespace (`marcelmiro/`,
+// `feature/`) is the same on every branch, so it distinguishes nothing while eating the
+// width that the identifying head — the ticket slug — needs. Overflow past that is CSS
+// ellipsis: once the namespace is gone the head identifies and the tail is prose.
+function shortBranch(branch) {
+  return branch.slice(branch.lastIndexOf("/") + 1);
+}
+
+// The pane's mode line ("⏵⏵ auto mode on", "⏸ plan mode on", "bypass permissions on")
+// reduced to its marker plus the one word that distinguishes it — the badge has no room
+// for the rest.
+function shortMode(mode) {
+  const marker = (mode.match(/^[⏵⏸\s]+/) || [""])[0].trim();
+  const bare = mode
+    .replace(/[⏵⏸]/g, "")
+    .replace(/\bmode\b/i, "")
+    .replace(/\bon\b\s*$/i, "")
+    .trim();
+  const word = /accept edits/i.test(bare)
+    ? "edits"
+    : /bypass/i.test(bare)
+      ? "bypass"
+      : bare.split(/\s+/)[0] || bare;
+  return marker ? `${marker} ${word}` : word;
 }
 
 // When a session last did something. `lastTurn` is its newest conversational turn;
@@ -3471,9 +3507,15 @@ function Detail() {
 
   const usage = t && t.usage;
   const mode = t && t.mode; // permission mode (auto/plan), scraped from the pane
-  // Statusline (scraped from the pane) is `tokens • branch • model • thinking`; keep
-  // just tokens + branch so it stays on one line. Auto mode is yellow (matches the TUI).
-  const statusline = t && t.statusline ? t.statusline.split(" • ").slice(0, 2).filter(Boolean).join(" • ") : "";
+  // Statusline (scraped from the pane) is `<tokens>/<size> (N%) • branch • model • thinking`;
+  // keep the branch and the bare context percent so the row stays on one line — the token
+  // counts behind it only drive the color. The pane's own numbers win over `usage`: they're
+  // what the session actually reports. Auto mode is yellow (matches the TUI).
+  const slParts = t && t.statusline ? t.statusline.split(" • ").map((s) => s.trim()) : [];
+  const branch = slParts[1] || "";
+  const slPercent = slParts[0] && slParts[0].match(/\((\d+)%\)/);
+  const percent = slPercent ? Number(slPercent[1]) : usage ? usage.percent : null;
+  const tokens = slPercent ? parseTokenCount(slParts[0]) : usage ? usage.tokens : null;
   const modeColor = mode && /auto/i.test(mode) ? "var(--yellow)" : "var(--mint)";
   return html`
     <div
@@ -3693,13 +3735,14 @@ function Detail() {
               ⚡ ${otherAttention} ›
             </button>`}
           </div>
-          ${(statusline || mode || usage) &&
+          ${(branch || mode || percent != null) &&
           html`<div class="statusbar">
-            ${mode && html`<span class="modebadge" style=${`color:${modeColor}`}>${mode}</span>`}
-            ${statusline
-              ? html`<span class="sltext">${statusline}</span>`
-              : usage &&
-                html`<span class="sltext" style=${`color:${usageColor(usage.percent)}`}>${usage.percent}%</span>`}
+            ${mode && html`<span class="modebadge" style=${`color:${modeColor}`}>${shortMode(mode)}</span>`}
+            ${branch && html`<span class="slbranch" title=${branch}>${shortBranch(branch)}</span>`}
+            ${percent != null &&
+            html`<span class="ctx" style=${`color:${usageColor(tokens)}`} title=${`${percent}% of the context window`}
+              >${percent}%</span
+            >`}
           </div>`}
           ${questions
             ? html`<${QuestionCard} questions=${questions} toolUseId=${t.pendingTool && t.pendingTool.toolUseId} />`
