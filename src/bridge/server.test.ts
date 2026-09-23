@@ -268,3 +268,23 @@ test("GET /transcript rejects a session id with glob metacharacters", async () =
     expect(res.status).toBe(400);
   }
 });
+
+test("/shell runs a command on the host and keeps it in the scrollback", async () => {
+  expect((await fetch(`${base}/shell`, { method: "POST", body: JSON.stringify({ command: "id" }) })).status).toBe(401);
+  expect((await post("/shell", { command: "" })).status).toBe(400);
+  const res = await post("/shell", { command: "printf hello; printf oops >&2; exit 2" });
+  expect(res.status).toBe(200);
+  const { run } = (await res.json()) as { run: { exit: number; stdout: string; stderr: string } };
+  expect(run.exit).toBe(2);
+  expect(run.stdout).toBe("hello");
+  expect(run.stderr).toBe("oops");
+  const { runs } = (await (await get("/shell")).json()) as { runs: Array<{ command: string }> };
+  expect(runs.at(-1)?.command).toBe("printf hello; printf oops >&2; exit 2");
+});
+
+test("/shell refuses a second command while one is running", async () => {
+  const first = post("/shell", { command: "sleep 0.5" });
+  await Bun.sleep(100);
+  expect((await post("/shell", { command: "true" })).status).toBe(409);
+  expect((await first).status).toBe(200);
+});

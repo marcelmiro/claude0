@@ -101,6 +101,7 @@ import { withDeadline } from "../core/deadline";
 import * as stream from "./stream";
 import { loadAllSessions, filterAndRankEntries, type SearchEntry } from "../core/search";
 import { fixtureData } from "./fixtures";
+import { runShell, SHELL_HISTORY, type ShellRun } from "../core/shell-run";
 import type { RestoreState, Session } from "../types";
 
 const PUBLIC_DIR = `${import.meta.dir}/public`;
@@ -1162,6 +1163,10 @@ export function applyTail(payload: Record<string, unknown>, tailParam: string | 
 // between demo and production.
 const TRANSCRIPT_PATH = /^\/sessions\/([^/]+)\/transcript$/;
 
+// Shell-sheet scrollback: the last runs, oldest first. Process memory only (see the route).
+const shellRuns: ShellRun[] = [];
+let shellBusy = false; // one command at a time — the phone shows one pending bubble
+
 // ---------------------------------------------------------------------------
 // Routing
 // ---------------------------------------------------------------------------
@@ -1273,6 +1278,26 @@ async function route(req: Request): Promise<Response> {
   if (method === "GET" && path === "/history") return json(await historyPayload(url.searchParams));
 
   // New session: launch `claude` in a new tmux window for the chosen repo (TUI `n`).
+  // --- Shell runner (portkey's shell sheet): one command in, its output out ---
+  // Runs are kept in memory only — a pasted line can carry a credential, so neither the
+  // scrollback nor the log ever holds the command text.
+  if (method === "GET" && path === "/shell") return json({ runs: shellRuns }, 200, { "cache-control": "no-store" });
+  if (method === "POST" && path === "/shell") {
+    const body = (await req.json().catch(() => ({}))) as { command?: unknown };
+    if (typeof body.command !== "string" || !body.command.trim()) return json({ ok: false, reason: "bad-args" }, 400);
+    if (shellBusy) return json({ ok: false, reason: "busy" }, 409);
+    shellBusy = true;
+    try {
+      const run = await runShell(body.command);
+      shellRuns.push(run);
+      if (shellRuns.length > SHELL_HISTORY) shellRuns.splice(0, shellRuns.length - SHELL_HISTORY);
+      console.error(`shell: exit ${run.exit ?? "killed"} in ${run.ms}ms`);
+      return json({ ok: true, run }, 200, { "cache-control": "no-store" });
+    } finally {
+      shellBusy = false;
+    }
+  }
+
   if (method === "POST" && path === "/sessions/new") {
     const body = (await req.json().catch(() => ({}))) as { path?: unknown; name?: unknown };
     if (typeof body.path !== "string" || typeof body.name !== "string") {

@@ -98,6 +98,9 @@ const flashKind = signal(""); // "" = error styling; "notice" = neutral (restore
 const copied = signal(false); // transient "✓ copied" pill (clipboard success needs visible feedback)
 const pendingSends = signal([]); // optimistic user bubbles awaiting transcript catch-up
 const showNewSession = signal(false); // repo picker for launching a new session
+const showShell = signal(false); // shell sheet: run one command on the host, read its output
+const shellRuns = signal(null); // scrollback from GET /shell: null = loading, [] = empty
+const shellPending = signal(""); // command in flight (one at a time — the bridge refuses a second)
 const repos = signal(null); // null = loading, [] = loaded
 const launching = signal(""); // repo name while waiting for a just-launched session to register
 const restoring = signal(false); // true while a /restore request is in flight (blocks the button)
@@ -1784,6 +1787,13 @@ function List() {
               <path d="M12 7v5l3 3" />
             </svg>
           </button>
+          <button class="shellbtn" onClick=${openShell} aria-label="Shell">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M5 7l5 5-5 5" />
+              <path d="M12 17h7" />
+            </svg>
+          </button>
           <button class="newbtn" onClick=${openNewSession} aria-label="New session">+</button>
         </div>
         ${error.value && error.value !== "bridge unreachable" && html`<div class="err">${error.value}</div>`}
@@ -1829,6 +1839,125 @@ function List() {
 // New-session repo picker: tap a base repo to launch `claude` in a new tmux window on
 // its current branch; tap a nested worktree to launch there instead. Worktrees render
 // indented under their base repo (the list arrives base-then-worktrees, in order).
+async function openShell() {
+  showShell.value = true;
+  shellRuns.value = null;
+  try {
+    const r = await fetch("/shell");
+    shellRuns.value = r.ok ? (await r.json()).runs : [];
+  } catch {
+    shellRuns.value = [];
+  }
+}
+
+// One shell run in the scrollback, in the bang-turn dress: command bubble, stdout rail,
+// stderr rail, then a foot naming a non-zero exit or a kill plus when it ran. Wide output
+// scrolls sideways rather than wrapping (see .shellrun in index.html) — `ls -l` wrapped
+// at phone width is unreadable. Only the latest run shows in full: older ones clamp to
+// a few lines behind a tap, since the last output is what the sheet was opened for.
+function ShellRunRow({ run, latest }) {
+  const [expanded, setExpanded] = useState(false);
+  const lines = run.stdout ? run.stdout.replace(/\n$/, "").split("\n") : [];
+  const clamped = !latest && !expanded && lines.length > BASH_CLAMP_LINES;
+  const shown = clamped ? lines.slice(0, BASH_CLAMP_LINES).join("\n") : lines.join("\n");
+  const status = run.exit === null ? "killed" : run.exit !== 0 ? `exit ${run.exit}` : "";
+  const foot = [status, run.truncated ? "output truncated" : "", formatTimeAgo(new Date(run.at).toISOString(), { now: tick.value })]
+    .filter(Boolean)
+    .join(" · ");
+  return html`<div class="turn shellrun">
+    <div class="bang-cmd"><span class="glyph">$</span>${run.command}</div>
+    ${shown && html`<div class="bang-out"><pre>${shown}</pre></div>`}
+    ${clamped &&
+    html`<div class="bang-more" onClick=${() => setExpanded(true)}>
+      … +${lines.length - BASH_CLAMP_LINES} lines
+    </div>`}
+    ${run.stderr && html`<div class="bang-out err"><pre>${run.stderr.replace(/\n$/, "")}</pre></div>`}
+    <div class=${"shellfoot" + (status ? " bad" : "")}>${foot}</div>
+    <div class="bang-gap"></div>
+  </div>`;
+}
+
+// The shell sheet: a one-shot command runner on the host — paste a line (the account
+// switch command from whichclaudio is the reason it exists), read what it printed, go
+// back to the sessions. Not a terminal: no tty, no interaction, Enter inserts a newline
+// so a pasted multi-line command is never fired early. The scrollback is the bridge's
+// (memory only), so leaving and returning still shows the last runs.
+function Shell() {
+  const { rootRef } = useSwipeBack(() => (showShell.value = false));
+  const ref = useRef(null);
+  const scrollRef = useRef(null);
+  const [hasText, setHasText] = useState(false);
+  const runs = shellRuns.value;
+  const pending = shellPending.value;
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [runs, pending]);
+  async function run() {
+    const el = ref.current;
+    const command = el ? el.value.trim() : "";
+    if (!command || shellPending.value) return;
+    shellPending.value = command;
+    el.value = "";
+    setHasText(false);
+    try {
+      const r = await fetch("/shell", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ command }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (r.ok && data.run) shellRuns.value = [...(shellRuns.value || []), data.run];
+      else error.value = data.reason === "busy" ? "a command is still running" : "command failed to run";
+    } catch {
+      error.value = "bridge unreachable";
+    } finally {
+      shellPending.value = "";
+    }
+  }
+  return html`
+    <div class="screen" ref=${rootRef}>
+      <div class="listhead">
+        <button class="iconbtn" onClick=${() => (showShell.value = false)} aria-label="Back">‹</button>
+        <h1 style="margin:0">shell</h1>
+      </div>
+      <div class="scroll thread" ref=${scrollRef}>
+        ${error.value && error.value !== "bridge unreachable" && html`<div class="err">${error.value}</div>`}
+        ${runs === null && html`<div class="sub" style="padding:8px">loading…</div>`}
+        ${runs && runs.length === 0 && !pending && html`<div class="shellhint">one command at a time, run on the host as you from your home directory · no tty, 30s limit · output stays until the bridge restarts</div>`}
+        ${runs && runs.map((r, i) => html`<${ShellRunRow} run=${r} latest=${!pending && i === runs.length - 1} key=${r.at} />`)}
+        ${pending &&
+        html`<div class="turn shellrun">
+          <div class="bang-cmd pending"><span class="glyph">$</span>${pending}</div>
+          <div class="shellfoot">running…</div>
+          <div class="bang-gap"></div>
+        </div>`}
+      </div>
+      <div class="dock">
+        <div class="dock-inner">
+          <div class="composer">
+            <div class="bashfield">
+              <span class="bangglyph">$</span>
+              <textarea
+                ref=${ref}
+                rows="1"
+                placeholder="command…"
+                autocapitalize="none"
+                autocorrect="off"
+                spellcheck="false"
+                autocomplete="off"
+                disabled=${!!pending}
+                onInput=${(e) => setHasText(!!e.target.value.trim())}
+              ></textarea>
+            </div>
+            <button class="send" disabled=${!hasText || !!pending} onClick=${run} aria-label="Run">↑</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function NewSession() {
   const list = repos.value;
   const { rootRef } = useSwipeBack(() => (showNewSession.value = false));
@@ -4522,7 +4651,9 @@ function FilesView() {
 function App() {
   if (loadingAuth.value) return html`<${Spinner} />`;
   if (!authed.value) return html`<${Login} />`;
-  const screen = showNewSession.value
+  const screen = showShell.value
+    ? html`<${Shell} />`
+    : showNewSession.value
     ? html`<${NewSession} />`
     : selectedId.value
       ? html`<${Detail} />`

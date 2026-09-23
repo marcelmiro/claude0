@@ -632,6 +632,20 @@ const FIXTURE_HISTORY_SEARCH = {
  * Canned payload for a request, or `undefined` if this isn't a fixture route (so the
  * caller falls through to the real handler — e.g. `/stream` keeps its live SSE).
  */
+// Shell-sheet scrollback: a successful account switch and a failing command.
+const FIXTURE_SHELL_RUNS = [
+  {
+    command: "d=$CLAUDE_CONFIG_DIR; [ -n \"$d\" ] || d=$HOME/.claude; f=$d/.credentials.json; n='{\"claudeAiOauth\":{\"accessToken\":\"sk-ant-…\"}}'; echo 'switched to vibes.claudio5@throxy.us'",
+    exit: 0,
+    stdout: "switched to vibes.claudio5@throxy.us\n",
+    stderr: "",
+    ms: 41,
+    truncated: false,
+    at: Date.now() - 90_000,
+  },
+  { command: "git -C ~/dev/claude0 stauts", exit: 1, stdout: "", stderr: "git: 'stauts' is not a git command. See 'git --help'.\n", ms: 12, truncated: false, at: Date.now() - 30_000 },
+];
+
 export function fixtureData(method: string, path: string, params?: URLSearchParams): unknown | undefined {
   if (method === "GET" && path === "/sessions") return { sessions: FIXTURE_SESSIONS, inboxStale: false };
   if (method === "GET" && path === "/repos") return FIXTURE_REPOS;
@@ -648,6 +662,8 @@ export function fixtureData(method: string, path: string, params?: URLSearchPara
   if (method === "GET" && /^\/sessions\/[^/]+\/changes$/.test(path)) return FIXTURE_CHANGES;
   if (method === "GET" && /^\/sessions\/[^/]+\/diff$/.test(path)) return FIXTURE_DIFF;
   // Stub the mutating actions so the UI's optimistic flows resolve cleanly in a demo.
+  if (method === "GET" && path === "/shell") return { runs: FIXTURE_SHELL_RUNS };
+  if (method === "POST" && path === "/shell") return { ok: true, run: FIXTURE_SHELL_RUNS[1] };
   if (method === "POST" && path === "/sessions/new") return { ok: true, sessionId: FIXTURE_SESSIONS[0]!.id };
   if (
     method === "POST" &&
