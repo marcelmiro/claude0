@@ -574,7 +574,10 @@
          card-holding dock scrolls: an overflow on the composer's dock would clip the
          slash menu, which floats above the composer inside this box. */
       .iphone-pwa .dock { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; }
-      .iphone-pwa .dock-inner.card { width: 100%; min-height: 0; overflow-y: auto; }
+      /* width stays on every dock-inner: in this flex column its auto side margins turn
+         off stretch, so without it the composer row shrinks to its content */
+      .iphone-pwa .dock-inner { width: 100%; }
+      .iphone-pwa .dock-inner.card { min-height: 0; overflow-y: auto; }
       /* Floating button stack — hugs the top edge of the dock, right side. Sits in the dock's
          positioning context so it tracks the dock's top regardless of dock height (composer
          vs. tall question card). Holds the always-on prev/next-prompt pill plus the jump-to-
