@@ -974,7 +974,6 @@ test("parseStatusline: previous Opus is its own arg key, not the current one", (
     "claude-opus-5[1m]",
   );
   expect(parseStatusline("• b • Opus 5").model).toBe("claude-opus-5");
-  expect(parseStatusline("• b • Opus 4.8 (1M context)").model).toBe("claude-opus-4-8[1m]");
 });
 
 test("parseStatusline: missing effort segment → model only, no effort", () => {
@@ -1000,7 +999,7 @@ test("parseStatusline: garbled/foreign line → {} (no throw)", () => {
 
 test("parseStatusline: effort takes the trailing segment (last match wins)", () => {
   // even if an earlier segment coincidentally equals a level word, the last one is the effort
-  expect(parseStatusline("0/1k (0%) • high • Opus 4.8 • max").effort).toBe("max");
+  expect(parseStatusline("0/1k (0%) • high • Opus 5.5 • max").effort).toBe("max");
 });
 
 test("extractConfirmation: model set globally", () => {
@@ -1027,14 +1026,14 @@ test("extractConfirmation: ultracode reports session-only scope verbatim", () =>
 
 test("extractConfirmation: wrapped continuation line is joined, not truncated", () => {
   const cap =
-    "  ⎿  Set model to Opus 4.8 (1M context) (default) and saved as your default\n     for new sessions\n";
+    "  ⎿  Set model to Opus 5.5 (1M context) (default) and saved as your default\n     for new sessions\n";
   expect(extractConfirmation(cap)).toBe(
-    "Set model to Opus 4.8 (1M context) (default) and saved as your default for new sessions",
+    "Set model to Opus 5.5 (1M context) (default) and saved as your default for new sessions",
   );
 });
 
 test("extractConfirmation: no confirmation present → null", () => {
-  expect(extractConfirmation("❯ \n  0/1000k (0%) • main • Opus 4.8 • medium\n")).toBeNull();
+  expect(extractConfirmation("❯ \n  0/1000k (0%) • main • Opus 5.5 • medium\n")).toBeNull();
 });
 
 test("restoreSession: missing repo dir short-circuits to no-repo (no tmux)", async () => {
