@@ -114,8 +114,8 @@ test("detached + read-only tool (Read) exits neutral — no block, no pending", 
   expect(r.pendingWritten).toBe(false);
 });
 
-test("detached + Task (subagent dispatch) exits neutral", async () => {
-  const r = await runHook(base({ tool_name: "Task", session_id: "itest-task" }), { timeoutMs: 5000 });
+test("detached + Agent (subagent dispatch) exits neutral", async () => {
+  const r = await runHook(base({ tool_name: "Agent", session_id: "itest-agent" }), { timeoutMs: 5000 });
   expect(r.exitCode).toBe(0);
   expect(r.pendingWritten).toBe(false);
 });

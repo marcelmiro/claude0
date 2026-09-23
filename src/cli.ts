@@ -475,7 +475,7 @@ function isSubsequence(sub: string, str: string): boolean {
 // claude0 setup
 // ---------------------------------------------------------------------------
 
-export const HOOK_VERSION = 20;
+export const HOOK_VERSION = 21;
 
 // A bridge-consumer marker older than this is a dead phone connection: the bridge
 // touches it on SSE connect and every 15s heartbeat, so 40s tolerates one missed
@@ -612,7 +612,7 @@ if [ "\$MT" = 0 ] || [ \$(( \$(date +%s) - MT )) -ge ${CONSUMER_FRESH_S} ]; then
 PERM=$(printf '%s' "\$INPUT" | grep -oE '"permission_mode"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
 case "\$PERM" in bypassPermissions|auto) exit 0 ;; esac
 case "\$TOOL" in
-  Read|Glob|Grep|NotebookRead|TodoWrite|Task) exit 0 ;;
+  Read|Glob|Grep|NotebookRead|TodoWrite|Agent) exit 0 ;;
 esac
 
 TS=$(( $(date +%s) * 1000 ))
