@@ -410,7 +410,7 @@ export const FIXTURE_TRANSCRIPT = {
   // Mode + statusline exactly as the pane renders them (marker, percent, full four
   // segments) — the client does the shortening, so the fixture must carry the raw shape.
   mode: "⏵⏵ auto mode on",
-  statusline: "124k/200k (62%) • marcelmiro/eng-2687-cookie-auth-session-rotation • Opus 5 (1M context) • medium",
+  statusline: "124k/200k (62%) • marcelmiro/eng-2687-cookie-auth-session-rotation • Opus 5.5 (1M context) • medium",
   // Background work: one script wait + agents on both sides of lastPromptAt, so the
   // pill (🤖 1 ⏳ 1) and the sheet's waiting/running/fresh/earlier grouping all render.
   pendingScripts: [

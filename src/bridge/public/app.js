@@ -4683,10 +4683,10 @@ function App() {
 // change and closes — the config route takes a single field per request, and Claude's own
 // confirmation line is what the user reads next.
 const MODEL_OPTS = [
-  { key: "default", label: "Default", sub: "recommended · Opus 5 1M" },
-  { key: "opus[1m]", label: "Opus", sub: "Opus 5 · 1M context" },
-  { key: "claude-opus-4-8[1m]", label: "Opus 4.8", sub: "previous Opus · 1M context" },
-  { key: "fable", label: "Fable", sub: "Fable 5" },
+  { key: "default", label: "Default", sub: "recommended · Opus 5.5 1M" },
+  { key: "opus[1m]", label: "Opus", sub: "Opus 5.5 · 1M context" },
+  { key: "claude-opus-5[1m]", label: "Opus 5", sub: "previous Opus · 1M context" },
+  { key: "fable", label: "Fable", sub: "Fable 5.1" },
   { key: "sonnet", label: "Sonnet", sub: "Sonnet 5" },
   { key: "haiku", label: "Haiku", sub: "Haiku 4.5" },
 ];

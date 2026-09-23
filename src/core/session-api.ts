@@ -121,12 +121,12 @@ export interface PaneStatusline {
 // The model/effort arg forms Claude accepts (`/model <x>`, `/effort <x>`) — the switcher's
 // allowlists. Note the `[1m]` suffix, NOT the bare alias: `opus` resolves to the non-1M base
 // model, whereas the picker's "Opus" and "Default" both select the 1M variant. The `opus`
-// alias tracks the current Opus (Opus 5); the previous Opus has no alias and is reachable
+// alias tracks the current Opus (Opus 5.5); the previous Opus has no alias and is reachable
 // only by its full model id.
 export const MODEL_ARGS = [
   "default",
   "opus[1m]",
-  "claude-opus-4-8[1m]",
+  "claude-opus-5[1m]",
   "fable",
   "sonnet",
   "haiku",
@@ -149,11 +149,14 @@ const MODEL_FAMILIES: Array<[RegExp, string]> = [
  * is absent for models without reasoning effort, and its position shifts. Returns only the
  * fields it can identify; a garbled/foreign statusline yields `{}` (never throws).
  *
- * Opus renders its version in the display name ("Opus 5", "Opus 4.8") plus a "(1M context)"
- * suffix on the 1M variant — so "Opus 5 (1M context)" → `opus[1m]` (the menu's Opus option,
- * also how "Default" renders), while plain "Opus 5" → `opus` (the non-1M base, not in the menu
- * so it simply marks nothing).
+ * Opus renders its version in the display name ("Opus 5.5", "Opus 5") plus a "(1M context)"
+ * suffix on the 1M variant. The current Opus maps to the `opus` alias — "Opus 5.5 (1M
+ * context)" → `opus[1m]` (the menu's Opus option, also how "Default" renders), plain
+ * "Opus 5.5" → `opus` (the non-1M base, not in the menu so it simply marks nothing). Any
+ * other Opus version becomes its full id (`claude-opus-<major>-<minor>`), so an older model
+ * never marks the current row.
  */
+const CURRENT_OPUS = "5.5";
 export function parseStatusline(line: string): { model?: string; effort?: string } {
   const out: { model?: string; effort?: string } = {};
   for (const raw of line.split("•")) {
@@ -161,7 +164,8 @@ export function parseStatusline(line: string): { model?: string; effort?: string
     if (isEffortArg(seg)) out.effort = seg; // effort is the trailing segment — last match wins
     if (!out.model) {
       if (/opus/i.test(seg)) {
-        const base = /4\.8/.test(seg) ? "claude-opus-4-8" : "opus";
+        const ver = seg.match(/opus\s+(\d+(?:\.\d+)?)/i)?.[1];
+        const base = !ver || ver === CURRENT_OPUS ? "opus" : `claude-opus-${ver.replace(".", "-")}`;
         out.model = /1m/i.test(seg) ? `${base}[1m]` : base;
       } else {
         const fam = MODEL_FAMILIES.find(([re]) => re.test(seg));

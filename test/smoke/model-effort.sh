@@ -62,8 +62,8 @@ echo "     baseline: model=$(model_of A) effort=${ORIG_EFFORT:-<none>}"
 
 line "T0  '/model opus[1m]' → the 1M variant (bare 'opus' would be non-1M)"
 tmux send-keys -t A "/model opus[1m]" Enter; sleep 1.6
-cap A | grep -qiE "Set model to Opus 4.8 \(1M context\)" && [[ "$(model_of A)" == *"1M"* ]] \
-  && ok "opus[1m] → Opus 4.8 (1M context)" || bad "opus[1m] did not select the 1M variant"
+cap A | grep -qiE "Set model to Opus 5.5 \(1M context\)" && [[ "$(model_of A)" == *"1M"* ]] \
+  && ok "opus[1m] → Opus 5.5 (1M context)" || bad "opus[1m] did not select the 1M variant"
 
 line "T1  '/model sonnet' arg form → confirmation + statusline flips to Sonnet"
 tmux send-keys -t A "/model sonnet" Enter; sleep 1.6

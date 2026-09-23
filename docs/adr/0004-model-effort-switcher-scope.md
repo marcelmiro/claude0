@@ -57,3 +57,11 @@ already spends its width on mode · branch · context percent.
   performs per row. An unparsed value (statusline not rendering effort) reads as `—`.
 - Ultracode's session-only scope moves from an option sub-label to a hint line under the
   chip row.
+
+## Addendum 2026-09-23: Opus version tracking
+
+Claude Code 2.1.280 made Opus 5.5 the default Opus. The picker's "previous Opus" row is
+now Opus 5 (`claude-opus-5[1m]`). `parseStatusline` no longer special-cases one old
+version: the current Opus (a single constant) maps to the `opus` alias, and any other
+rendered version derives its full id from the version number — so a session on an older
+Opus never marks the current row, whichever version it is.
