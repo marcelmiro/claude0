@@ -40,3 +40,20 @@ reaches the pane on a bad value.
   [ADR 6](0006-wrapping-claude-code.md).
 - Mechanics are guarded by `test/smoke/model-effort.sh`, opt-in because it drives real
   sessions; it is not part of `bun test`.
+
+## Addendum 2026-09-23: one combined picker, reachable from the session sheet
+
+Reading the current model and effort required typing `/model` or `/effort` — enough
+friction that it rarely happened. The dock statusbar was rejected as the readout: it
+already spends its width on mode · branch · context percent.
+
+- The two selection sheets merged into one `Model · Effort` sheet: model options as rows,
+  effort as a chip row (same pattern as the snooze presets). One tap applies ONE change and
+  closes — the config route still takes a single field per request, and Claude's verbatim
+  confirmation is what the user reads next. `/model` and `/effort` both open it.
+- The ⋯ session sheet gains a row whose label IS the current values (`Opus · High`) and
+  which opens the picker. It renders only for the open conversation with a live pane —
+  the values come from the loaded transcript's pane scrape, which the Home list never
+  performs per row. An unparsed value (statusline not rendering effort) reads as `—`.
+- Ultracode's session-only scope moves from an option sub-label to a hint line under the
+  chip row.

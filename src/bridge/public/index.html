@@ -1049,6 +1049,12 @@
         text-align: center;
       }
       .snoozerow button:active { background: var(--peach-tint); }
+      .sheet .snoozerow button.current { color: var(--mint); border-color: var(--mint); }
+      /* effort chips: six across on a 390px phone — no leading icon, tighter gap */
+      .sheet .effortrow { gap: 6px; }
+      .sheet .effortrow button { padding: 9px 0; font-size: 13px; }
+      /* session-sheet "Model · effort" row: the current values, right-aligned like a settings value */
+      .sheet .cfgval { color: var(--muted); font-size: 14px; flex: none; }
       /* /model & /effort selection options: left-aligned label + optional sub, ✓ on the
          current. Same row metrics as .vrow so all sheets share one rhythm. */
       .sheet .cfgopt {

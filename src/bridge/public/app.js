@@ -106,7 +106,7 @@ const launching = signal(""); // repo name while waiting for a just-launched ses
 const restoring = signal(false); // true while a /restore request is in flight (blocks the button)
 const menuText = signal(null); // long-pressed user message → action sheet (null = closed)
 const sessionMenu = signal(null); // long-pressed session ROW → session action sheet (null = closed)
-const configSheet = signal(null); // /model or /effort → model/effort selection sheet ({kind} | null)
+const configSheet = signal(false); // /model, /effort or the session sheet → combined model+effort picker
 const notice = signal(""); // transient SUCCESS notice, e.g. Claude's model/effort confirmation line
 const loadingAuth = signal(true); // boot-time auth check + initial session load
 const attachments = signal([]); // images staged in the composer: {blob, url} (object URLs)
@@ -3016,7 +3016,7 @@ function Composer({ disabled, status }) {
       grow();
       syncHasText();
       slash.current.open = false;
-      configSheet.value = { kind: cmd.name };
+      configSheet.value = true;
       rerender();
       return;
     }
@@ -3968,6 +3968,8 @@ const VICONS = {
   done: '<path d="M20 6L9 17l-5-5"/>',
   copy: '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
   code: '<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>',
+  sliders:
+    '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>',
 };
 
 // Phone snooze presets — one-tap chips in the session sheet; the server validates the
@@ -4090,6 +4092,13 @@ function SessionSheet() {
                     ${section === "done" &&
                     html`<button class="vrow" onClick=${unarchiveSession}>
                       <span class="vg">${vicon(VICONS.undo)}</span>Un-archive
+                    </button>`}
+                    ${selectedId.value === s.id &&
+                    s.paneId &&
+                    html`<button class="vrow" onClick=${() => (close(), (configSheet.value = true))}>
+                      <span class="vg">${vicon(VICONS.sliders)}</span>
+                      <span class="grow">Model · effort</span>
+                      <span class="cfgval">${configLabel(transcript.value)}</span>
                     </button>`}
                     <button class="vrow" onClick=${() => setConfirm("fork")}>
                       <span class="vg">${vicon(VICONS.fork)}</span>Fork session…
@@ -4667,9 +4676,12 @@ function App() {
 }
 
 // A brief centered "✓ copied" pill, shown on any successful clipboard write.
-// Selection sheets for /model and /effort. Options mirror Claude's own pickers. The current
-// value is read from the pane-scraped statusline (transcript.model / .effort, arg keys); note
-// "Default" reads as `opus` on the statusline, so Opus is marked when Default is active.
+// Combined model + effort picker (reached from /model, /effort, or the session sheet's
+// current-values row). Options mirror Claude's own pickers. The current values are read from
+// the pane-scraped statusline (transcript.model / .effort, arg keys); note "Default" reads as
+// `opus` on the statusline, so Opus is marked when Default is active. One tap applies ONE
+// change and closes — the config route takes a single field per request, and Claude's own
+// confirmation line is what the user reads next.
 const MODEL_OPTS = [
   { key: "default", label: "Default", sub: "recommended · Opus 5 1M" },
   { key: "opus[1m]", label: "Opus", sub: "Opus 5 · 1M context" },
@@ -4680,25 +4692,32 @@ const MODEL_OPTS = [
 ];
 const EFFORT_OPTS = [
   { key: "low", label: "Low" },
-  { key: "medium", label: "Medium" },
+  { key: "medium", label: "Med" },
   { key: "high", label: "High" },
   { key: "xhigh", label: "xHigh" },
   { key: "max", label: "Max" },
-  { key: "ultracode", label: "Ultracode", sub: "this session only" },
+  { key: "ultracode", label: "Ultra" },
 ];
 
+// "Opus · High" for the session sheet row. A bare `opus` (non-1M base) isn't a menu option
+// but still reads as Opus; an unparsed value (statusline not rendering it) shows as "—".
+function configLabel(t) {
+  const m = t && t.model;
+  const mo = MODEL_OPTS.find((o) => o.key === m);
+  const model = mo ? mo.label : m === "opus" ? "Opus" : "—";
+  const eo = EFFORT_OPTS.find((o) => o.key === (t && t.effort));
+  return `${model} · ${eo ? eo.label : "—"}`;
+}
+
 function ConfigSheet() {
-  const c = configSheet.value;
-  if (c == null) return null;
-  const close = () => (configSheet.value = null);
+  if (!configSheet.value) return null;
+  const close = () => (configSheet.value = false);
   const t = transcript.value;
-  const current = c.kind === "model" ? t && t.model : t && t.effort;
-  const opts = c.kind === "model" ? MODEL_OPTS : EFFORT_OPTS;
-  const title = c.kind === "model" ? "Model" : "Reasoning effort";
-  const apply = async (key) => {
+  const curModel = t && t.model;
+  const curEffort = t && t.effort;
+  const apply = async (body) => {
     const sid = selectedId.value;
     close();
-    const body = c.kind === "model" ? { model: key } : { effort: key };
     const data = await actionJson(`/sessions/${encodeURIComponent(sid)}/config`, body);
     if (data && data.line) notify(data.line); // Claude's verbatim confirmation (states the scope)
   };
@@ -4706,17 +4725,29 @@ function ConfigSheet() {
     <div class="scrim" onClick=${close}>
       <div class="sheet" onClick=${(e) => e.stopPropagation()}>
         <div class="sheetgroup">
-          <div class="sheethead"><span class="name">${title}</span></div>
-          ${opts.map(
+          <div class="sheethead"><span class="name">Model · Effort</span></div>
+          ${MODEL_OPTS.map(
             (o) => html`<button
               key=${o.key}
-              class=${"cfgopt" + (o.key === current ? " current" : "")}
-              onClick=${() => apply(o.key)}
+              class=${"cfgopt" + (o.key === curModel ? " current" : "")}
+              onClick=${() => apply({ model: o.key })}
             >
               <span class="cfglabel">${o.label}${o.sub ? html`<span class="cfgsub">${o.sub}</span>` : ""}</span>
-              ${o.key === current ? html`<span class="cfgmark">✓</span>` : ""}
+              ${o.key === curModel ? html`<span class="cfgmark">✓</span>` : ""}
             </button>`,
           )}
+          <div class="snoozerow effortrow" role="group" aria-label="Reasoning effort">
+            ${EFFORT_OPTS.map(
+              (o) => html`<button
+                key=${o.key}
+                class=${o.key === curEffort ? "current" : ""}
+                onClick=${() => apply({ effort: o.key })}
+              >
+                ${o.label}
+              </button>`,
+            )}
+          </div>
+          <div class="sheethint">Ultra is this session only; the rest also set the new-session default.</div>
           <button class="sheetcancel" onClick=${close}>Cancel</button>
         </div>
       </div>
