@@ -3678,7 +3678,7 @@ function Detail() {
             </svg>
           </button>
         </div>
-        <div class="dock-inner">
+        <div class=${"dock-inner" + (questions || approval ? " card" : "")}>
           ${archived
             ? session && (session.restorable === "yes" || session.restorable === "relocated")
               ? html`<div class="flash archived restore-row">

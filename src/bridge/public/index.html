@@ -570,9 +570,11 @@
       }
       .dock-inner { max-width: 680px; margin: 0 auto; }
       /* Tall questions must fit the space left below the top clearance, including
-         when the keyboard or landscape orientation reduces the viewport. */
+         when the keyboard or landscape orientation reduces the viewport. Only the
+         card-holding dock scrolls: an overflow on the composer's dock would clip the
+         slash menu, which floats above the composer inside this box. */
       .iphone-pwa .dock { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; }
-      .iphone-pwa .dock-inner { width: 100%; min-height: 0; overflow-y: auto; }
+      .iphone-pwa .dock-inner.card { width: 100%; min-height: 0; overflow-y: auto; }
       /* Floating button stack — hugs the top edge of the dock, right side. Sits in the dock's
          positioning context so it tracks the dock's top regardless of dock height (composer
          vs. tall question card). Holds the always-on prev/next-prompt pill plus the jump-to-
