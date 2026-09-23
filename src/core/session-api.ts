@@ -202,7 +202,7 @@ export async function readPaneStatusline(paneId: string, capture?: string): Prom
 /** Outcome of a send; `reason` is set only on rejection (nothing was sent). */
 export type SendResult = {
   ok: boolean;
-  reason?: "no-pane" | "no-question" | "stale-question" | "not-presented" | "not-held" | "no-prompt" | "no-session" | "rewind-unavailable" | "rewind-mismatch" | "rewind-mode" | "bad-image" | "bad-selection" | "no-confirm" | "no-repo" | "no-transcript" | "resume-failed" | "not-found" | "shell-draft" | "shell-clear-failed" | "draft-stash-failed" | "clear-failed" | "notification-clear-failed";
+  reason?: "no-pane" | "no-question" | "stale-question" | "not-presented" | "not-held" | "no-prompt" | "no-session" | "rewind-unavailable" | "rewind-mismatch" | "rewind-mode" | "bad-image" | "bad-selection" | "no-confirm" | "no-repo" | "no-transcript" | "resume-failed" | "not-found" | "shell-draft" | "shell-clear-failed" | "draft-stash-failed" | "clear-failed" | "notification-clear-failed" | "agent-list-focused";
   /** Fresh session id, set by createSession to the dictated id. */
   sessionId?: string;
 };
@@ -1440,6 +1440,8 @@ async function killInput(paneId: string): Promise<boolean> {
     await sendKey(paneId, "Down");
     await Bun.sleep(100);
   }
+  // Down past the last row walks into the background-agent list when one is shown.
+  if (!(await releaseAgentList(paneId))) return false;
   await sendKey(paneId, "C-e");
   await Bun.sleep(KEY_GAP);
   for (let i = 0; i < 12 && inputPending(await captureTyped(paneId)); i++) {
@@ -1509,6 +1511,8 @@ export async function sendMessage(
 ): Promise<SendResult> {
   const paneId = await resolveSessionPane(sessionId);
   if (!paneId) return { ok: false, reason: "no-pane" };
+  // Focus parked in the agent list (a Mac-side ↓) would take every key below — `x` included.
+  if (!(await releaseAgentList(paneId))) return { ok: false, reason: "agent-list-focused" };
   // Notification rows eat every key below — dismiss them before any input choreography.
   if (!(await clearNotificationRows(paneId))) return { ok: false, reason: "notification-clear-failed" };
   // One styled capture, two views: shell detection needs the dim "! for shell mode"
@@ -1582,6 +1586,7 @@ export async function setSessionModelEffort(
 ): Promise<SendResult & { line?: string }> {
   const paneId = await resolveSessionPane(sessionId);
   if (!paneId) return { ok: false, reason: "no-pane" };
+  if (!(await releaseAgentList(paneId))) return { ok: false, reason: "agent-list-focused" };
   // Same key-eating hazard as sendMessage: a visible notification row swallows the send.
   if (!(await clearNotificationRows(paneId))) return { ok: false, reason: "notification-clear-failed" };
   const hadDraft = inputPending(await captureTyped(paneId));
@@ -1672,6 +1677,36 @@ async function captureTyped(paneId: string): Promise<string> {
  * the same regex probe a whole capture.
  */
 const NOTIFICATION_ROW = /^❯\s?⧉/m;
+
+/**
+ * Whether keyboard focus sits in Claude Code's background-agent list (rendered under the
+ * statusline while agents run). `Down` from the input's last row moves focus there
+ * (lab-verified); then C-e/C-u are no-ops, `x` stops the selected agent and Enter opens
+ * it. The tell is the selection glyph on a `●`/`◯` agent row, read only BELOW the input
+ * box's bottom rule — transcript text above may contain the same shape.
+ */
+export function agentListFocused(capture: string): boolean {
+  const lines = capture.split("\n");
+  let rule = -1;
+  for (let i = lines.length - 1; i >= 0 && rule < 0; i--) if (/^─{20,}/.test(lines[i]!)) rule = i;
+  return rule >= 0 && lines.slice(rule + 1).some((l) => /^❯ [●◯]/.test(l));
+}
+
+/**
+ * Hand focus back from the agent list to the input: `Up` from the list's top row returns
+ * to the input with the cursor on its last row and the kill-ring chain intact
+ * (lab-verified). One Up per re-capture — an extra Up in the input recalls history. Never
+ * Escape: from the list it interrupts a running turn and leaves focus where it was.
+ * Returns whether focus is out.
+ */
+async function releaseAgentList(paneId: string): Promise<boolean> {
+  for (let i = 0; i < 20; i++) {
+    if (!agentListFocused(await capturePane(paneId))) return true;
+    await sendKey(paneId, "Up");
+    await Bun.sleep(KEY_GAP);
+  }
+  return !agentListFocused(await capturePane(paneId));
+}
 
 /**
  * Dismiss any visible notification rows with their own `x` key before typing into the

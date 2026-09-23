@@ -99,3 +99,27 @@ send path (both lab-verified against a live pane):
   dismiss visible rows with `x` (gated on detection, re-captured per round) before
   any input choreography, failing loud (`notification-clear-failed`) if rows won't
   clear rather than typing into a key-eating widget.
+
+## Addendum (2026-09-23): the background-agent list takes focus on `Down`
+
+Lab-verified on Claude Code v2.1.280 with two background agents running and a 3-row draft:
+
+- **`Down` past the input's last row moves focus into the agent list** under the
+  statusline (Claude's own hint: `↓ to manage`). `killInput`'s Down walk ended on
+  a list row, so C-e and the C-u kills never reached the input, the draft stayed,
+  and every send with a draft aborted with `draft-stash-failed`. With focus in the
+  list, `x` stops the selected agent and Enter opens it.
+- **`Up` hands focus back; `Escape` must not be used.** From the list, Escape
+  interrupts a running turn ("Interrupted · What should Claude do instead?") and
+  leaves focus in the list. `Up` walks the selection up a row; from the top row
+  (`main`) it returns to the input with the cursor on the last row, the turn keeps
+  streaming, and the C-e/C-u walk then clears the whole draft for one C-y to
+  restore. `killInput` releases the list after its Down walk, one `Up` per
+  re-capture (a surplus Up in the input would recall history);
+  `sendMessage`/`setSessionModelEffort` also release it before anything else
+  (before the notification-row `x`), failing loud with `agent-list-focused` if
+  focus won't leave.
+- **Detection is the selection glyph on a `●`/`◯` agent row (`❯ ◯ name…`), read
+  only below the input box's bottom rule.** The key hint isn't stable — `Enter to
+  view · x to stop` on an agent row, `↑/↓ to select · Enter to view` on `main` —
+  and transcript text above the input may contain the same shapes.

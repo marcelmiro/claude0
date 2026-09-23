@@ -29,6 +29,7 @@ import {
   composeMessageSteps,
   buildSendPlan,
   inputPending,
+  agentListFocused,
   flattenStyled,
   shellModeInput,
   parseQueuedPending,
@@ -520,6 +521,36 @@ test("inputPending: false once the input cleared (last ❯ line empty)", () => {
   // An earlier ❯ echo of the submitted message must NOT count — only the LAST ❯ line does.
   const cap = ["❯ [Image #1] what color", "  ⎿ [Image #1]", "⏺ Purple.", "❯ ", "────"].join("\n");
   expect(inputPending(cap)).toBe(false);
+});
+
+// --- agentListFocused (Down walks into the background-agent list) ----------------
+// Lab captures (VM pane, background agents, 3-row draft): Downs moved focus into the
+// list, and the C-e/C-u walk then left the draft untouched.
+
+const agentFooter = (selected: "none" | "main" | "agent") => [
+  RULE,
+  "❯ 1. first row draft text",
+  "  2. dismiss",
+  "  3. third row end",
+  RULE,
+  "  34.9k/200k (17%) •  • Haiku 4.5",
+  { none: "  ⏸ manual mode on · ← for agents", main: "  ↑/↓ to select · Enter to view", agent: "  Enter to view · x to stop" }[selected],
+  (selected === "main" ? "❯ " : "  ") + "● main",
+  (selected === "agent" ? "❯ " : "  ") + "◯ adr-summarizer  Read every file in /home/marcel/dev/claude0/docs/a...   idle",
+].join("\n");
+
+test("agentListFocused: true with the selection on an agent row or the main row", () => {
+  expect(agentListFocused(agentFooter("agent"))).toBe(true);
+  expect(agentListFocused(agentFooter("main"))).toBe(true);
+});
+
+test("agentListFocused: false with the list shown but focus in the input", () => {
+  expect(agentListFocused(agentFooter("none"))).toBe(false);
+});
+
+test("agentListFocused: a selected-row shape in the transcript above the input box doesn't count", () => {
+  const cap = ["⏺ the pane showed:", "❯ ◯ adr-summarizer  Read every file", agentFooter("none")].join("\n");
+  expect(agentListFocused(cap)).toBe(false);
 });
 
 // --- flattenStyled (ghost-text discrimination on styled captures) ---------------
