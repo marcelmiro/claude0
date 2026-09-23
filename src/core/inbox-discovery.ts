@@ -13,8 +13,8 @@
 import { discoverSessions } from "./sessions";
 import { loadNameCache, getSessionName } from "./names";
 import { snippet } from "./session-label";
-import { branchPullRequest, pullRequestByNumber, repoSlug } from "./pull-request";
-import { liveEditDir, scanEditDir } from "./edit-dir";
+import { branchPullRequest, repoSlug } from "./pull-request";
+import { scanEditDir, workPullRequest } from "./edit-dir";
 import { detectScriptWaits } from "./script-wait";
 import { readLastPromptAt, resolveTranscriptPath } from "./last-turn";
 import { pendingToolCall } from "./hook-events";
@@ -148,8 +148,8 @@ export async function discoveryTick(store: InboxStore): Promise<void> {
   // A pane sitting in the base checkout is keyed on the checkout the session
   // last EDITED in: a worktree created without cd'ing into it is invisible to
   // cwd. A pane already inside a worktree is explicit intent and wins as-is.
-  // With that worktree gone (landed and cleaned up), the last PR the session
-  // printed stands in — merged is the "clear me" cue, so it must outlive cleanup.
+  // With that worktree gone (landed and cleaned up), the session's own PR (see
+  // workPullRequest) stands in — merged is the "clear me" cue, so it must outlive cleanup.
   const pathsById = new Map(
     sessions.filter((s) => byId.has(s.id)).map((s) => [s.id, { pane: s.repoPath, base: s.baseRepoPath }]),
   );
@@ -167,11 +167,8 @@ export async function discoveryTick(store: InboxStore): Promise<void> {
         let pr;
         if (pane === base) {
           row.workScan = (await scanEditDir(id, { base, slug: slugByBase.get(base)! }, row.workScan)) ?? undefined;
-          const dir = await liveEditDir(row.workScan, pane);
-          if (dir !== pane) pr = await branchPullRequest(dir);
-          else if (row.workScan?.lastPr) pr = await pullRequestByNumber(pane, row.workScan.lastPr);
-        }
-        pr ??= await branchPullRequest(pane);
+          pr = await workPullRequest(row.workScan, pane);
+        } else pr = await branchPullRequest(pane);
         row.pr = {
           number: "number" in pr ? pr.number : undefined,
           state: pr.state,

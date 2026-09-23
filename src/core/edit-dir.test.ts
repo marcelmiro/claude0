@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { editCheckout, liveEditDir, scanEditDir } from "./edit-dir";
+import { editCheckout, liveEditDir, scanEditDir, workPullRequest, type EditScan } from "./edit-dir";
 
 const BASE = "/home/u/dev/repo";
 const WT = `${BASE}/.claude/worktrees/tf-1`;
@@ -65,13 +65,47 @@ test("scanEditDir: no transcript → null; unknown session keeps the previous sc
   expect(await scanEditDir("no-such-session", REPO, undefined, dir)).toBeNull();
 });
 
-test("scanEditDir: keeps the last same-repo PR url, ignoring other repos' PRs", async () => {
-  appendFileSync(transcript, say("opened https://github.com/acme/repo/pull/41") + say("see https://github.com/acme/other/pull/99"));
+const prOp = (action: string, url: string) =>
+  JSON.stringify({
+    type: "user",
+    message: { content: [{ type: "tool_result", content: url }] },
+    toolUseResult: { stdout: url, gitOperation: { pr: { number: Number(url.split("/").pop()), url, action } } },
+  }) + "\n";
+const skillBody = (text: string) => JSON.stringify({ type: "user", message: { content: [{ type: "text", text }] } }) + "\n";
+
+test("scanEditDir: keeps the last same-repo PR the session created or edited, ignoring other repos' PRs", async () => {
+  appendFileSync(transcript, prOp("created", "https://github.com/acme/repo/pull/41") + prOp("created", "https://github.com/acme/other/pull/99"));
   const first = await scanEditDir(SID, REPO, undefined, dir);
   expect(first?.lastPr).toBe(41);
-  appendFileSync(transcript, say("https://github.com/acme/repo/pull/42 and https://github.com/acme/repo/pull/43"));
-  expect((await scanEditDir(SID, REPO, first!, dir))?.lastPr).toBe(43);
+  appendFileSync(transcript, prOp("edited", "https://github.com/acme/repo/pull/42"));
+  expect((await scanEditDir(SID, REPO, first!, dir))?.lastPr).toBe(42);
   expect((await scanEditDir(SID, { base: BASE, slug: "" }, undefined, dir))?.lastPr).toBeUndefined();
+});
+
+test("scanEditDir: a PR url that is only mentioned — skill body, prose, a comment or view — is not the session's PR", async () => {
+  appendFileSync(
+    transcript,
+    skillBody("client onboarding ([#1105](https://github.com/acme/repo/pull/1105), merged) already sends with") +
+      say("see https://github.com/acme/repo/pull/7") +
+      prOp("commented", "https://github.com/acme/repo/pull/8"),
+  );
+  expect((await scanEditDir(SID, REPO, undefined, dir))?.lastPr).toBeUndefined();
+});
+
+test("workPullRequest: a live worktree's PR is pinned as lastPr so it outlives the worktree's cleanup", async () => {
+  const scan: EditScan = { path: "p", offset: 0, dir };
+  const byBranch = async (root: string) =>
+    root === dir ? ({ state: "open", branch: "tf-1", number: 5, title: "", url: "", add: 0, del: 0 } as const) : ({ state: "none" } as const);
+  const byNumber = async (_root: string, n: number) => ({ state: "merged", branch: "tf-1", number: n, title: "", url: "", add: 0, del: 0 }) as const;
+  expect((await workPullRequest(scan, BASE, { byBranch, byNumber })).state).toBe("open");
+  expect(scan.lastPr).toBe(5);
+
+  rmSync(dir, { recursive: true, force: true }); // landed and cleaned up
+  const pr = await workPullRequest(scan, BASE, { byBranch, byNumber });
+  expect(pr.state === "merged" && pr.number).toBe(5);
+
+  // no edits in a worktree and no PR of its own → the pane's own branch
+  expect((await workPullRequest({ path: "p", offset: 0 }, BASE, { byBranch, byNumber })).state).toBe("none");
 });
 
 test("liveEditDir: falls back when the picked worktree is gone", async () => {

@@ -10,16 +10,19 @@
  * checkout does not (planning before the worktree exists, or moving the plan back on
  * cleanup, both trail the code they belong to).
  *
- * The scan also keeps the last same-repo PR URL the transcript mentions: once a worktree
- * is removed after its PR landed there is no checkout left to key on, and the PR the
- * session itself created is the last one it printed.
+ * The scan also keeps the session's own PR — the last same-repo one it created or edited
+ * (Claude Code tags those Bash results with `gitOperation.pr`), or the one found for its
+ * live worktree: once a worktree is removed after its PR landed there is no checkout left
+ * to key on. A PR URL that is only mentioned (a skill body, a citation) is not the session's.
  *
  * Incremental: the transcript is streamed once from the cached byte offset, so a multi-MB
  * log costs one full pass ever and a tail read thereafter.
  */
 import { stat } from "node:fs/promises";
 import { jsonlLines } from "./jsonl-reader";
+import { WORKTREES_DIR } from "./git";
 import { resolveTranscriptPath } from "./last-turn";
+import { branchPullRequest, pullRequestByNumber, type PullRequestInfo } from "./pull-request";
 
 export interface EditScan {
   /** Transcript the offset belongs to — a session whose live file moves rescans from 0. */
@@ -27,18 +30,20 @@ export interface EditScan {
   offset: number;
   /** Checkout of the last in-repo edit; absent when the scan found none yet. */
   dir?: string;
-  /** Last `github.com/<slug>/pull/N` the transcript mentioned, for this repo's slug. */
+  /** Last PR of this repo the session created or edited, or its worktree's PR. */
   lastPr?: number;
 }
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 
-/** The worktree (by the `.claude/worktrees/<name>` convention) or base checkout a path falls in. */
+const PR_ACTIONS = new Set(["created", "edited"]);
+
+/** The worktree (by the `<base>/${WORKTREES_DIR}/<name>` convention) or base checkout a path falls in. */
 export function editCheckout(filePath: string, base: string): string | null {
   if (!filePath.startsWith(`${base}/`)) return null;
   const rest = filePath.slice(base.length);
-  const m = rest.match(/^\/\.claude\/worktrees\/[^/]+/);
-  if (m) return base + m[0];
+  const wt = `/${WORKTREES_DIR}/`;
+  if (rest.startsWith(wt)) return base + wt + rest.slice(wt.length).split("/")[0];
   return rest.startsWith("/.plans/") ? null : base;
 }
 
@@ -49,7 +54,7 @@ export async function scanEditDir(
   projectsDir?: string,
 ): Promise<EditScan | null> {
   const { base, slug } = repo;
-  const prUrl = slug ? new RegExp(`github\\.com/${slug.replace(/[.]/g, "\\.")}/pull/(\\d+)`, "g") : null;
+  const prUrl = slug ? `https://github.com/${slug}/pull/` : null;
   try {
     const path = await resolveTranscriptPath(sessionId, projectsDir);
     if (!path) return null;
@@ -57,13 +62,17 @@ export async function scanEditDir(
     const scan: EditScan = prev?.path === path && prev.offset <= size ? { ...prev } : { path, offset: 0 };
     if (scan.offset >= size) return scan;
     for await (const line of jsonlLines(path, scan.offset)) {
-      if (prUrl) for (const m of line.matchAll(prUrl)) scan.lastPr = Number(m[1]);
-      if (!line.includes('"tool_use"')) continue;
-      let rec: { message?: { content?: unknown } };
+      const prOp = prUrl !== null && line.includes('"gitOperation"');
+      if (!prOp && !line.includes('"tool_use"')) continue;
+      let rec: { message?: { content?: unknown }; toolUseResult?: { gitOperation?: { pr?: { number?: unknown; url?: unknown; action?: unknown } } } };
       try {
         rec = JSON.parse(line);
       } catch {
         continue; // partial trailing line mid-write — the next pass rescans from `size`
+      }
+      const pr = rec.toolUseResult?.gitOperation?.pr;
+      if (prOp && typeof pr?.number === "number" && pr.url === prUrl + pr.number && PR_ACTIONS.has(String(pr.action))) {
+        scan.lastPr = pr.number;
       }
       const content = rec.message?.content;
       if (!Array.isArray(content)) continue;
@@ -89,4 +98,22 @@ export async function liveEditDir(scan: EditScan | null | undefined, fallback: s
   } catch {
     return fallback;
   }
+}
+
+/**
+ * The PR a base-checkout session is working on: its live worktree's (pinned into
+ * `scan.lastPr` so it survives cleanup), else its own last PR, else the pane's branch.
+ */
+export async function workPullRequest(
+  scan: EditScan | undefined,
+  pane: string,
+  lookup = { byBranch: branchPullRequest, byNumber: pullRequestByNumber },
+): Promise<PullRequestInfo> {
+  const dir = await liveEditDir(scan, pane);
+  let pr: PullRequestInfo | undefined;
+  if (dir !== pane) {
+    pr = await lookup.byBranch(dir);
+    if (scan && "number" in pr) scan.lastPr = pr.number;
+  } else if (scan?.lastPr) pr = await lookup.byNumber(pane, scan.lastPr);
+  return pr ?? lookup.byBranch(pane);
 }
