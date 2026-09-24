@@ -475,7 +475,7 @@ function isSubsequence(sub: string, str: string): boolean {
 // claude0 setup
 // ---------------------------------------------------------------------------
 
-export const HOOK_VERSION = 21;
+export const HOOK_VERSION = 22;
 
 // A bridge-consumer marker older than this is a dead phone connection: the bridge
 // touches it on SSE connect and every 15s heartbeat, so 40s tolerates one missed
@@ -497,7 +497,7 @@ PANE_ID="$TMUX_PANE"
 if [ -n "$SESSION_ID" ] && [ -n "$PANE_ID" ]; then
   D=~/.config/claude0/panes
   mkdir -p "$D"
-  printf '%s' "$SESSION_ID" > "$D/$PANE_ID.tmp" && mv "$D/$PANE_ID.tmp" "$D/$PANE_ID"
+  printf '%s' "$SESSION_ID" > "$D/$PANE_ID.$$.tmp" && mv "$D/$PANE_ID.$$.tmp" "$D/$PANE_ID"
 fi
 `;
 
