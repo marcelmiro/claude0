@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { parseBackgroundTasks, pendingScripts, liveScripts } from "./background-tasks";
 
 // Dead verdicts are terminal AND persisted, so they would otherwise leak between tests.
-beforeEach(() => rmSync(join(CONFIG_DIR, "runner-verdicts.json"), { force: true }));
+beforeEach(() => rmSync(join(CONFIG_DIR, "verdicts"), { recursive: true, force: true }));
 
 /** Batched-probe stand-in: alive iff the path satisfies `isAlive`. */
 const probeWhere = (isAlive: (p: string) => boolean) => async (paths: string[]) =>
@@ -125,6 +125,65 @@ describe("parseBackgroundTasks", () => {
         },
       }),
     ].join("\n");
+    expect(parseBackgroundTasks(jsonl)).toEqual([]);
+  });
+
+  const timeoutNotice = (taskId: string) =>
+    `Command did not complete within its 120s timeout and was moved to the background (ID: ${taskId}). Output is being written to: /tmp/${taskId}.output. You will be notified when it completes.`;
+
+  const foregroundBash = (id: string, resultText: string) => [
+    line({
+      type: "assistant",
+      message: { content: [{ type: "tool_use", id, name: "Bash", input: { command: "bun run replay.ts", description: "Replay the gap" } }] },
+    }),
+    line({
+      type: "user",
+      timestamp: "2026-07-21T00:02:00Z",
+      message: { content: [{ type: "tool_result", tool_use_id: id, content: resultText }] },
+    }),
+  ];
+
+  test("foreground bash that times out into the background is a pending script, completed by its notification", () => {
+    const launched = foregroundBash("toolu_1", timeoutNotice("btime01"));
+    expect(parseBackgroundTasks(launched.join("\n"))).toEqual([
+      {
+        toolUseId: "toolu_1",
+        kind: "script",
+        label: "Replay the gap",
+        status: "pending",
+        taskId: "btime01",
+        outputPath: "/tmp/btime01.output",
+        launchedAt: "2026-07-21T00:02:00Z",
+      },
+    ]);
+    const done = [...launched, line({ type: "user", message: { content: notif("btime01", "toolu_1") } })];
+    expect(parseBackgroundTasks(done.join("\n"))[0]!.status).toBe("completed");
+  });
+
+  test("a user ! command that times out into the background is a pending script labelled with its command", () => {
+    const jsonl = [
+      line({ type: "user", message: { content: "<bash-input> bash replay.sh replies</bash-input>" } }),
+      line({
+        type: "user",
+        timestamp: "2026-07-21T00:02:00Z",
+        message: { content: `<bash-stdout>${timeoutNotice("bbang01")}</bash-stdout><bash-stderr></bash-stderr>` },
+      }),
+    ].join("\n");
+    expect(parseBackgroundTasks(jsonl)).toEqual([
+      {
+        toolUseId: "bbang01",
+        kind: "script",
+        label: "bash replay.sh replies",
+        status: "pending",
+        taskId: "bbang01",
+        outputPath: "/tmp/bbang01.output",
+        launchedAt: "2026-07-21T00:02:00Z",
+      },
+    ]);
+  });
+
+  test("foreground bash whose OUTPUT quotes the timeout notice yields no task", () => {
+    const jsonl = foregroundBash("toolu_1", `session.jsonl:${timeoutNotice("bzzz")}`).join("\n");
     expect(parseBackgroundTasks(jsonl)).toEqual([]);
   });
 
