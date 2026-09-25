@@ -123,3 +123,31 @@ Lab-verified on Claude Code v2.1.280 with two background agents running and a 3-
   only below the input box's bottom rule.** The key hint isn't stable — `Enter to
   view · x to stop` on an agent row, `↑/↓ to select · Enter to view` on `main` —
   and transcript text above the input may contain the same shapes.
+
+## Addendum (2026-09-25): submitted-prompt leftovers are discarded, and rewind pre-flights too
+
+Claude Code itself puts already-submitted text back into the input: `/rewind` restores
+the rewound prompt there, and a pre-stream interrupt reverts the prompt into it. The
+stash/restore guard can't tell that from a Mac draft, so it carried such a leftover
+across every later send. In one session, a prompt rewound away at 18:58 was still in the
+input the next morning, cut down by partial kills to its first 510 chars. A phone
+rewind then cleared it with a single `C-u` (one display row only), typed `/rewind` onto
+the rest, and submitted `<leftover>/rewind` as a message. The picker never opened, the
+driver's Escape reverted the send back into the input, and each retry did the same.
+
+- **Leftover rule (`isSubmittedText`).** Input text that equals, or is a prefix of, any
+  prompt in the session's JSONL (every branch, so rewound-away prompts count; compared
+  with all whitespace removed) is a leftover. It gets `discard` (killInput, no C-y), not
+  `stash`. Nothing is lost, because the prompt is still in the transcript. Drafts under
+  15 non-space chars never count as leftovers, so a freshly typed `yes` or `1. a` that
+  happens to start an old prompt stays a draft.
+- **One pre-flight for every path that types into the prompt (`prepareInput`).**
+  `sendMessage`, `setSessionModelEffort` and `rewindSession` all release the agent
+  list, dismiss notification rows, leave an empty shell mode, and classify the input.
+  Rewind discards a leftover but refuses a real draft with `draft-present`: the rewind
+  puts the rewound prompt into the input, so a stashed draft has nowhere to be restored.
+- Lab-verified live (Claude Code v2.1.281): a genuine draft → rewind `draft-present` with
+  the draft untouched. A leftover → rewind ok, and the input then holds the rewound
+  prompt. A send over that → the prompt is discarded and the input ends empty. A
+  genuine draft → a send still restores it. The transcript held only the four clean
+  prompts.

@@ -202,7 +202,7 @@ export async function readPaneStatusline(paneId: string, capture?: string): Prom
 /** Outcome of a send; `reason` is set only on rejection (nothing was sent). */
 export type SendResult = {
   ok: boolean;
-  reason?: "no-pane" | "no-question" | "stale-question" | "not-presented" | "not-held" | "no-prompt" | "no-session" | "rewind-unavailable" | "rewind-mismatch" | "rewind-mode" | "bad-image" | "bad-selection" | "no-confirm" | "no-repo" | "no-transcript" | "resume-failed" | "not-found" | "shell-draft" | "shell-clear-failed" | "draft-stash-failed" | "clear-failed" | "notification-clear-failed" | "agent-list-focused";
+  reason?: "no-pane" | "no-question" | "stale-question" | "not-presented" | "not-held" | "no-prompt" | "no-session" | "rewind-unavailable" | "rewind-mismatch" | "rewind-mode" | "bad-image" | "bad-selection" | "no-confirm" | "no-repo" | "no-transcript" | "resume-failed" | "not-found" | "shell-draft" | "shell-clear-failed" | "draft-stash-failed" | "clear-failed" | "notification-clear-failed" | "agent-list-focused" | "draft-present" | "draft-clear-failed";
   /** Fresh session id, set by createSession to the dictated id. */
   sessionId?: string;
 };
@@ -462,25 +462,28 @@ export async function rewindSession(
   expectedText: string,
   mode: "conversation" | "both",
 ): Promise<SendResult> {
+  if (!Number.isInteger(upCount) || upCount < 1 || upCount > 500) {
+    return { ok: false, reason: "rewind-unavailable" };
+  }
   const paneId = await resolveSessionPane(sessionId);
   if (!paneId) return { ok: false, reason: "no-pane" };
+  // `/rewind` typed onto leftover input submits `<text>/rewind` as a message. A real draft
+  // has no safe home here (the rewind puts the rewound prompt into the input), so refuse.
+  const input = await prepareInput(sessionId, paneId);
+  if (!input.ok) return input;
+  if (input.draft === "stash") return { ok: false, reason: "draft-present" };
+  if (input.draft === "discard" && !(await killInput(paneId))) return { ok: false, reason: "draft-clear-failed" };
   return rewindByPane(paneId, upCount, expectedText, mode);
 }
 
-/** The pane-level rewind driver (no session resolution) — the testable seam. */
-export async function rewindByPane(
+/** The pane-level picker driver — expects an empty prompt (`rewindSession` ensures it). */
+async function rewindByPane(
   paneId: string,
   upCount: number,
   expectedText: string,
   mode: "conversation" | "both",
 ): Promise<SendResult> {
-  if (!Number.isInteger(upCount) || upCount < 1 || upCount > 500) {
-    return { ok: false, reason: "rewind-unavailable" };
-  }
-
-  // Open the picker: clear any input, type /rewind, submit.
-  await sendKey(paneId, "C-u");
-  await Bun.sleep(120);
+  // Open the picker: type /rewind, submit.
   await sendLiteral(paneId, "/rewind");
   await Bun.sleep(KEY_GAP);
   await sendKey(paneId, "Enter");
@@ -1370,9 +1373,17 @@ export function composeMessageSteps(text: string, imagePaths: string[] = []): Me
   return steps;
 }
 
+/**
+ * What a send does with text already in the pane's input: nothing (empty), `stash` a real
+ * Mac-side draft around our message, or `discard` a leftover of an already-submitted
+ * prompt (see `isSubmittedText`).
+ */
+export type DraftAction = "none" | "stash" | "discard";
+
 /** One step in the full send plan — the message steps plus the draft stash/restore guard. */
 export type SendStep =
   | { kind: "stash" } // cut a Mac-side draft into Claude's kill-ring (killInput) before sending
+  | { kind: "discard" } // cut a submitted-prompt leftover (killInput), never yanked back
   | { kind: "text"; text: string } // text-only: the proven coalescing-safe literal+Enter
   | { kind: "paste"; text: string } // bracketed-paste an image path → [Image #N]
   | { kind: "literal"; text: string } // type caption text literally
@@ -1396,12 +1407,15 @@ export type SendStep =
  * kill-ring — see `killInput`) … `restore` (once our message clears the prompt, yank it
  * back with C-y) —
  * leaving it waiting, unsubmitted, for when the user returns to the Mac. Gated on a real
- * draft so we never yank stale kill-ring content into an otherwise-empty prompt.
+ * draft so we never yank stale kill-ring content into an otherwise-empty prompt. A
+ * `discard` draft is cut without the restore: it is text Claude itself put back (a
+ * /rewind or an interrupt revert), and stash/restore would carry it across every future
+ * send.
  */
 export function buildSendPlan(
   text: string,
   imagePaths: string[],
-  hadDraft: boolean,
+  draft: DraftAction,
 ): SendStep[] {
   const body: SendStep[] =
     imagePaths.length === 0
@@ -1409,10 +1423,11 @@ export function buildSendPlan(
       : composeMessageSteps(text, imagePaths).map((s): SendStep =>
           s.kind === "enter" ? { kind: "submit" } : s,
         );
+  if (draft === "discard") return [{ kind: "discard" }, ...body];
   return [
-    ...(hadDraft ? [{ kind: "stash" } as const] : []),
+    ...(draft === "stash" ? [{ kind: "stash" } as const] : []),
     ...body,
-    ...(hadDraft ? [{ kind: "restore" } as const] : []),
+    ...(draft === "stash" ? [{ kind: "restore" } as const] : []),
   ];
 }
 
@@ -1459,7 +1474,8 @@ async function killInput(paneId: string): Promise<boolean> {
 async function runSendStep(paneId: string, step: SendStep): Promise<boolean> {
   switch (step.kind) {
     case "stash":
-      // Whole draft into the kill-ring; C-y (restore) yanks it back.
+    case "discard":
+      // Whole draft into the kill-ring; for `stash`, C-y (restore) yanks it back.
       return killInput(paneId);
     case "text":
       await sendTextAndEnter(paneId, step.text);
@@ -1496,21 +1512,15 @@ async function runSendStep(paneId: string, step: SendStep): Promise<boolean> {
 }
 
 /**
- * Send a message (optional images + optional text) to a session's pane — TUI parity: the
- * TUI sends keys unconditionally, so the bridge does too (Claude Code queues input while
- * running, accepts it at the prompt). The ONLY gate is a live pane. Blocked-on-question/
- * permission states are steered to the structured answer/approval UI client-side.
- *
- * Thin executor over `buildSendPlan` (where the ordering + draft-guard logic is tested):
- * resolve the pane, snapshot whether a draft is present, then run each planned step.
+ * Pre-flight for anything that types into the pane's prompt: hand focus back from the
+ * agent list, dismiss notification rows, leave an empty shell mode, and classify any
+ * text already in the input (`DraftAction`). Fails loud rather than typing into a state
+ * it can't clear.
  */
-export async function sendMessage(
+async function prepareInput(
   sessionId: string,
-  text: string,
-  imagePaths: string[] = [],
-): Promise<SendResult> {
-  const paneId = await resolveSessionPane(sessionId);
-  if (!paneId) return { ok: false, reason: "no-pane" };
+  paneId: string,
+): Promise<{ ok: true; draft: DraftAction } | { ok: false; reason: SendResult["reason"] }> {
   // Focus parked in the agent list (a Mac-side ↓) would take every key below — `x` included.
   if (!(await releaseAgentList(paneId))) return { ok: false, reason: "agent-list-focused" };
   // Notification rows eat every key below — dismiss them before any input choreography.
@@ -1535,8 +1545,31 @@ export async function sendMessage(
     styled = await capturePane(paneId, { escapes: true });
     if (shellModeInput(flattenStyled(styled, false))) return { ok: false, reason: "shell-clear-failed" };
   }
-  const hadDraft = inputPending(flattenStyled(styled, true));
-  for (const step of buildSendPlan(text, imagePaths, hadDraft)) {
+  const typed = flattenStyled(styled, true);
+  if (!inputPending(typed)) return { ok: true, draft: "none" };
+  const prompts = await submittedPrompts(sessionId);
+  return { ok: true, draft: isSubmittedText(draftText(typed), prompts) ? "discard" : "stash" };
+}
+
+/**
+ * Send a message (optional images + optional text) to a session's pane — TUI parity: the
+ * TUI sends keys unconditionally, so the bridge does too (Claude Code queues input while
+ * running, accepts it at the prompt). The ONLY gate is a live pane. Blocked-on-question/
+ * permission states are steered to the structured answer/approval UI client-side.
+ *
+ * Thin executor over `buildSendPlan` (where the ordering + draft-guard logic is tested):
+ * resolve the pane, snapshot whether a draft is present, then run each planned step.
+ */
+export async function sendMessage(
+  sessionId: string,
+  text: string,
+  imagePaths: string[] = [],
+): Promise<SendResult> {
+  const paneId = await resolveSessionPane(sessionId);
+  if (!paneId) return { ok: false, reason: "no-pane" };
+  const input = await prepareInput(sessionId, paneId);
+  if (!input.ok) return input;
+  for (const step of buildSendPlan(text, imagePaths, input.draft)) {
     // A failed stash aborts BEFORE the message is typed: proceeding would splice it into
     // the remnant draft and submit both as one turn. The phone surfaces the failure and
     // the partially-killed draft stays recoverable at the Mac (C-y).
@@ -1586,11 +1619,9 @@ export async function setSessionModelEffort(
 ): Promise<SendResult & { line?: string }> {
   const paneId = await resolveSessionPane(sessionId);
   if (!paneId) return { ok: false, reason: "no-pane" };
-  if (!(await releaseAgentList(paneId))) return { ok: false, reason: "agent-list-focused" };
-  // Same key-eating hazard as sendMessage: a visible notification row swallows the send.
-  if (!(await clearNotificationRows(paneId))) return { ok: false, reason: "notification-clear-failed" };
-  const hadDraft = inputPending(await captureTyped(paneId));
-  for (const step of buildSendPlan(`/${kind} ${value}`, [], hadDraft)) {
+  const input = await prepareInput(sessionId, paneId);
+  if (!input.ok) return input;
+  for (const step of buildSendPlan(`/${kind} ${value}`, [], input.draft)) {
     // Same abort-on-failed-stash as sendMessage: never type into a remnant draft.
     if (!(await runSendStep(paneId, step))) return { ok: false, reason: "draft-stash-failed" };
   }
@@ -1736,6 +1767,69 @@ export function inputPending(capture: string): boolean {
     }
   }
   return false;
+}
+
+/**
+ * The live input box's full text: the last `❯` row plus its wrapped/continuation rows
+ * down to the box's bottom rule, whitespace-collapsed. Only meaningful when
+ * `inputPending` is true. Without a bottom rule it runs to the end of the capture, so
+ * the statusline rides along and the text matches nothing — the safe direction.
+ */
+export function draftText(capture: string): string {
+  const lines = capture.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (NOTIFICATION_ROW.test(lines[i]!)) continue;
+    const m = lines[i]!.match(/^❯\s?(.*)$/);
+    if (!m) continue;
+    const rows = [m[1]!];
+    for (let j = i + 1; j < lines.length && !/^─+\s*$/.test(lines[j]!); j++) rows.push(lines[j]!);
+    return norm(rows.join(" "));
+  }
+  return "";
+}
+
+/** Below this many non-space chars a draft is too generic to call a leftover. */
+const MIN_LEFTOVER_CHARS = 15;
+
+/**
+ * Whether input-box text is a leftover of an already-submitted prompt rather than a
+ * draft being composed: equal to, or a prefix of, one of the session's prompts. Claude
+ * puts submitted text back into the input on /rewind and on a pre-stream interrupt,
+ * and a partial kill leaves a prefix. Discarding such text loses nothing — the prompt is
+ * still in the transcript — while stashing it would restore it after every send.
+ * Compared with all whitespace removed: the capture's row wraps don't match the prompt's.
+ */
+export function isSubmittedText(draft: string, prompts: string[]): boolean {
+  const d = draft.replace(/\s+/g, "");
+  if (d.length < MIN_LEFTOVER_CHARS) return false;
+  return prompts.some((p) => p.replace(/\s+/g, "").startsWith(d));
+}
+
+/**
+ * Every typed prompt the session ever submitted, on every branch — a rewound-away
+ * prompt is exactly the one /rewind puts back into the input. Streams the JSONL; only
+ * read when the input actually holds text. Empty on any error (→ the draft is stashed).
+ */
+async function submittedPrompts(sessionId: string): Promise<string[]> {
+  const out: string[] = [];
+  try {
+    for (const path of await resolveTranscriptPaths(sessionId)) {
+      for await (const line of jsonlLines(path)) {
+        if (!line.includes('"type":"user"') || line.includes('"type":"tool_result"')) continue;
+        try {
+          const rec = JSON.parse(line);
+          if (rec?.type !== "user") continue;
+          const content = rec.message?.content;
+          if (typeof content === "string") out.push(content);
+          else if (Array.isArray(content)) {
+            const text = content.filter((b) => b?.type === "text").map((b) => b.text).join("");
+            if (text) out.push(text);
+          }
+        } catch {}
+      }
+    }
+  } catch {}
+  return out;
 }
 
 /**

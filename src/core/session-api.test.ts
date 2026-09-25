@@ -29,6 +29,8 @@ import {
   composeMessageSteps,
   buildSendPlan,
   inputPending,
+  draftText,
+  isSubmittedText,
   agentListFocused,
   flattenStyled,
   shellModeInput,
@@ -465,11 +467,11 @@ test("composeMessageSteps: whitespace-only caption is dropped", () => {
 // and never touched when there's no draft to preserve.
 
 test("buildSendPlan: text-only, no draft → just the coalescing-safe text step", () => {
-  expect(buildSendPlan("hello", [], false)).toEqual([{ kind: "text", text: "hello" }]);
+  expect(buildSendPlan("hello", [], "none")).toEqual([{ kind: "text", text: "hello" }]);
 });
 
 test("buildSendPlan: text-only WITH draft → stash, text, restore (in that order)", () => {
-  expect(buildSendPlan("hello", [], true)).toEqual([
+  expect(buildSendPlan("hello", [], "stash")).toEqual([
     { kind: "stash" }, // C-u: cut the Mac draft first so it can't ride along
     { kind: "text", text: "hello" },
     { kind: "restore" }, // C-y: put the draft back after our message submits
@@ -477,14 +479,14 @@ test("buildSendPlan: text-only WITH draft → stash, text, restore (in that orde
 });
 
 test("buildSendPlan: image-only, no draft → paste then verify-retry submit", () => {
-  expect(buildSendPlan("", ["/u/a.png"], false)).toEqual([
+  expect(buildSendPlan("", ["/u/a.png"], "none")).toEqual([
     { kind: "paste", text: "/u/a.png" },
     { kind: "submit" }, // composeMessageSteps' terminal `enter` becomes the retry submit
   ]);
 });
 
 test("buildSendPlan: image + caption WITH draft → stash wraps paste/literal/submit, then restore", () => {
-  expect(buildSendPlan("what is this", ["/u/a.png"], true)).toEqual([
+  expect(buildSendPlan("what is this", ["/u/a.png"], "stash")).toEqual([
     { kind: "stash" },
     { kind: "paste", text: "/u/a.png" },
     { kind: "literal", text: " what is this" },
@@ -499,8 +501,8 @@ test("buildSendPlan: draft guard is symmetric — stash is first iff restore is 
     ["", ["/u/a.png"]],
     ["cap", ["/u/a.png", "/u/b.png"]],
   ] as const) {
-    const withDraft = buildSendPlan(text, [...imgs], true);
-    const noDraft = buildSendPlan(text, [...imgs], false);
+    const withDraft = buildSendPlan(text, [...imgs], "stash");
+    const noDraft = buildSendPlan(text, [...imgs], "none");
     // present together or not at all
     expect(withDraft[0]).toEqual({ kind: "stash" });
     expect(withDraft[withDraft.length - 1]).toEqual({ kind: "restore" });
@@ -508,6 +510,59 @@ test("buildSendPlan: draft guard is symmetric — stash is first iff restore is 
     // the body between the guards is exactly the no-draft plan
     expect(withDraft.slice(1, -1)).toEqual(noDraft);
   }
+});
+
+test("buildSendPlan: a submitted-prompt leftover is discarded — cut first, never restored", () => {
+  expect(buildSendPlan("hello", [], "discard")).toEqual([{ kind: "discard" }, { kind: "text", text: "hello" }]);
+  expect(buildSendPlan("", ["/u/a.png"], "discard")).toEqual([
+    { kind: "discard" },
+    { kind: "paste", text: "/u/a.png" },
+    { kind: "submit" },
+  ]);
+});
+
+// --- draftText / isSubmittedText (leftover vs real draft) ------------------------
+// Live incident: a /rewind put a 1,643-char prompt back into the input; every phone
+// send stashed and restored it, and a later phone rewind typed `/rewind` onto it and
+// submitted `<leftover>/rewind` as a message.
+
+const LONG_PROMPT =
+  "- i'd remove the last pain from the table or refine it because it looks like a fillter right now\n" +
+  "- shape graph is horizontal rather than vertical, which makes it smaller and harder to read.\n" +
+  "- when you say things like \"nothing is edited in place\" it's hard for a reader";
+
+test("draftText: joins the wrapped rows of a multi-row input up to the bottom rule", () => {
+  const cap = [
+    "⏺ earlier reply",
+    RULE,
+    "❯ - i'd remove the last pain from the table or refine it because it looks like a",
+    "  fillter right now - shape graph is horizontal",
+    "  rather than vertical",
+    RULE,
+    "  62.5k/1000k (6%) • main",
+    NOTIF_ROW,
+  ].join("\n");
+  expect(draftText(cap)).toBe(
+    "- i'd remove the last pain from the table or refine it because it looks like a fillter right now - shape graph is horizontal rather than vertical",
+  );
+});
+
+test("isSubmittedText: a rewound prompt (whole, or a prefix left by a partial kill) is a leftover", () => {
+  expect(isSubmittedText(LONG_PROMPT.replace(/\n/g, " "), ["other", LONG_PROMPT])).toBe(true);
+  // Row wraps land mid-word in the capture; the comparison ignores all whitespace.
+  expect(isSubmittedText("- i'd remove the last pain from the ta ble or refine", [LONG_PROMPT])).toBe(true);
+});
+
+test("isSubmittedText: new or extended text is a real draft", () => {
+  expect(isSubmittedText("something I am typing right now at the Mac", [LONG_PROMPT])).toBe(false);
+  // A recalled prompt the user kept typing onto is no longer a prefix — keep it.
+  expect(isSubmittedText(LONG_PROMPT + " and one more thing", [LONG_PROMPT])).toBe(false);
+  expect(isSubmittedText("- i'd remove the last pain", [])).toBe(false);
+});
+
+test("isSubmittedText: a short draft is never a leftover, even when it prefixes a past prompt", () => {
+  expect(isSubmittedText("1. a", ["1. a\n2. b"])).toBe(false);
+  expect(isSubmittedText("yes", ["yes, ship it"])).toBe(false);
 });
 
 // --- inputPending (submit-verification for image messages) ---------------------
@@ -1090,3 +1145,4 @@ test("isModelArg/isEffortArg: allowlist members pass, others reject", () => {
   expect(isEffortArg("extreme")).toBe(false);
   expect(isEffortArg("")).toBe(false);
 });
+
