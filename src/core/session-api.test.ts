@@ -31,6 +31,7 @@ import {
   inputPending,
   draftText,
   isSubmittedText,
+  trustCursor,
   agentListFocused,
   flattenStyled,
   shellModeInput,
@@ -1146,3 +1147,28 @@ test("isModelArg/isEffortArg: allowlist members pass, others reject", () => {
   expect(isEffortArg("")).toBe(false);
 });
 
+// --- trustCursor (the "trust this folder?" gate on launch/resume) -----------------
+// Live capture, Claude Code 2.1.281: the gate opens on "No, exit", so the old blind
+// Enter quit claude and a phone-created session in an untrusted folder died at boot.
+
+const trustGate = (selected: "no" | "yes") =>
+  [
+    " Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or",
+    " work from your team). If not, take a moment to review what's in this folder first.",
+    "",
+    " Security guide",
+    "",
+    selected === "no" ? " ❯ No, exit" : "   No, exit",
+    selected === "yes" ? " ❯ Yes, I trust this folder" : "   Yes, I trust this folder",
+    "",
+    " Enter to confirm · Esc to cancel",
+  ].join("\n");
+
+test("trustCursor: reads the selected option, whichever it is", () => {
+  expect(trustCursor(trustGate("no"))).toBe("No, exit");
+  expect(trustCursor(trustGate("yes"))).toBe("Yes, I trust this folder");
+});
+
+test("trustCursor: null without the gate — a transcript ❯ line is never read as an option", () => {
+  expect(trustCursor(["❯ yes, trust it", "⏺ ok", RULE, "❯ ", RULE].join("\n"))).toBeNull();
+});

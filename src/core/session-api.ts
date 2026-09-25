@@ -224,9 +224,39 @@ export type SendResult = {
 // folder (`hasTrustDialogAccepted:false` in ~/.claude.json). It blocks boot and
 // suppresses the SessionStart hook, so the pane→session id never registers and the
 // launch silently hangs — most commonly for the `~` home dir. The caller explicitly
-// chose this folder, so we accept it: option 1 ("Yes, I trust this folder") is the
-// default cursor, so a single Enter confirms.
+// chose this folder, so we accept it. The default cursor is NOT a given: Claude Code
+// 2.1.281 opens on "No, exit" (so a bare Enter quits claude), older builds on "Yes".
 const TRUST_PROMPT = "Is this a project you created or one you trust";
+const TRUST_YES = "Yes, I trust this folder";
+
+/** The trust gate's selected option (its `❯` row), or null when the gate isn't shown. */
+export function trustCursor(screen: string): string | null {
+  const start = screen.indexOf(TRUST_PROMPT);
+  if (start === -1) return null;
+  for (const line of screen.slice(start).split("\n")) {
+    const m = line.match(/^\s*❯\s+(.+?)\s*$/);
+    if (m) return m[1]!;
+  }
+  return null;
+}
+
+/**
+ * Move the trust gate's cursor onto "Yes" by reading it, then confirm. Never presses
+ * Enter unless the cursor verifiably sits on "Yes". Returns whether it confirmed.
+ */
+async function acceptTrustPrompt(paneId: string): Promise<boolean> {
+  for (let i = 0; i < 4; i++) {
+    const cursor = trustCursor(await capturePane(paneId));
+    if (cursor === null) return false;
+    if (cursor.startsWith(TRUST_YES)) {
+      await sendKey(paneId, "Enter");
+      return true;
+    }
+    await sendKey(paneId, "Down");
+    await Bun.sleep(KEY_GAP);
+  }
+  return false;
+}
 
 export async function createSession(repoPath: string, name: string): Promise<SendResult> {
   const target = await getMainSession();
@@ -254,8 +284,7 @@ async function waitForPromptLive(paneId: string): Promise<void> {
     await Bun.sleep(500); // up to ~12s for claude to boot and render its prompt
     if ((await readPaneStatusline(paneId)).statusline) return;
     if (!trusted && (await capturePane(paneId)).includes(TRUST_PROMPT)) {
-      await sendKey(paneId, "Enter");
-      trusted = true;
+      trusted = await acceptTrustPrompt(paneId);
     }
   }
 }
@@ -377,11 +406,9 @@ export async function restoreSession(sessionId: string, repoPath: string): Promi
     // Clear the one-time "trust this folder?" gate. On RESUME (unlike a new session) the
     // SessionStart hook can fire — registering the pane — while the trust prompt is still up
     // and blocking the statusline/input, so this is NOT gated on `!registered`: check every
-    // cycle until the statusline confirms the prompt is live. Option 1 ("Yes, I trust this
-    // folder") is the default cursor → one Enter confirms.
+    // cycle until the statusline confirms the prompt is live.
     if (!trusted && (await capturePane(paneId)).includes(TRUST_PROMPT)) {
-      await sendKey(paneId, "Enter");
-      trusted = true;
+      trusted = await acceptTrustPrompt(paneId);
     }
   }
   // Registered but the prompt never rendered in time → launched, just slow (small residual
