@@ -212,7 +212,11 @@ export const FIXTURE_TRANSCRIPT = {
             'res.headers.set("set-cookie", `claude0=${tok}; HttpOnly; SameSite=Strict`);',
             "```",
             "",
-            "Wiring it up now.",
+            "Wiring it up now. Draft for the team channel:",
+            "",
+            "> **Heads up:** the bridge token moves to an `HttpOnly` cookie today.",
+            "> - re-login once on each phone",
+            "> - nothing else changes",
           ].join("\n"),
         },
         {

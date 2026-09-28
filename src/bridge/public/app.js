@@ -1335,18 +1335,42 @@ const lpStartAsst = (text) => () => {
 };
 
 // Tap-to-copy inside a rendered-markdown assistant bubble: a tap on a code block copies the
-// whole block, a tap on an inline `code` span copies just that span. Non-code taps do nothing
-// (the bubble isn't natively selectable). Delegation over the marked-generated HTML — no need
-// to attach handlers to injected nodes.
-function assistantTap(e) {
+// whole block, a tap on an inline `code` span copies just that span, a tap on a blockquote
+// copies the quote's markdown (agents draft messages-to-forward as quotes; the whole-bubble
+// copy is the only other way at that text). Other taps do nothing (the bubble isn't natively
+// selectable). Delegation over the marked-generated HTML — no need to attach handlers to
+// injected nodes. `src` is the bubble's markdown source, needed to recover a quote's text.
+function assistantTap(e, src) {
   if (asstLpFired) {
     asstLpFired = false;
     return; // this click is the tail of a long-press that already opened the sheet
   }
-  const target = e.target.closest("pre") || e.target.closest("code");
-  if (!target) return;
+  const code = e.target.closest("pre") || e.target.closest("code");
+  if (code) {
+    e.preventDefault();
+    copyText(code.textContent);
+    return;
+  }
+  const quote = e.target.closest("blockquote");
+  if (!quote || e.target.closest("a")) return; // a link inside a quote still navigates
+  const index = [...e.currentTarget.querySelectorAll("blockquote")].indexOf(quote);
+  const text = blockquoteSource(src, index);
+  if (text == null) return;
   e.preventDefault();
-  copyText(target.textContent);
+  copyText(text);
+}
+
+// Markdown source of the `index`-th blockquote in `src`. The rendered HTML carries no
+// link back to its source, so re-lex and pair by position: walkTokens visits parents
+// before children, the same document order querySelectorAll yields the <blockquote>s,
+// so nested quotes pair up too. The tokenizer has already stripped the `> ` prefixes,
+// which is what makes the result paste as a standalone message.
+function blockquoteSource(src, index) {
+  const quotes = [];
+  marked.walkTokens(marked.lexer(src), (token) => {
+    if (token.type === "blockquote") quotes.push(token.text);
+  });
+  return quotes[index] ?? null;
 }
 
 // Turn index of the checkpoint `upCount` Up-presses from current (the inverse of the render's
@@ -2449,7 +2473,7 @@ function Turn({ turn, upCount, canCode }) {
         role === "assistant"
           ? html`<div
               class="bubble assistant md"
-              onClick=${assistantTap}
+              onClick=${(e) => assistantTap(e, b.text)}
               ...${lpProps(lpStartAsst(b.text))}
               dangerouslySetInnerHTML=${{ __html: md(shown) }}
             ></div>`

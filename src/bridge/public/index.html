@@ -511,16 +511,19 @@
       .bubble.md h1, .bubble.md h2 { font-size: 16.5px; font-weight: 600; margin: 14px 0 6px; }
       .bubble.md h3, .bubble.md h4 { font-size: 15px; font-weight: 600; margin: 12px 0 4px; }
       .bubble.md a { color: var(--peach); }
-      /* Inline code & code blocks are tap-to-copy (see assistantTap). The pill bg is the cue
-         for inline code; blocks get an explicit "copy" hint in a header strip — the block's
-         top padding reserves it so the hint never sits on the first line of code. */
+      /* Inline code, code blocks and blockquotes are tap-to-copy (see assistantTap). The pill
+         bg is the cue for inline code; blocks get an explicit "copy" hint in a header strip —
+         the block's top padding reserves it so the hint never sits on the first line of code.
+         A quote gets no hint (a strip would shove prose around) — just the pressed-state
+         accent on its rule. */
       .bubble.md code { background: var(--code-bg); border-radius: 4px; padding: 1px 4px; font-family: "SF Mono", ui-monospace, monospace; font-size: 13px; cursor: pointer; }
       .bubble.md code:active { background: var(--hover); }
       .bubble.md pre { position: relative; background: var(--code-bg); border-radius: 8px; padding: 22px 10px 10px; overflow-x: auto; margin: 6px 0; cursor: pointer; }
       .bubble.md pre::after { content: "copy"; position: absolute; top: 6px; right: 9px; font-family: var(--mono); font-size: 10px; letter-spacing: 0.04em; color: var(--dim-text); pointer-events: none; }
       .bubble.md pre:active { filter: brightness(1.25); }
       .bubble.md pre code { background: none; padding: 0; color: var(--mint); white-space: pre; }
-      .bubble.md blockquote { margin: 6px 0; padding-left: 10px; border-left: 2px solid var(--dim); color: var(--muted); }
+      .bubble.md blockquote { margin: 6px 0; padding-left: 10px; border-left: 2px solid var(--dim); color: var(--muted); cursor: pointer; }
+      .bubble.md blockquote:active { border-left-color: var(--peach); }
       .bubble.md strong { font-weight: 700; }
       /* Tables scroll horizontally inside the bubble rather than squashing columns to
          fit. `display: block` makes the <table> its own scroll container; the cells'
