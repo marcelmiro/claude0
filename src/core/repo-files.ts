@@ -8,6 +8,7 @@
  */
 
 import { statSync, realpathSync } from "node:fs";
+import { lstat } from "node:fs/promises";
 import { resolve, dirname, sep } from "node:path";
 import { resolveSessionPane } from "./session-api";
 import { resolveTranscriptPath, latestTranscriptCwd } from "./last-turn";
@@ -114,6 +115,30 @@ function parseNumstat(out: string): { add: number; del: number; binary: boolean 
   const [a, d] = line.split("\t");
   if (a === "-" && d === "-") return { add: 0, del: 0, binary: true };
   return { add: Number(a) || 0, del: Number(d) || 0, binary: false };
+}
+
+/**
+ * Numstat for an untracked file without a subprocess: every line is an addition. Mirrors
+ * git's rules — a NUL in the first 8000 bytes makes it binary, a last line with no newline
+ * still counts, a symlink diffs as its one-line target. Unreadable → 0/0, like a failed diff.
+ */
+async function untrackedNumstat(abs: string): Promise<{ add: number; del: number; binary: boolean }> {
+  try {
+    if ((await lstat(abs)).isSymbolicLink()) return { add: 1, del: 0, binary: false };
+    let add = 0;
+    let seen = 0;
+    let last = 10; // '\n': an empty file adds no lines
+    for await (const chunk of Bun.file(abs).stream()) {
+      if (seen < 8000 && chunk.subarray(0, 8000 - seen).includes(0)) return { add: 0, del: 0, binary: true };
+      seen += chunk.length;
+      for (let i = chunk.indexOf(10); i !== -1; i = chunk.indexOf(10, i + 1)) add++;
+      last = chunk[chunk.length - 1] ?? last;
+    }
+    if (last !== 10) add++;
+    return { add, del: 0, binary: false };
+  } catch {
+    return { add: 0, del: 0, binary: false };
+  }
 }
 
 /**
@@ -378,22 +403,16 @@ export async function changedFiles(root: string, ref: string, to?: string): Prom
     .toString()
     .split("\0")
     .filter(Boolean);
-  await Promise.all(
-    untracked.map(async (path) => {
-      if (map.has(path)) return;
-      // A nested git repo (vendored clone, a package with its own .git) is reported as a
-      // single DIRECTORY token, `sub/`. It has no basename to render and no diff to open,
-      // so it would show as a nameless row that opens to nothing.
-      if (path.endsWith("/")) return;
-      const ns = (
-        await Bun.$`git -C ${root} diff --no-index --numstat --no-renames -- /dev/null ${`${root}/${path}`}`
-          .nothrow()
-          .quiet()
-      ).stdout.toString();
-      const { add, del, binary } = parseNumstat(ns);
-      map.set(path, { path, status: "A", add, del, binary });
-    }),
-  );
+  // In-process and one at a time on purpose: a subprocess per untracked file fans out to
+  // thousands of concurrent shells in a worktree full of generated output (ADR 1 addendum).
+  for (const path of untracked) {
+    if (map.has(path)) continue;
+    // A nested git repo (vendored clone, a package with its own .git) is reported as a
+    // single DIRECTORY token, `sub/`. It has no basename to render and no diff to open,
+    // so it would show as a nameless row that opens to nothing.
+    if (path.endsWith("/")) continue;
+    map.set(path, { path, status: "A", ...(await untrackedNumstat(`${root}/${path}`)) });
+  }
   return [...map.values()];
 }
 

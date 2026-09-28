@@ -77,6 +77,18 @@ alternative:
   rename's old path — a file-list row shows the true rename without carrying the old path
   itself, and without trusting the caller to supply it.
 
+## Addendum (2026-09-28): untracked numstat is computed in-process
+
+`changedFiles` used to run `git diff --no-index --numstat` once per untracked file, all
+in parallel. A worktree full of generated output (9,222 untracked eval files) turned one
+`/changes` request into 9,222 concurrent shells, and on Bun 1.4.0 each `Bun.$` call
+retained ~160 KB of native memory for the life of the process — ~1.5 GB per request,
+which is what grew the bridge to 24 GB and got it earlyoom-killed on a 1–2 day cycle.
+Untracked files now get their line count (a last line without a newline still counts) and
+binary verdict (a NUL in the first 8000 bytes, git's rule) from a streamed read, one file
+at a time, no subprocess. A `.gitattributes` `-diff` rule is no longer honored for
+untracked files — they read as text.
+
 ## See also
 
 - [0002 — the changed-files baseline is the merge-base](0002-changed-files-baseline.md)

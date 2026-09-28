@@ -539,6 +539,23 @@ test("unpushedCount is the distinct union: a file both committed-unpushed and di
   clean();
 });
 
+test("untracked numstat: last line without newline counts, empty is 0, NUL is binary, symlink is its target line", async () => {
+  const root = await tempRepo();
+  writeFileSync(`${root}/seed.txt`, "x\n");
+  await Bun.$`git -C ${root} add -A`.quiet();
+  await Bun.$`git -C ${root} commit -qm init`.quiet();
+  writeFileSync(`${root}/nonl.txt`, "a\nb");
+  writeFileSync(`${root}/empty.txt`, "");
+  writeFileSync(`${root}/blob.bin`, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x0a, 0x0a]));
+  symlinkSync("nonl.txt", `${root}/link`);
+  const byPath = Object.fromEntries((await changedFiles(root, "HEAD")).map((f) => [f.path, f]));
+  expect(byPath["nonl.txt"]).toMatchObject({ status: "A", add: 2, del: 0, binary: false });
+  expect(byPath["empty.txt"]).toMatchObject({ status: "A", add: 0, del: 0, binary: false });
+  expect(byPath["blob.bin"]).toMatchObject({ status: "A", add: 0, del: 0, binary: true });
+  expect(byPath["link"]).toMatchObject({ status: "A", add: 1, del: 0, binary: false });
+  rmSync(root, { recursive: true, force: true });
+});
+
 // --- untracked nested repos are not files ---
 
 test("untracked nested git repo does not become a changed-file row", async () => {
