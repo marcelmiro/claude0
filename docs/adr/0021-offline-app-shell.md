@@ -119,3 +119,27 @@ On-device feedback still showed a few blurred pixels at rest, especially on
 New Session. Increase the allowance from 12px to 16px, and the direct toolbar's
 base top padding from 2px to 6px. Home gains 4px; New Session and History gain
 8px. The clearance still scrolls away on Home and in conversations.
+
+## 2026-09-29: remove the blur instead of clearing it
+
+An on-device comparison of ten strategies on iOS 27 (branch
+`prototype/ios-top-blur`, each strategy judged after a cold relaunch) found one
+that removes the blur without moving content. The fixed top strip is 11px tall
+instead of 1px, and it uses `background-clip: text` with no text, so it paints
+nothing. WebKit only samples a fixed, full-width element touching the top edge
+when it is more than 4px tall. Once it samples one, the system blur is gone and
+content stays sharp up to the edge. The 16px clearance allowance is removed;
+`--app-top-clearance` is now only the safe-area inset.
+
+This only works with the `default` status-bar style. With `black-translucent`,
+the layout that lets content scroll behind the notch, nothing tested removed the
+blur, which reached about 90px. That included opaque strips up to the
+safe-area height, scroll kicks at launch and a `theme-color` nudge. An opaque
+11px strip also removes the blur, but it hides the top 11px of content. A fixed
+panel slid across at launch works too, but the slide is visible. Scrolling the
+document or the inner list at launch changed nothing.
+
+With `default`, iOS paints the status-bar area with the sampled colour down to
+the web view's top edge, so rows scrolling up are cut off there in a hard line.
+Scroll regions that reach that edge fade out over their top 16px once scrolled
+(a mask toggled by a `scrolled` class). Content at rest is not faded.

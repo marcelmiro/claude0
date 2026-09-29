@@ -25,6 +25,12 @@
       );
       updateIPhoneDisplay();
       installedDisplay.addEventListener("change", updateIPhoneDisplay);
+      // Marks a scroller that has left its top, for the iPhone top-edge fade.
+      document.addEventListener(
+        "scroll",
+        (e) => e.target.classList?.toggle("scrolled", e.target.scrollTop > 0),
+        true,
+      );
     </script>
     <!-- Resolve the bare specifiers the vendored dist files import (preact, etc.).
          MUST precede the modulepreload links: a preload can start module resolution
@@ -56,8 +62,7 @@
     <link rel="modulepreload" href="/wake-format.js" />
     <style>
       :root {
-        --ios-blur-clearance: 0px;
-        --app-top-clearance: calc(env(safe-area-inset-top, 0px) + var(--ios-blur-clearance));
+        --app-top-clearance: env(safe-area-inset-top, 0px);
         --bg: #101010;
         --fg: #ffffff;
         --muted: #a0a0a0;
@@ -95,9 +100,6 @@
         --tm-blue: #89ddff; /* teammate byline tints for harness color names the */
         --tm-purple: #c792ea; /* Vesper palette lacks (blue/cyan, purple) */
       }
-      /* Give the first content a little clearance at rest; scrolling may carry it
-         into iOS's native blur. This allowance is not a measured blur boundary. */
-      :root.iphone-pwa { --ios-blur-clearance: 16px; }
       * { box-sizing: border-box; }
       html, body {
         margin: 0;
@@ -119,14 +121,21 @@
         -webkit-text-size-adjust: 100%;
         text-size-adjust: 100%;
       }
-      /* Real element, outside the app root, for iOS status-bar background sampling. */
+      /* iOS 27 blurs the top of an installed app unless it can sample a background
+         colour from a fixed, full-width element touching the top edge. WebKit ignores
+         elements 4px tall or shorter, so this is 11px. background-clip: text with no
+         text paints nothing, so content stays visible up to the edge. Only works with the
+         default status-bar style: under black-translucent no element removes the blur.
+         Real element outside the app root, so it survives mounting. */
       .status-bar-background {
         position: fixed;
         top: 0;
         left: 0;
         right: 0;
-        height: 1px;
+        height: 11px;
         background: var(--bg);
+        -webkit-background-clip: text;
+        background-clip: text;
         pointer-events: none;
         z-index: 50;
       }
@@ -147,6 +156,12 @@
       .iphone-pwa #app { padding-top: 0; }
       .iphone-pwa #app > .screen > .scroll:first-child { padding-top: calc(6px + var(--app-top-clearance)); }
       .iphone-pwa #app > .screen > .listhead:first-child { padding-top: calc(6px + var(--app-top-clearance)); }
+      /* The web view's top edge slices rows scrolling up toward the status bar; fade
+         them out instead. Only once scrolled, so content at rest is never faded. */
+      .iphone-pwa #app > .screen > .scroll.scrolled:first-child {
+        -webkit-mask-image: linear-gradient(to bottom, transparent, #000 16px);
+        mask-image: linear-gradient(to bottom, transparent, #000 16px);
+      }
       /* The default status-bar style uses the viewport as supplied by iOS. */
       @media (display-mode: standalone) {
         /* scroll view that reaches the BOTTOM edge clears the home indicator (detail
