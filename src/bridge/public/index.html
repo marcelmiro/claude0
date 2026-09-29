@@ -510,7 +510,9 @@
          all the width can carry. */
       .bubble.md h1, .bubble.md h2 { font-size: 16.5px; font-weight: 600; margin: 14px 0 6px; }
       .bubble.md h3, .bubble.md h4 { font-size: 15px; font-weight: 600; margin: 12px 0 4px; }
-      .bubble.md a { color: var(--peach); }
+      /* The bubble turns the iOS long-press callout off for its own copy sheet; links get it
+         back so a hold opens the native link menu (see lpStartAsst). */
+      .bubble.md a { color: var(--peach); -webkit-touch-callout: default; }
       /* Inline code, code blocks and blockquotes are tap-to-copy (see assistantTap). The pill
          bg is the cue for inline code; blocks get an explicit "copy" hint in a header strip —
          the block's top padding reserves it so the hint never sits on the first line of code.

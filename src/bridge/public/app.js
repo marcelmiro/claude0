@@ -1314,20 +1314,24 @@ const lpStartCopyOnly = (text) => () => {
 };
 
 // The shared touch-handler bundle for a long-pressable bubble — spread onto the element.
+// A link keeps the platform's context menu (see lpStartAsst).
 const lpProps = (start) => ({
   onTouchStart: start,
   onTouchMove: lpCancel,
   onTouchEnd: lpCancel,
-  onContextMenu: (e) => e.preventDefault(),
+  onContextMenu: (e) => e.target.closest("a") || e.preventDefault(),
 });
 
 // Assistant bubble: long-press → a Copy-only sheet (rewind is a user-turn concept). The
 // `assistant` flag tells ActionSheet to drop the rewind buttons. `asstLpFired` suppresses the
 // click iOS fires on release so a long-press never also tap-copies a code span underneath it.
+// A hold on a link is left to iOS's native link menu (preview, Copy Link, Share), which opens
+// mid-hold — Web Share can't: a finger going down grants no user activation, only lifting it.
 let asstLpFired = false;
-const lpStartAsst = (text) => () => {
+const lpStartAsst = (text) => (e) => {
   asstLpFired = false;
   clearTimeout(lpTimer);
+  if (e.target.closest("a")) return;
   lpTimer = setTimeout(() => {
     asstLpFired = true;
     menuText.value = { text, assistant: true };
