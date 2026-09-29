@@ -32,6 +32,14 @@
     { key: "H", short: "panel slide", name: "fixed-panel slide kick", flags: ["panel"] },
     { key: "I", short: "strip+theme", name: "11px strip + theme-color nudge", flags: ["strip11", "theme"] },
     { key: "J", short: "everything", name: "everything (strip11 + all kicks)", flags: ["strip11", "docScroll", "innerScroll", "panel", "theme"] },
+    // Follow-ups to E on the default icon: is the ~10px cutoff line iOS painting the
+    // sampled colour over the strip's box? (K shows it in red.) Does it shrink with the
+    // strip, and does a near-transparent sampled colour still kill the blur?
+    { key: "K", short: "E in red", name: "E but red (does iOS paint the sampled colour?)", flags: [], strip: { h: 11, color: "#ff0000", clip: true } },
+    { key: "L", short: "E 5px", name: "E at 5px", flags: [], strip: { h: 5, color: "#101010", clip: true } },
+    { key: "M", short: "E 8px", name: "E at 8px", flags: [], strip: { h: 8, color: "#101010", clip: true } },
+    { key: "N", short: "11px 1% alpha", name: "11px strip, bg rgb(16 16 16 / 0.01), unclipped", flags: [], strip: { h: 11, color: "rgb(16 16 16 / 0.01)", clip: false } },
+    { key: "O", short: "5px 1% alpha", name: "5px strip, bg rgb(16 16 16 / 0.01), unclipped", flags: [], strip: { h: 5, color: "rgb(16 16 16 / 0.01)", clip: false } },
   ];
   const store = JSON.parse(localStorage.getItem("blurlab") || "{}");
   const state = { preset: store.preset || "A", ruler: store.ruler ?? true, hidden: !!store.hidden, launches: (store.launches || 0) + 1 };
@@ -98,6 +106,15 @@
   if (on("strip11")) strip("");
   if (on("stripSafe")) strip("safe");
   if (on("stripClip")) strip("clip");
+  if (preset.strip) {
+    const { h, color, clip } = preset.strip;
+    const el = document.createElement("div");
+    el.className = `bl-strip${clip ? " clip" : ""}`;
+    el.style.height = `${h}px`;
+    el.style.backgroundColor = color;
+    el.setAttribute("aria-hidden", "true");
+    document.body.prepend(el);
+  }
 
   // --- kicks -----------------------------------------------------------------
   // Reported on-device: the blur clears on the first scroll and stays gone until
