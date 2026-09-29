@@ -34,7 +34,7 @@ import {
   sendBracketedPaste,
   killPane,
 } from "./tmux";
-import { isPermissionPrompt } from "./status";
+import { isPermissionPrompt, type SessionStatus } from "./status";
 import { recoverWorktreeTranscript } from "./recover";
 import { buildBaseName } from "./notifications";
 import { slugify } from "./names";
@@ -1613,8 +1613,9 @@ export async function sendMessage(
  * Pull Claude's `Set model to …` / `Set effort level to …` confirmation out of a pane
  * capture, JOINING wrapped continuation lines first (a long confirmation wraps on a narrow
  * pane — see the width caveat in tmux.ts — and would otherwise truncate the toast). A
- * continuation is an indented, non-empty line that doesn't open a new block (`⎿`/`❯`) or a
- * glyph/status line. Returns the whitespace-collapsed sentence, or null if none is present.
+ * continuation sits under the `⎿`'s text (5 columns in) and doesn't open a new block
+ * (`⎿`/`❯`) or a glyph/status line; the right-aligned effort indicator (`◐ medium · /effort`)
+ * right under it is not one. Returns the whitespace-collapsed sentence, or null if none is present.
  */
 export function extractConfirmation(capture: string): string | null {
   const lines = capture.split("\n");
@@ -1626,7 +1627,7 @@ export function extractConfirmation(capture: string): string | null {
       const next = lines[j]!;
       if (!next.trim()) break; // blank line ends the block
       if (/^\s*[❯⎿│•·>]/.test(next)) break; // new block / statusline / hint glyph
-      if (!/^\s{2,}/.test(next)) break; // continuations stay indented under the ⎿
+      if (!/^ {5}\S/.test(next)) break; // continuations align under the ⎿'s text
       text += " " + next.trim();
     }
     return text.replace(/\s+/g, " ").trim();
@@ -1641,6 +1642,7 @@ export function extractConfirmation(capture: string): string | null {
  * mirroring `rewindByPane`) and returns it verbatim for the caller to surface. Scope is
  * Claude's to decide — global default for model + normal effort, session-only for
  * `ultracode` — so we report its exact wording rather than asserting a scope ourselves.
+ * Claude runs both at once even mid-turn, and they apply from its next API call.
  * Callers validate `value` against MODEL_ARGS/EFFORT_ARGS before calling.
  */
 export async function setSessionModelEffort(
@@ -1653,33 +1655,76 @@ export async function setSessionModelEffort(
   const input = await prepareInput(sessionId, paneId);
   if (!input.ok) return input;
   const command = `/${kind} ${value}`;
-  for (const step of buildSendPlan(command, [], input.draft)) {
+  const staleToast = toastConfirmation(await capturePane(paneId));
+  // The draft's yank waits until the switch settles: a confirm replaces the prompt right
+  // after the command's Enter, and a yank into it leaves the draft cut.
+  const plan = buildSendPlan(command, [], input.draft);
+  const restore = plan.at(-1)?.kind === "restore" ? plan.pop() : undefined;
+  for (const step of plan) {
     // Same abort-on-failed-stash as sendMessage: never type into a remnant draft.
     if (!(await runSendStep(paneId, step))) return { ok: false, reason: "draft-stash-failed" };
   }
+  let result: SendResult & { line?: string; dialog?: boolean } = { ok: false, reason: "no-confirm" };
+  let accepted = false;
   for (let i = 0; i < 12; i++) {
     const capture = await captureAfter(paneId, 200);
-    // Switching model on a conversation with a warm cache opens a "Switch model?" confirm.
-    // Leave it to the phone's dialog card: timing out here left it up, and every later
-    // send typed into it.
-    if (parseDialog(capture)) return { ok: true, dialog: true };
-    const line = commandConfirmation(capture, command);
-    if (line) return { ok: true, line };
+    const dialog = parseDialog(capture);
+    if (dialog) {
+      // A switch on a warm cache asks "Switch model?" first. The phone tap already chose, as
+      // a pick in Claude's own /model picker does without asking; the phone's sheet states
+      // the cost instead. Any other dialog goes to the phone's dialog card.
+      if (kind !== "model" || !isModelSwitchConfirm(dialog)) {
+        result = { ok: true, dialog: true };
+        break;
+      }
+      if (!accepted) await sendKey(paneId, "Enter");
+      accepted = true;
+      continue;
+    }
+    const line = commandConfirmation(capture, command, staleToast);
+    if (line) {
+      result = { ok: true, line };
+      break;
+    }
   }
-  return { ok: false, reason: "no-confirm" };
+  // Under a dialog left for the card the draft stays in the kill ring (C-y at the Mac).
+  if (restore && !result.dialog) await runSendStep(paneId, restore);
+  return result;
 }
 
 /**
- * The confirmation printed under `command`'s echo (`❯ /model sonnet`), or null. An earlier
- * switch's line can still be on screen; reading the whole capture reported it as this
- * command's success while a dialog was up.
+ * Claude's confirmation of `command`, or null. An earlier switch's confirmation can still be
+ * on screen, and reading the whole capture reported it as this command's. At the prompt the
+ * line prints under the command's echo, which must be the newest echo: an identical earlier
+ * command's stays in scrollback. Mid-turn nothing is echoed and the line is a toast in the
+ * slot above the input box that lingers ~7s, so it counts only if it isn't `staleToast`,
+ * the toast already up when the command was typed.
  */
-export function commandConfirmation(capture: string, command: string): string | null {
+export function commandConfirmation(capture: string, command: string, staleToast: string | null = null): string | null {
   const lines = capture.split("\n");
-  for (let i = lines.length - 1; i >= 0; i--) {
-    if (lines[i]!.trimEnd() === `❯ ${command}`) return extractConfirmation(lines.slice(i + 1).join("\n"));
+  const box = inputBoxRow(lines);
+  // Stop above the toast slot (the row over the box's top rule).
+  const end = box === -1 ? lines.length : box - 2;
+  for (let i = end - 1; i >= 0; i--) {
+    if (!lines[i]!.startsWith("❯ ")) continue;
+    if (lines[i]!.trimEnd() === `❯ ${command}`) return extractConfirmation(lines.slice(i + 1, end).join("\n"));
+    break;
   }
-  return null;
+  const toast = toastConfirmation(capture);
+  return toast === staleToast ? null : toast;
+}
+
+/** A mid-turn `/model` or `/effort` confirmation: the toast in the slot right above the input box's top rule. */
+function toastConfirmation(capture: string): string | null {
+  const lines = capture.split("\n");
+  const box = inputBoxRow(lines);
+  const m = box >= 2 ? lines[box - 2]!.match(/^\s+(Set (?:model|effort level) to .+?)\s*$/) : null;
+  return m ? m[1]! : null;
+}
+
+/** Claude's "Switch model?" confirm with its cursor on "Yes, switch to …", the option Enter picks. */
+export function isModelSwitchConfirm(dialog: PaneDialog): boolean {
+  return dialog.cursor >= 0 && dialog.options[dialog.cursor]!.startsWith("Yes, switch to ");
 }
 
 /** A Claude Code dialog scraped off the pane: prose above its options, the options, and the cursor's option index (-1 when no option is selected). */
@@ -1772,6 +1817,19 @@ export function parseDialog(capture: string): PaneDialog | null {
 }
 
 /**
+ * The dialog a session is blocked on, given Claude's native status; the phone's card and
+ * `answerDialog` share it. A hidden input box alone also means boot or portkey driving
+ * /rewind, so it needs `waiting`, or `running` for a dialog opened over a running turn (a
+ * /model switch confirm). Mid-turn Ctrl+O's transcript view hides the box too, so there
+ * only a dialog with options counts.
+ */
+export function liveDialog(status: SessionStatus | null, capture: string): PaneDialog | null {
+  if (status !== "waiting" && status !== "running") return null;
+  const dialog = parseDialog(capture);
+  return dialog && (status === "waiting" || dialog.options.length) ? dialog : null;
+}
+
+/**
  * Answer the dialog on a session's pane from the phone: pick `option` (pinned to the
  * `label` the phone rendered, so a dialog that changed underneath is never confirmed),
  * or `dismiss` it with Escape. Picks walk the cursor and re-read it before Enter: digits
@@ -1784,9 +1842,7 @@ export async function answerDialog(
 ): Promise<SendResult> {
   const paneId = await resolveSessionPane(sessionId);
   if (!paneId) return { ok: false, reason: "no-pane" };
-  // Same gate as the card: a hidden input box alone also means boot or a /rewind picker.
-  if ((await nativeStatus(sessionId)) !== "waiting") return { ok: false, reason: "no-dialog" };
-  let dialog = parseDialog(await capturePane(paneId));
+  let dialog = liveDialog(await nativeStatus(sessionId), await capturePane(paneId));
   if (!dialog) return { ok: false, reason: "no-dialog" };
   if (choice === "dismiss") {
     await sendKey(paneId, "Escape");

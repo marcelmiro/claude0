@@ -68,3 +68,24 @@ was pending. The session was unanswerable from the phone. Lab-verified on the sa
   status reader skips.
 - Scrape shapes are pinned by lab captures in `test/fixtures/viewport/`
   (model-switch-dialog, model-picker, trust-gate, ask-user-question, permission-prompt).
+
+## Addendum 2026-09-29: dialogs over a running turn
+
+- A dialog can open while a turn runs: `/model` typed mid-turn runs at once and, the cache
+  being warm, opens the switch confirm; a Mac-side Alt+P picker is another. The turn keeps
+  running under it and Claude keeps reporting `busy`, not `waiting`, until the turn ends.
+  Gating on `waiting` left the confirm unanswerable from the phone for the rest of the
+  turn, which then ran on the old model.
+- `liveDialog` is the one predicate behind the card and `answerDialog`: `waiting` accepts
+  any parsed dialog, `running` only one with options. Mid-turn, Ctrl+O's transcript view
+  also hides the input box and parses as a dialog without options. Lab-verified: Escape on
+  a dialog over a running turn closes it without interrupting the turn. Ctrl+R's history
+  search left open mid-turn also shows as a card (it covers the input like a dialog, and
+  Dismiss closes it); the slash menu, Ctrl+T, the agent list and Ctrl+G's editor don't.
+- The Home badge stays `waiting`-only. A dialog opened at the terminal mid-turn fires no
+  hook event and flips no status, so the open conversation shows its card at its next
+  refetch (the next hook event, or the turn ending).
+- The switcher answers the model-switch confirm itself ([ADR 4](0004-model-effort-switcher-scope.md)
+  addendum); any other dialog after `/model` or `/effort` still goes to the card.
+- Pinned by lab captures `model-switch-dialog-running`, `transcript-view-running` and
+  `effort-toast-running` in `test/fixtures/viewport/`.

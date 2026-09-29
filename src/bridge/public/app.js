@@ -4821,6 +4821,7 @@ function ConfigSheet() {
               ${o.key === curModel ? html`<span class="cfgmark">✓</span>` : ""}
             </button>`,
           )}
+          <div class="sheethint">Switching model re-reads the whole conversation on Claude's next step: slower, more tokens.</div>
           <div class="snoozerow effortrow" role="group" aria-label="Reasoning effort">
             ${EFFORT_OPTS.map(
               (o) => html`<button

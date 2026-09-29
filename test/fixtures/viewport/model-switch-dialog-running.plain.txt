@@ -1,0 +1,50 @@
+
+ ▐▛███▛█   Claude Code v2.1.284
+▝▜██████▀  Sonnet 5.5 with medium effort · Claude Max
+ ▝▝   ▝▝   /home/marcel/dev/lab
+
+
+❯ Reply with just: hi
+
+● hi
+
+✻ Worked for 1s · done 11:34 AM
+
+❯ Reply with just: hi2
+
+● hi2
+
+✻ Crunched for 1s · done 11:34 AM
+
+❯ /model sonnet
+  ⎿  Set model to Sonnet 5.5 and saved as your default for new sessions
+
+❯ /effort low
+  ⎿  Set effort level to low (saved as your default for new sessions): Quick, straightforward implementation with minimal overhead
+
+❯ Run bash 'sleep 40' as a single Bash tool call, then reply with just: ok
+
+● Sleeping for 40 seconds · 9s
+  ⎿  $ sleep 40 (10s)
+     (ctrl+b ctrl+b (twice) to run in background)
+
+
+
+
+
+
+
+
+
+
+✻ Optimus Priming… (13s · ↓ 82 tokens)
+  ⎿  Tip: Connect Claude to your IDE · /ide
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ Set effort level to medium (saved as your default for new sessions): Balanced approach with standard implementation and testing ▔
+   Switch model?
+   Your next response will be slower and use more tokens
+
+   This conversation is cached for the current model. Switching to Haiku 4.5 means the full history gets re-read on your next message.
+
+   ❯ 1. Yes, switch to Haiku 4.5
+     2. No, go back
+

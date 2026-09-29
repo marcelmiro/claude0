@@ -51,6 +51,8 @@ import {
   parseStatusline,
   extractConfirmation,
   commandConfirmation,
+  liveDialog,
+  isModelSwitchConfirm,
   parseDialog,
   isModelArg,
   isEffortArg,
@@ -1302,4 +1304,53 @@ test("inputBoxRow: a two-dash labelled top rule; a draft's own box-drawing row d
 test("commandConfirmation: another command's echo that merely starts the same doesn't count", () => {
   const cap = ["❯ /model opus[1m]", "  ⎿  Set model to Opus 5.5 (1M context)", "❯ /model opu"].join("\n");
   expect(commandConfirmation(cap, "/model opus")).toBe(null);
+});
+
+test("commandConfirmation: mid-turn the line is a toast above the input box, counted only if it wasn't already up", () => {
+  const cap = fixture("viewport/effort-toast-running.plain.txt");
+  const line =
+    "Set effort level to medium (saved as your default for new sessions): Balanced approach with standard implementation and testing";
+  expect(commandConfirmation(cap, "/effort medium")).toBe(line);
+  expect(commandConfirmation(cap, "/effort medium", line)).toBe(null);
+});
+
+test("commandConfirmation: an identical earlier command's echo doesn't count once a later prompt follows it", () => {
+  const cap = ["❯ /effort low", "  ⎿  Set effort level to low (saved as your default for new sessions)", "❯ run the tests", "✻ Working…", "", RULE, "❯ ", RULE];
+  expect(commandConfirmation(cap.join("\n"), "/effort low")).toBe(null);
+});
+
+test("commandConfirmation: at the prompt, a toast still up doesn't stand in for the echo's own line", () => {
+  const cap = ["❯ /effort low", "", "                 Set effort level to medium (saved as your default for new sessions)", RULE, "❯ ", RULE];
+  expect(commandConfirmation(cap.join("\n"), "/effort low")).toBe(null);
+});
+
+test("extractConfirmation: the right-aligned effort indicator under a wrapped line isn't a continuation", () => {
+  const cap = [
+    "❯ /effort low",
+    "  ⎿  Set effort level to low (saved as your default for new",
+    "     sessions): Quick, straightforward implementation with",
+    "     minimal overhead",
+    " ".repeat(43) + "○ low · /effort",
+    RULE,
+  ];
+  expect(extractConfirmation(cap.join("\n"))).toBe(
+    "Set effort level to low (saved as your default for new sessions): Quick, straightforward implementation with minimal overhead",
+  );
+});
+
+test("liveDialog: over a running turn only a dialog with options counts — Ctrl+O's transcript view hides the box too", () => {
+  const confirm = fixture("viewport/model-switch-dialog-running.plain.txt");
+  const view = fixture("viewport/transcript-view-running.plain.txt");
+  expect(liveDialog("running", confirm)?.options).toEqual(["Yes, switch to Haiku 4.5", "No, go back"]);
+  expect(liveDialog("running", view)).toBe(null);
+  expect(liveDialog("waiting", view)?.options).toEqual([]);
+  expect(liveDialog("ready", confirm)).toBe(null);
+  expect(liveDialog(null, confirm)).toBe(null);
+});
+
+test("isModelSwitchConfirm: only the switch confirm with its cursor on Yes", () => {
+  const d = parseDialog(fixture("viewport/model-switch-dialog-running.plain.txt"))!;
+  expect(isModelSwitchConfirm(d)).toBe(true);
+  expect(isModelSwitchConfirm({ ...d, cursor: 1 })).toBe(false);
+  expect(isModelSwitchConfirm(parseDialog(fixture("viewport/model-picker.plain.txt"))!)).toBe(false);
 });

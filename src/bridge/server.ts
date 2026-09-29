@@ -48,7 +48,7 @@ import {
   readPaneStatusline,
   decideAttachedApproval,
   setSessionModelEffort,
-  parseDialog,
+  liveDialog,
   answerDialog,
   isModelArg,
   isEffortArg,
@@ -78,7 +78,7 @@ import {
 import { watchEvents } from "../core/watch";
 import { EVENTS_DIR, pendingToolCall } from "../core/hook-events";
 import { capturePane, listPanes } from "../core/tmux";
-import { isPermissionPrompt, sessionActivityAt } from "../core/status";
+import { isPermissionPrompt, sessionActivityAt, type SessionStatus } from "../core/status";
 import {
   loadNameCache,
   saveNameCache,
@@ -713,7 +713,7 @@ async function computeSessionsPayload(): Promise<unknown> {
       if (pt?.name === "AskUserQuestion" && pt.question) return;
       const capture = await capturePane(s.tmuxPane.paneId);
       if (isAttachedApproval(pt, capture)) approvalIds.add(s.id);
-      else if (resolveDialog((await nativeStatus(s.id)) === "waiting", null, pt, capture)) dialogIds.add(s.id);
+      else if (resolveDialog(await nativeStatus(s.id), null, pt, capture)) dialogIds.add(s.id);
     }),
   );
   // Apply the cached AI name, mirroring the TUI/tmux.
@@ -1136,17 +1136,17 @@ function isAttachedApproval(pt: ReturnType<typeof pendingToolCall>, capture: str
 }
 
 // A Claude Code dialog covering the input box (model-switch confirm, a /model picker left
-// open, a permission prompt with no pending tool behind it). Only while Claude itself
-// reports waiting (a hidden input box alone also means boot, or portkey driving /rewind)
-// and neither a question nor an approval explains it — those have their own cards.
+// open, a permission prompt with no pending tool behind it), when `liveDialog` accepts it
+// for Claude's native status and neither a question nor an approval explains it — those
+// have their own cards.
 function resolveDialog(
-  waiting: boolean,
+  status: SessionStatus | null,
   approval: unknown,
   pt: ReturnType<typeof pendingToolCall>,
   capture: string,
 ) {
-  if (!waiting || approval || (pt?.name === "AskUserQuestion" && pt.question)) return null;
-  return parseDialog(capture);
+  if (approval || (pt?.name === "AskUserQuestion" && pt.question)) return null;
+  return liveDialog(status, capture);
 }
 
 /**
@@ -1165,7 +1165,7 @@ async function composeTranscriptPayload(id: string): Promise<Record<string, unkn
   const capture = pane ? await capturePane(pane) : "";
   const pt = pendingToolCall(txId);
   const approval = resolveApproval(txId, id, pt, pane, capture);
-  const dialog = pane ? resolveDialog((await nativeStatus(id)) === "waiting", approval, pt, capture) : null;
+  const dialog = pane ? resolveDialog(await nativeStatus(id), approval, pt, capture) : null;
   // The live statusline + permission mode, scraped from the pane (the only faithful
   // source for the user's custom statusline and the auto/plan mode).
   const statusline = pane ? await readPaneStatusline(pane, capture) : {};
@@ -1364,7 +1364,7 @@ async function route(req: Request): Promise<Response> {
           ...pendingToolFields(pt),
           subagents, // always present here ([] clears) — the client overwrites its copy
           approval,
-          dialog: pane ? resolveDialog((await nativeStatus(id)) === "waiting", approval, pt, capture) : null,
+          dialog: pane ? resolveDialog(await nativeStatus(id), approval, pt, capture) : null,
           ...statusline,
         });
       }

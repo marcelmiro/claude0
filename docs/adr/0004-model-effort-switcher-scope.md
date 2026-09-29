@@ -81,3 +81,27 @@ Opus never marks the current row, whichever version it is.
   switched to Opus 5.5, still read `Opus 5.5 • xhigh`.
 - The `/model` picker also offers `s` to use a model for this session only. Portkey's
   arg-form switch still saves the global default.
+
+## Addendum 2026-09-29: mid-turn switches
+
+- Lab-verified on 2.1.284 against the model and effort recorded on each assistant
+  message: `/model` and `/effort` typed mid-turn run at once (unlike `/rewind`, which
+  queues) and apply from Claude's next API call in the same turn, as a pick in the Alt+P
+  picker does.
+- Typing `/model x` on a warm cache, which mid-turn it always is, opens "Switch model?";
+  the picker switches without asking. `setSessionModelEffort` presses Enter on the confirm
+  when its cursor sits on "Yes, switch to …", so a phone tap switches the way the picker
+  does. The sheet always states the cost instead: a switch re-reads the whole conversation
+  on Claude's next step. Any other dialog still returns `{ok, dialog: true}`.
+- Mid-turn the confirmation isn't echoed; it's a toast in the slot above the input box that
+  lingers ~7s. It counts only if it wasn't already up when the command was typed. At the
+  prompt, the line under the command's echo counts only if that echo is the newest.
+  Re-applying the value just applied, mid-turn within ~7s, reports `no-confirm` (the toast
+  text is identical) though Claude applied it.
+- A wrapped confirmation's continuation rows sit 5 columns in, under the `⎿`'s text; the
+  right-aligned effort indicator (`◐ medium · /effort`) below the line is no longer joined
+  onto it.
+- A draft stashed for the switch is yanked back only once the switch settles. Yanked
+  right after the command's Enter, as `sendMessage` does, the C-y landed in the confirm
+  and left the draft cut (lab-verified). Under a dialog left for the card, the draft stays
+  in the kill ring for C-y at the Mac.
