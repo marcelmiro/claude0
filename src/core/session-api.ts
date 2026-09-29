@@ -14,7 +14,7 @@
 import { Glob } from "bun";
 import { homedir } from "os";
 import { resolveTranscriptPath, resolveTranscriptPaths, readLastPromptAt } from "./last-turn";
-import { lastAssistantMessage, parseActiveBranch, parseTranscript, TEAMMATE_PREFIX } from "./transcript";
+import { isTeammateDelivery, lastAssistantMessage, parseActiveBranch, parseTranscript } from "./transcript";
 import { pendingToolCall } from "./hook-events";
 import { loadPaneSessions, savePaneSessions } from "./state";
 import { findClaudeProcesses } from "./process";
@@ -1033,7 +1033,7 @@ export function parseQueuedPending(jsonl: string | string[]): string[] {
     .filter(({ text }) => !text.trimStart().startsWith("<task-notification>"))
     // Teams deliveries are enqueued by the harness, not the user — never render them
     // as the user's queued message (delivery makes them a teammate turn instead).
-    .filter(({ text }) => !TEAMMATE_PREFIX.test(text))
+    .filter(({ text }) => !isTeammateDelivery(text))
     .filter(({ line, text }) => !deliveredAfter(lines, line, text))
     .map(({ text }) => text);
 }

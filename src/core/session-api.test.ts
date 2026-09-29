@@ -783,6 +783,11 @@ test("parseQueuedPending: an enqueued teams delivery never surfaces as the user'
   expect(
     parseQueuedPending([qop("enqueue", delivery), qop("enqueue", "real msg")].join("\n")),
   ).toEqual(["real msg"]);
+  // A backgrounded subagent's hand-back is enqueued as a bare tagged block, no prefix.
+  const handBack = '<agent-message from="a1">\n[Subagent hand-back] …\n  Report\n</agent-message>';
+  expect(
+    parseQueuedPending([qop("enqueue", handBack), qop("enqueue", "real msg")].join("\n")),
+  ).toEqual(["real msg"]);
 });
 
 test("parseQueuedPending: tolerates torn lines and unknown ops", () => {

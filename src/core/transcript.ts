@@ -71,16 +71,21 @@ const BASH_OUTPUT_OPEN = /^\s*<bash-(?:stdout|stderr)>/;
  * a `summary` attribute on the tag or as a `summary` field in a JSON payload
  * (idle_notification records use the latter).
  */
-export const TEAMMATE_PREFIX = /^\s*Another Claude session sent a message:/;
+const TEAMMATE_PREFIX = /^\s*Another Claude session sent a message:/;
 const TEAMMATE_MESSAGE = /<(teammate-message|agent-message)\b([^>]*)>([\s\S]*?)<\/\1>/g;
 // A direct report delivered with no prefix at all: the record is exactly one tagged block
 // (observed for `SendMessage` to "main" from a named subagent). Nothing surrounds the tag,
 // so a pasted quote — which sits inside the user's own prose — still can't match.
 const BARE_DELIVERY = /^\s*<(teammate-message|agent-message)\b[^>]*>[\s\S]*<\/\1>\s*$/;
 
+/** Harness-injected teams delivery (prefixed, or a bare tagged block) — never the user's own text. */
+export function isTeammateDelivery(text: string): boolean {
+  return TEAMMATE_PREFIX.test(text) || BARE_DELIVERY.test(text);
+}
+
 /** Parse a teams delivery's tagged blocks; null when the prefix or every tag is absent. */
 function parseTeammateDelivery(text: string): TranscriptTurn["teammate"] | null {
-  if (!TEAMMATE_PREFIX.test(text) && !BARE_DELIVERY.test(text)) return null;
+  if (!isTeammateDelivery(text)) return null;
   const msgs: NonNullable<TranscriptTurn["teammate"]> = [];
   for (const m of text.matchAll(TEAMMATE_MESSAGE)) {
     const attrs = m[2];
