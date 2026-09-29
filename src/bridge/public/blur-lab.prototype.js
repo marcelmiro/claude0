@@ -40,6 +40,10 @@
     { key: "M", short: "E 8px", name: "E at 8px", flags: [], strip: { h: 8, color: "#101010", clip: true } },
     { key: "N", short: "11px 1% alpha", name: "11px strip, bg rgb(16 16 16 / 0.01), unclipped", flags: [], strip: { h: 11, color: "rgb(16 16 16 / 0.01)", clip: false } },
     { key: "O", short: "5px 1% alpha", name: "5px strip, bg rgb(16 16 16 / 0.01), unclipped", flags: [], strip: { h: 5, color: "rgb(16 16 16 / 0.01)", clip: false } },
+    // The line is the web view's top edge (iOS paints the status-bar area with the
+    // sampled colour). Soften it: fade a scrolled list out over the last N px.
+    { key: "P", short: "E + 16px fade", name: "E + 16px fade when scrolled", flags: ["stripClip"], fade: 16 },
+    { key: "Q", short: "E + 32px fade", name: "E + 32px fade when scrolled", flags: ["stripClip"], fade: 32 },
   ];
   const store = JSON.parse(localStorage.getItem("blurlab") || "{}");
   const state = { preset: store.preset || "A", ruler: store.ruler ?? true, hidden: !!store.hidden, launches: (store.launches || 0) + 1 };
@@ -106,6 +110,14 @@
   if (on("strip11")) strip("");
   if (on("stripSafe")) strip("safe");
   if (on("stripClip")) strip("clip");
+  if (preset.fade) {
+    const f = `linear-gradient(to bottom, transparent 0, #000 ${preset.fade}px)`;
+    css.textContent += `#app .scroll.bl-faded { -webkit-mask-image: ${f}; mask-image: ${f}; }`;
+    document.addEventListener("scroll", (e) => {
+      const el = e.target;
+      if (el.classList?.contains("scroll")) el.classList.toggle("bl-faded", el.scrollTop > 0);
+    }, true);
+  }
   if (preset.strip) {
     const { h, color, clip } = preset.strip;
     const el = document.createElement("div");
