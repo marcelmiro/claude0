@@ -118,6 +118,8 @@ const STATIC: Record<string, string> = {
   "/": "index.html",
   "/app.js": "app.js",
   "/sw.js": "sw.js",
+  // PROTOTYPE (branch prototype/ios-top-blur only): iOS 27 top-blur lab.
+  "/blur-lab.prototype.js": "blur-lab.prototype.js",
   // Shared with the TUI (core/status.ts imports the same file) — served unbuilt.
   "/time-ago.js": "../../shared/time-ago.js",
   // Unified-patch parser, shared with its test suite — served unbuilt.
