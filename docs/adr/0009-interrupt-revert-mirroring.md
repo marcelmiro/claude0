@@ -151,3 +151,19 @@ driver's Escape reverted the send back into the input, and each retry did the sa
   prompt. A send over that → the prompt is discarded and the input ends empty. A
   genuine draft → a send still restores it. The transcript held only the four clean
   prompts.
+
+## Addendum (2026-09-29): the input is the framed row, and the cursor cell over a ghost is ghost
+
+- **Framed row, not last row.** Draft detection read "the last `❯` row" as the input. When
+  a dialog replaces the box, that row is an echoed prompt or a dialog option, so the kill
+  walk ran into the dialog and every send aborted with `draft-stash-failed`. The input is
+  now the column-0 prompt row with a rule directly above and a closing rule below
+  (`inputBoxRow`), and `prepareInput` refuses `no-input-box` before any key when there is
+  none ([ADR 31](0031-dialogs-covering-the-input-box.md)).
+- **Cursor cell.** Claude draws its cursor as a reverse-video cell. In an empty box with a
+  queued message, it sits on the dim placeholder's first letter and is not dim itself,
+  so the ghost drop left the draft "P". Lab-verified on 2.1.284: a phone send during a
+  queued message stashed that phantom, and the restore `C-y` pasted whatever the kill ring
+  last held into the prompt, where the next message got glued onto it. `flattenStyled`
+  now drops a reverse cell followed directly by dim text; a cursor at the end of, or
+  inside, real typed text is kept.

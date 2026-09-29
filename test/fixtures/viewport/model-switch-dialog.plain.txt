@@ -1,0 +1,50 @@
+
+ ▐▛███▛█   Claude Code v2.1.284
+▝▜██████▀  Haiku 4.5 · Claude Max
+ ▝▝   ▝▝   /home/marcel/dev/lab
+
+
+❯ Reply with just the word ok.
+
+● ok
+
+✻ Crunched for 1s · done 10:13 AM
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+   Switch model?
+   Your next response will be slower and use more tokens
+
+   This conversation is cached for the current model. Switching to Sonnet 5.5 means the full history gets re-read on your next message.
+
+   ❯ 1. Yes, switch to Sonnet 5.5
+     2. No, go back
+

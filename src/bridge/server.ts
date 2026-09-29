@@ -7,7 +7,7 @@
  *
  * Security posture: bind fail-closed (loopback / tailnet only); a static bearer
  * token, exchanged once via `POST /auth` for an HttpOnly cookie so the token never
- * rides in a URL. `/decision`, `/message`, `/answer`, `/config` are remote-code-execution
+ * rides in a URL. `/decision`, `/message`, `/answer`, `/config`, `/dialog` are remote-code-execution
  * by design (`/config` is allowlist-clamped) — the tailnet bind is the wall, the token is
  * defense-in-depth.
  */
@@ -48,6 +48,8 @@ import {
   readPaneStatusline,
   decideAttachedApproval,
   setSessionModelEffort,
+  parseDialog,
+  answerDialog,
   isModelArg,
   isEffortArg,
   type SendResult,
@@ -278,6 +280,7 @@ function projectSession(
   s: Session,
   pending: ReturnType<typeof pendingToolCall>,
   approvalIds: Set<string>,
+  dialogIds: Set<string>,
   unread: boolean,
   restorable?: RestoreState,
   pendingScriptCount?: number,
@@ -291,7 +294,9 @@ function projectSession(
       ? "question"
       : approvalIds.has(s.id)
         ? "approval"
-        : null;
+        : dialogIds.has(s.id)
+          ? "dialog"
+          : null;
   return {
     id: s.id,
     repo: s.repo,
@@ -697,14 +702,18 @@ async function computeSessionsPayload(): Promise<unknown> {
   // Attached sessions never get a pending-file (the PreToolUse hook exits neutral so the
   // instant desk prompt shows) — so a phone-approvable permission prompt must be sourced
   // from the live pane. For each WAITING session with no file-pending and no open question,
-  // confirm a permission prompt is actually on-screen before flagging it `approval`.
+  // flag it with the same predicates the conversation's cards use (resolveApproval /
+  // resolveDialog), so the row's badge never promises a card that doesn't render.
   // Captures are independent per pane — run them concurrently.
+  const dialogIds = new Set<string>();
   await Promise.all(
     tracked.map(async (s) => {
       if (s.status !== "waiting" || approvalIds.has(s.id) || !s.tmuxPane) return;
-      const pt = pendingById.get(s.id);
+      const pt = pendingById.get(s.id) ?? null;
       if (pt?.name === "AskUserQuestion" && pt.question) return;
-      if (isPermissionPrompt(await capturePane(s.tmuxPane.paneId))) approvalIds.add(s.id);
+      const capture = await capturePane(s.tmuxPane.paneId);
+      if (isAttachedApproval(pt, capture)) approvalIds.add(s.id);
+      else if (resolveDialog((await nativeStatus(s.id)) === "waiting", null, pt, capture)) dialogIds.add(s.id);
     }),
   );
   // Apply the cached AI name, mirroring the TUI/tmux.
@@ -749,6 +758,7 @@ async function computeSessionsPayload(): Promise<unknown> {
       s,
       pendingById.get(s.id) ?? null,
       approvalIds,
+      dialogIds,
       !!(s.tmuxPane && unread.has(s.tmuxPane.paneId)),
       restorableMap.get(s.id),
       scriptCounts.get(s.id),
@@ -786,6 +796,7 @@ async function computeSessionsPayload(): Promise<unknown> {
               needsYou:
                 !!(s.tmuxPane && unread.has(s.tmuxPane.paneId)) ||
                 approvalIds.has(s.id) ||
+                dialogIds.has(s.id) ||
                 (pt?.name === "AskUserQuestion" && !!pt.question),
               since: s.lastTurnAt?.getTime() ?? firstSeen(s.id),
             },
@@ -1109,9 +1120,7 @@ function resolveApproval(
   capture: string,
 ) {
   const blocked = listPendingApprovals().find((a) => a.sessionId === txId) ?? null;
-  if (blocked || !pane || !pt) return blocked;
-  if (pt.name === "AskUserQuestion" && pt.question) return null;
-  if (!isPermissionPrompt(capture)) return null;
+  if (blocked || !pane || !pt || !isAttachedApproval(pt, capture)) return blocked;
   return {
     sessionId: id,
     ts: 0,
@@ -1119,6 +1128,25 @@ function resolveApproval(
     tool_use_id: pt.toolUseId,
     input: { command: pt.command, file_path: pt.filePath, description: pt.description },
   };
+}
+
+/** An attached tool approval: a permission prompt on the pane with a pending tool call behind it. */
+function isAttachedApproval(pt: ReturnType<typeof pendingToolCall>, capture: string): boolean {
+  return !!pt && !(pt.name === "AskUserQuestion" && pt.question) && isPermissionPrompt(capture);
+}
+
+// A Claude Code dialog covering the input box (model-switch confirm, a /model picker left
+// open, a permission prompt with no pending tool behind it). Only while Claude itself
+// reports waiting (a hidden input box alone also means boot, or portkey driving /rewind)
+// and neither a question nor an approval explains it — those have their own cards.
+function resolveDialog(
+  waiting: boolean,
+  approval: unknown,
+  pt: ReturnType<typeof pendingToolCall>,
+  capture: string,
+) {
+  if (!waiting || approval || (pt?.name === "AskUserQuestion" && pt.question)) return null;
+  return parseDialog(capture);
 }
 
 /**
@@ -1133,13 +1161,15 @@ async function composeTranscriptPayload(id: string): Promise<Record<string, unkn
   const txId = (await parkedJobSessions()).get(id) ?? id;
   // Transcript read and pane resolution share no state — overlap them.
   const [tx, pane] = await Promise.all([getTranscript(txId), resolveSessionPane(id)]);
-  // One capture serves both the permission-prompt check and the statusline scrape.
+  // One capture serves the permission-prompt check, the dialog scrape and the statusline.
   const capture = pane ? await capturePane(pane) : "";
-  const approval = resolveApproval(txId, id, pendingToolCall(txId), pane, capture);
+  const pt = pendingToolCall(txId);
+  const approval = resolveApproval(txId, id, pt, pane, capture);
+  const dialog = pane ? resolveDialog((await nativeStatus(id)) === "waiting", approval, pt, capture) : null;
   // The live statusline + permission mode, scraped from the pane (the only faithful
   // source for the user's custom statusline and the auto/plan mode).
   const statusline = pane ? await readPaneStatusline(pane, capture) : {};
-  return { ...tx, approval, ...statusline };
+  return { ...tx, approval, dialog, ...statusline };
 }
 
 /**
@@ -1327,12 +1357,14 @@ async function route(req: Request): Promise<Response> {
         const capture = pane ? await capturePane(pane) : "";
         const pt = pendingToolCall(txId);
         const statusline = pane ? await readPaneStatusline(pane, capture) : {};
+        const approval = resolveApproval(txId, id, pt, pane, capture);
         return json({
           unchanged: true,
           rev: at.rev,
           ...pendingToolFields(pt),
           subagents, // always present here ([] clears) — the client overwrites its copy
-          approval: resolveApproval(txId, id, pt, pane, capture),
+          approval,
+          dialog: pane ? resolveDialog((await nativeStatus(id)) === "waiting", approval, pt, capture) : null,
           ...statusline,
         });
       }
@@ -1469,6 +1501,18 @@ async function route(req: Request): Promise<Response> {
     const r = await decideAttachedApproval(id, body.decision);
     if (r.ok) markPortkeySource(id, { deviceId: deviceOf(req) });
     return sendResult(r);
+  }
+
+  // Answer the dialog covering a session's input box: `{option, label}` picks the option
+  // the phone rendered (label-pinned against a dialog that changed underneath),
+  // `{dismiss: true}` presses Escape.
+  const dialog = path.match(/^\/sessions\/([^/]+)\/dialog$/);
+  if (method === "POST" && dialog) {
+    const body = (await req.json().catch(() => ({}))) as { option?: unknown; label?: unknown; dismiss?: unknown };
+    const id = decodeURIComponent(dialog[1]!);
+    if (body.dismiss === true) return sendResult(await answerDialog(id, "dismiss"));
+    if (!Number.isInteger(body.option) || typeof body.label !== "string") return json({ ok: false, reason: "bad-args" }, 400);
+    return sendResult(await answerDialog(id, { option: body.option as number, label: body.label }));
   }
 
   const rewind = path.match(/^\/sessions\/([^/]+)\/rewind$/);

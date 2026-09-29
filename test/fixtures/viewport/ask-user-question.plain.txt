@@ -1,0 +1,50 @@
+
+
+❯ /model sonnet
+  ⎿  Kept model as Haiku 4.5
+
+❯ /model sonnet
+  ⎿  Set model to Sonnet 5.5 and saved as your default for new sessions
+
+❯ /model haiku
+  ⎿  Set model to Haiku 4.5 and saved as your default for new sessions
+
+❯ Reply with just the word ok.
+
+● ok
+
+✻ Sautéed for 1s · done 10:16 AM
+
+❯ /model sonnet
+  ⎿  Kept model as Haiku 4.5
+
+❯ /effort low
+  ⎿  Set effort level to low (saved as your default for new sessions): Quick, straightforward implementation with minimal overhead
+
+❯ /model
+  ⎿  Kept model as Haiku 4.5
+
+❯ Use the Bash tool to run exactly: touch probe.txt
+
+  Ran 1 shell command
+  ⎿  Interrupted · What should Claude do instead?
+
+✻ Crunched for 1s · done 10:17 AM
+
+❯ Use the AskUserQuestion tool to ask me which color I prefer, with options red, green, blue. Nothing else.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Color
+
+Which color do you prefer?
+
+❯ 1. Red
+     The color red
+  2. Green
+     The color green
+  3. Blue
+     The color blue
+  4. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel

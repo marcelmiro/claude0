@@ -57,6 +57,7 @@ tmux, from a tty-less process (daemon/bridge — always "outside tmux"):
 Sending keys to a Claude pane:
 - Never send `Up` to clear or recall a draft — it recalls prompt history. One `C-u` kills only the cursor's display row; draft clearing is the `killInput` walk, restored with a single `C-y` ([ADR 9](docs/adr/0009-interrupt-revert-mirroring.md)).
 - The `❯`-keyed input probes are blind to a shell-mode prompt — a plain send into it executes as bash. Pre-flight `shellModeInput` ([ADR 12](docs/adr/0012-bang-commands.md)).
+- The live input is the `❯` row framed by rules, never "the last `❯` row": a dialog replaces the box, leaving echoed prompts and dialog options as the last `❯` rows. No framed row means a dialog is up — send nothing ([ADR 31](docs/adr/0031-dialogs-covering-the-input-box.md)).
 - Never fire a bare digit without pre-flighting a fresh capture — permission prompts are digit-actionable and a focused free-text row turns digits into text ([ADR 8](docs/adr/0008-question-hold-not-send-keys.md)).
 - A fork's JSONL is written lazily and the SessionStart hook records the *parent* id for a `--fork-session` pane — trust neither for a fresh fork ([ADR 25](docs/adr/0025-fork-transcript-seeding.md)).
 
@@ -85,6 +86,7 @@ Processes & caches:
 | Stop/interrupt revert mirroring, draft kill/restore | [9](docs/adr/0009-interrupt-revert-mirroring.md) | `core/session-api.ts`, `bridge/public/app.js` |
 | Bash `!` commands, composer bash mode, shell-mode guard | [12](docs/adr/0012-bang-commands.md) | `core/transcript.ts`, `core/session-api.ts` |
 | AskUserQuestion hold, "Chat about this" | [8](docs/adr/0008-question-hold-not-send-keys.md) | `core/tmux.ts` |
+| Dialogs covering the input box (model-switch confirm, pickers): detection, card, answering | [31](docs/adr/0031-dialogs-covering-the-input-box.md) | `core/session-api.ts`, `bridge/server.ts` |
 | Background scripts/agents surface (⏳, 🤖 pill), runner liveness | [26](docs/adr/0026-background-work-is-visibility-only.md) | `core/script-wait.ts`, `core/background-tasks.ts`, `core/runner-verdicts.ts` |
 | Fork sessions, transcript seeding | [25](docs/adr/0025-fork-transcript-seeding.md) | `core/session-api.ts` |
 | Image paste from a client Mac (Service hotkey → ssh → path paste) | [27](docs/adr/0027-image-paste-is-a-service-hotkey-plus-path-paste.md) | `core/image-paste.ts`, `src/paste-image.ts`, `config/service/` |

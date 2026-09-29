@@ -65,3 +65,19 @@ now Opus 5 (`claude-opus-5[1m]`). `parseStatusline` no longer special-cases one 
 version: the current Opus (a single constant) maps to the `opus` alias, and any other
 rendered version derives its full id from the version number — so a session on an older
 Opus never marks the current row, whichever version it is.
+
+## Addendum 2026-09-29: the switch-model confirm, and effort is per model
+
+- Claude Code 2.1.284 confirms a model switch on a conversation with a warm cache
+  ("Switch model? … the full history gets re-read"). The arg form no longer always prints
+  "Set model to …" at once. `setSessionModelEffort` returns `{ok, dialog: true}` when the
+  confirm appears, and the phone shows it as a dialog card with Claude's own options
+  ([ADR 31](0031-dialogs-covering-the-input-box.md)). A confirmation line counts only when
+  it sits under the command's own echo; an earlier switch's line on screen used to be
+  reported as this one's success.
+- `/effort` now saves per model, under `modelSettings.<model id>.effortLevel` in
+  `~/.claude/settings.json` (lab: `/effort low` on Haiku wrote `claude-haiku-4-5`). A
+  switch inside a running session keeps the session's effort: a Fable session at xhigh,
+  switched to Opus 5.5, still read `Opus 5.5 • xhigh`.
+- The `/model` picker also offers `s` to use a model for this session only. Portkey's
+  arg-form switch still saves the global default.

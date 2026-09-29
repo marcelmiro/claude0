@@ -40,7 +40,7 @@ import { buildBaseName } from "./notifications";
 import { slugify } from "./names";
 import { parseBackgroundTasks, liveScripts, type BackgroundTask } from "./background-tasks";
 import { decideQuestion, declineQuestion, buildAnswersMap } from "./approval";
-import { parkedJobSessions } from "./session-state";
+import { nativeStatus, parkedJobSessions } from "./session-state";
 import { jsonlLines, type PendingQuestion, type PendingToolCall } from "./jsonl-reader";
 import type { QuestionAnswer, RestoreState, ToolResultSummary, TranscriptBlock, TranscriptTurn } from "../types";
 
@@ -202,7 +202,7 @@ export async function readPaneStatusline(paneId: string, capture?: string): Prom
 /** Outcome of a send; `reason` is set only on rejection (nothing was sent). */
 export type SendResult = {
   ok: boolean;
-  reason?: "no-pane" | "no-question" | "stale-question" | "not-presented" | "not-held" | "no-prompt" | "no-session" | "rewind-unavailable" | "rewind-mismatch" | "rewind-mode" | "bad-image" | "bad-selection" | "no-confirm" | "no-repo" | "no-transcript" | "resume-failed" | "not-found" | "shell-draft" | "shell-clear-failed" | "draft-stash-failed" | "clear-failed" | "notification-clear-failed" | "agent-list-focused" | "draft-present" | "draft-clear-failed";
+  reason?: "no-pane" | "no-question" | "stale-question" | "not-presented" | "not-held" | "no-prompt" | "no-session" | "rewind-unavailable" | "rewind-mismatch" | "rewind-mode" | "bad-image" | "bad-selection" | "no-confirm" | "no-repo" | "no-transcript" | "resume-failed" | "not-found" | "shell-draft" | "shell-clear-failed" | "draft-stash-failed" | "clear-failed" | "notification-clear-failed" | "agent-list-focused" | "draft-present" | "draft-clear-failed" | "no-input-box" | "no-dialog" | "stale-dialog";
   /** Fresh session id, set by createSession to the dictated id. */
   sessionId?: string;
 };
@@ -1548,6 +1548,10 @@ async function prepareInput(
   sessionId: string,
   paneId: string,
 ): Promise<{ ok: true; draft: DraftAction } | { ok: false; reason: SendResult["reason"] }> {
+  // A dialog REPLACES the input box (model-switch confirm, /model picker, permission
+  // prompt). Every key below would land in it: Up/Down move its cursor, a digit in the
+  // message picks an option, Enter confirms. Refuse before sending anything.
+  if (inputBoxRow((await capturePane(paneId)).split("\n")) === -1) return { ok: false, reason: "no-input-box" };
   // Focus parked in the agent list (a Mac-side ↓) would take every key below — `x` included.
   if (!(await releaseAgentList(paneId))) return { ok: false, reason: "agent-list-focused" };
   // Notification rows eat every key below — dismiss them before any input choreography.
@@ -1643,27 +1647,169 @@ export async function setSessionModelEffort(
   sessionId: string,
   kind: "model" | "effort",
   value: string,
-): Promise<SendResult & { line?: string }> {
+): Promise<SendResult & { line?: string; dialog?: boolean }> {
   const paneId = await resolveSessionPane(sessionId);
   if (!paneId) return { ok: false, reason: "no-pane" };
   const input = await prepareInput(sessionId, paneId);
   if (!input.ok) return input;
-  for (const step of buildSendPlan(`/${kind} ${value}`, [], input.draft)) {
+  const command = `/${kind} ${value}`;
+  for (const step of buildSendPlan(command, [], input.draft)) {
     // Same abort-on-failed-stash as sendMessage: never type into a remnant draft.
     if (!(await runSendStep(paneId, step))) return { ok: false, reason: "draft-stash-failed" };
   }
   for (let i = 0; i < 12; i++) {
-    const line = extractConfirmation(await captureAfter(paneId, 200));
+    const capture = await captureAfter(paneId, 200);
+    // Switching model on a conversation with a warm cache opens a "Switch model?" confirm.
+    // Leave it to the phone's dialog card: timing out here left it up, and every later
+    // send typed into it.
+    if (parseDialog(capture)) return { ok: true, dialog: true };
+    const line = commandConfirmation(capture, command);
     if (line) return { ok: true, line };
   }
   return { ok: false, reason: "no-confirm" };
 }
 
 /**
+ * The confirmation printed under `command`'s echo (`❯ /model sonnet`), or null. An earlier
+ * switch's line can still be on screen; reading the whole capture reported it as this
+ * command's success while a dialog was up.
+ */
+export function commandConfirmation(capture: string, command: string): string | null {
+  const lines = capture.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i]!.trimEnd() === `❯ ${command}`) return extractConfirmation(lines.slice(i + 1).join("\n"));
+  }
+  return null;
+}
+
+/** A Claude Code dialog scraped off the pane: prose above its options, the options, and the cursor's option index (-1 when no option is selected). */
+export type PaneDialog = { text: string[]; options: string[]; cursor: number; hint?: string };
+
+const DIALOG_BORDER = /^\s*▔{3,}/;
+const CURSOR_ROW = /^(\s*)❯\s+(\d+\.\s+)?(\S.*)$/;
+const OPTION_ROW = /^(\s*(?:❯\s+)?)\d+\.\s+(.*)$/;
+
+/**
+ * A dialog's cursor row. At column 0 only a numbered one counts: echoed prompts are
+ * column-0 `❯` rows too, while AskUserQuestion's options are the only column-0 cursors.
+ */
+const isCursorRow = (l: string) => {
+  const m = l.match(CURSOR_ROW);
+  return !!m && (m[1] !== "" || !!m[2]) && !NOTIFICATION_ROW.test(l);
+};
+
+/**
+ * Parse the dialog covering the input box, or null when the box is on screen (no dialog)
+ * or no dialog border is found. The dialog starts under its `▔` border; the `─`-bordered
+ * kinds (permission prompt, AskUserQuestion, trust gate) start under the lowest rule with
+ * a cursor row below it. Options are the run of rows around the cursor row: numbered rows
+ * whose number sits in the cursor row's number column (deeper-indented description and
+ * wrap rows in between skipped), or for an unnumbered list (the trust gate) the rows
+ * aligned with the cursor row's label. Numbered prose above the list (a plan's steps, a
+ * command's lines) stays text.
+ */
+export function parseDialog(capture: string): PaneDialog | null {
+  const lines = capture.split("\n").map((l) => l.replace(/\s+$/, ""));
+  if (inputBoxRow(lines) !== -1) return null;
+  let last = lines.length - 1;
+  while (last >= 0 && !lines[last]!.trim()) last--;
+  let start = -1;
+  for (let i = last; i >= 0 && start < 0; i--) if (DIALOG_BORDER.test(lines[i]!)) start = i + 1;
+  if (start < 0) {
+    let lowestRule = -1;
+    for (let i = last; i >= 0 && start < 0; i--) {
+      if (!TOP_RULE.test(lines[i]!)) continue;
+      if (lowestRule < 0) lowestRule = i + 1; // a notice with no options starts here
+      if (lines.slice(i + 1, last + 1).some(isCursorRow)) start = i + 1;
+    }
+    if (start < 0) start = lowestRule;
+  }
+  if (start < 0) return null;
+  const region = lines.slice(start, last + 1);
+
+  let cursorRow = -1;
+  for (let i = region.length - 1; i >= 0 && cursorRow < 0; i--) if (isCursorRow(region[i]!)) cursorRow = i;
+  const rows: number[] = [];
+  const labels: string[] = [];
+  if (cursorRow >= 0) {
+    const m = region[cursorRow]!.match(CURSOR_ROW)!;
+    if (m[2]) {
+      const numCol = region[cursorRow]!.indexOf(m[2]);
+      const option = (l: string) => {
+        const o = l.match(OPTION_ROW);
+        return o && o[1]!.length === numCol ? o[2]! : null;
+      };
+      const within = (l: string) => /\S/.test(l) && l.search(/\S/) > numCol; // description / wrapped label
+      let a = cursorRow;
+      let b = cursorRow;
+      for (let i = cursorRow - 1; i >= 0 && (option(region[i]!) !== null || within(region[i]!)); i--) if (option(region[i]!) !== null) a = i;
+      for (let i = cursorRow + 1; i < region.length && (option(region[i]!) !== null || within(region[i]!)); i++) if (option(region[i]!) !== null) b = i;
+      for (let i = a; i <= b; i++) {
+        const label = option(region[i]!);
+        if (label !== null) (rows.push(i), labels.push(norm(label)));
+      }
+    } else {
+      const col = region[cursorRow]!.indexOf(m[3]!);
+      const sibling = (l: string | undefined) =>
+        !!l && l.length > col && /\S/.test(l[col]!) && !/\S/.test(l.slice(0, col).replace("❯", ""));
+      let a = cursorRow;
+      let b = cursorRow;
+      while (sibling(region[a - 1])) a--;
+      while (sibling(region[b + 1])) b++;
+      for (let i = a; i <= b; i++) (rows.push(i), labels.push(norm(region[i]!.slice(col))));
+    }
+  }
+  const tail = region[region.length - 1]!.trim();
+  const hint = (!rows.length || rows.at(-1)! < region.length - 1) && /Esc to |Enter to /.test(tail) ? tail : undefined;
+  const first = rows.length ? rows[0]! : region.length - (hint ? 1 : 0);
+  const text = region
+    .slice(0, first)
+    .filter((l) => l.trim() && !TOP_RULE.test(l))
+    .map((l) => l.trim())
+    .slice(-10);
+  if (!text.length && !labels.length) return null;
+  return { text, options: labels, cursor: rows.indexOf(cursorRow), hint };
+}
+
+/**
+ * Answer the dialog on a session's pane from the phone: pick `option` (pinned to the
+ * `label` the phone rendered, so a dialog that changed underneath is never confirmed),
+ * or `dismiss` it with Escape. Picks walk the cursor and re-read it before Enter: digits
+ * only work on numbered lists (the trust gate's aren't), and lists wrap, so the walk
+ * moves by the exact delta and verifies the landing row.
+ */
+export async function answerDialog(
+  sessionId: string,
+  choice: { option: number; label: string } | "dismiss",
+): Promise<SendResult> {
+  const paneId = await resolveSessionPane(sessionId);
+  if (!paneId) return { ok: false, reason: "no-pane" };
+  // Same gate as the card: a hidden input box alone also means boot or a /rewind picker.
+  if ((await nativeStatus(sessionId)) !== "waiting") return { ok: false, reason: "no-dialog" };
+  let dialog = parseDialog(await capturePane(paneId));
+  if (!dialog) return { ok: false, reason: "no-dialog" };
+  if (choice === "dismiss") {
+    await sendKey(paneId, "Escape");
+    return { ok: true };
+  }
+  if (dialog.cursor < 0 || dialog.options[choice.option] !== choice.label) return { ok: false, reason: "stale-dialog" };
+  const delta = choice.option - dialog.cursor;
+  for (let i = 0; i < Math.abs(delta); i++) {
+    await sendKey(paneId, delta > 0 ? "Down" : "Up");
+    await Bun.sleep(KEY_GAP);
+  }
+  dialog = parseDialog(await capturePane(paneId));
+  if (!dialog || dialog.cursor !== choice.option || dialog.options[choice.option] !== choice.label) {
+    return { ok: false, reason: "stale-dialog" };
+  }
+  await sendKey(paneId, "Enter");
+  return { ok: true };
+}
+
+/**
  * Whether the pane's prompt still holds unsubmitted input — used to confirm an image
- * message actually submitted. The live input is the LAST `❯` line in the capture; any
- * non-whitespace after the glyph means the Enter hasn't landed yet. (Submitted messages
- * also echo as `❯ …` lines higher up, hence "last".)
+ * message actually submitted. The live input is the framed `❯` row (`inputBoxRow`); any
+ * non-whitespace after the glyph means the Enter hasn't landed yet.
  *
  * While a message sits in Claude's input queue the empty prompt renders a placeholder
  * ("Press up to edit queued messages") — hint text, not a draft. Reading it as a draft
@@ -1684,10 +1830,16 @@ const QUEUED_PLACEHOLDER = "Press up to edit queued messages";
  * already-empty box and every send abort with draft-stash-failed. Real typed input
  * never renders dim, so dim-vs-not is the discriminator. Dim state carries across
  * newlines (a wrapped span doesn't re-emit its SGR on the continuation row).
+ *
+ * Claude draws its cursor as a reverse-video cell (SGR 7). In an empty box that cell sits
+ * on the ghost's first char and is NOT dim — `❯ ESC[7mP ESC[0;2mress up…` read as the
+ * draft "P". A reverse cell followed directly by dim text is part of the ghost.
  */
 export function flattenStyled(styled: string, dropDim: boolean): string {
   let out = "";
   let dim = false;
+  let reverse = false;
+  let held = ""; // the reverse cell, until the next char shows whether it starts a ghost
   for (let i = 0; i < styled.length; i++) {
     const ch = styled[i]!;
     if (ch === "\x1b") {
@@ -1697,9 +1849,11 @@ export function flattenStyled(styled: string, dropDim: boolean): string {
         const params = sgr[1]!.split(";");
         for (let j = 0; j < params.length; j++) {
           const p = params[j]!;
-          if (p === "" || p === "0") dim = false;
+          if (p === "" || p === "0") dim = reverse = false;
           else if (p === "2") dim = true;
           else if (p === "22") dim = false; // "normal intensity" — ends dim without a full reset
+          else if (p === "7") reverse = true;
+          else if (p === "27") reverse = false;
           // Extended color: 38/48 consume sub-params (5;n or 2;r;g;b). Without
           // skipping them, the "2" in a truecolor sequence reads as SGR dim.
           else if (p === "38" || p === "48") j += params[j + 1] === "2" ? 4 : params[j + 1] === "5" ? 2 : 0;
@@ -1712,9 +1866,18 @@ export function flattenStyled(styled: string, dropDim: boolean): string {
       if (other) i += other[0].length - 1;
       continue;
     }
-    if (ch === "\n" || !dropDim || !dim) out += ch;
+    if (ch === "\n") {
+      out += held + ch;
+      held = "";
+    } else if (!dropDim) out += ch;
+    else if (dim) held = "";
+    else {
+      out += held;
+      held = reverse ? ch : "";
+      if (!reverse) out += ch;
+    }
   }
-  return out;
+  return out + held;
 }
 
 /** The pane's typed-input view: styled capture with ghost (dim) text dropped. */
@@ -1783,36 +1946,50 @@ async function clearNotificationRows(paneId: string): Promise<boolean> {
   return !NOTIFICATION_ROW.test(cap);
 }
 
-export function inputPending(capture: string): boolean {
-  const lines = capture.split("\n");
-  for (let i = lines.length - 1; i >= 0; i--) {
-    if (NOTIFICATION_ROW.test(lines[i]!)) continue;
-    const m = lines[i]!.match(/^❯\s?(.*)$/);
-    if (m) {
-      const input = m[1]!.trim();
-      return input.length > 0 && input !== QUEUED_PLACEHOLDER;
+// Input-box borders. The top one may carry a label (`─── History 2/3 ───` while recalling
+// history); the bottom one is a bare rule, so a draft's own box-drawing row can't end it.
+const TOP_RULE = /^─{2,}/;
+const BOTTOM_RULE = /^─{3,}\s*$/;
+
+/**
+ * The live input box's prompt row (`❯`, or `!` in shell mode): the one prompt-glyph row
+ * with a rule directly above it and a rule below. "The last `❯` row" is not enough — a
+ * dialog replaces the box, and then the last `❯` row is an echoed prompt or a dialog
+ * option (AskUserQuestion's "Chat about this" even sits right under a rule). -1 when no
+ * box is on screen.
+ */
+export function inputBoxRow(lines: string[]): number {
+  for (let i = lines.length - 1; i > 0; i--) {
+    if (!/^[❯!]/.test(lines[i]!) || NOTIFICATION_ROW.test(lines[i]!)) continue;
+    if (!TOP_RULE.test(lines[i - 1]!)) continue;
+    for (let j = i + 1; j < lines.length; j++) {
+      if (BOTTOM_RULE.test(lines[j]!)) return i;
+      if (/^[❯!]/.test(lines[j]!)) break;
     }
   }
-  return false;
+  return -1;
+}
+
+export function inputPending(capture: string): boolean {
+  const lines = capture.split("\n");
+  const m = lines[inputBoxRow(lines)]?.match(/^❯\s?(.*)$/);
+  if (!m) return false; // no box, or a shell-mode box (shellModeInput's job)
+  const input = m[1]!.trim();
+  return input.length > 0 && input !== QUEUED_PLACEHOLDER;
 }
 
 /**
- * The live input box's full text: the last `❯` row plus its wrapped/continuation rows
- * down to the box's bottom rule, whitespace-collapsed. Only meaningful when
- * `inputPending` is true. Without a bottom rule it runs to the end of the capture, so
- * the statusline rides along and the text matches nothing — the safe direction.
+ * The live input box's full text: its `❯` row plus wrapped/continuation rows down to the
+ * bottom rule, whitespace-collapsed. Only meaningful when `inputPending` is true.
  */
 export function draftText(capture: string): string {
   const lines = capture.split("\n");
-  for (let i = lines.length - 1; i >= 0; i--) {
-    if (NOTIFICATION_ROW.test(lines[i]!)) continue;
-    const m = lines[i]!.match(/^❯\s?(.*)$/);
-    if (!m) continue;
-    const rows = [m[1]!];
-    for (let j = i + 1; j < lines.length && !/^─+\s*$/.test(lines[j]!); j++) rows.push(lines[j]!);
-    return norm(rows.join(" "));
-  }
-  return "";
+  const i = inputBoxRow(lines);
+  const m = lines[i]?.match(/^❯\s?(.*)$/);
+  if (!m) return "";
+  const rows = [m[1]!];
+  for (let j = i + 1; j < lines.length && !BOTTOM_RULE.test(lines[j]!); j++) rows.push(lines[j]!);
+  return norm(rows.join(" "));
 }
 
 /** Below this many non-space chars a draft is too generic to call a leftover. */

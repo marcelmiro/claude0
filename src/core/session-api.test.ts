@@ -29,6 +29,7 @@ import {
   composeMessageSteps,
   buildSendPlan,
   inputPending,
+  inputBoxRow,
   draftText,
   isSubmittedText,
   trustCursor,
@@ -49,6 +50,8 @@ import {
   modeDowns,
   parseStatusline,
   extractConfirmation,
+  commandConfirmation,
+  parseDialog,
   isModelArg,
   isEffortArg,
   MODEL_ARGS,
@@ -569,13 +572,12 @@ test("isSubmittedText: a short draft is never a leftover, even when it prefixes 
 // --- inputPending (submit-verification for image messages) ---------------------
 
 test("inputPending: true while the prompt still holds the unsent message", () => {
-  const cap = ["⏺ earlier reply", "❯ [Image #1] what color", "────", "  0/1000k (0%)"].join("\n");
+  const cap = ["⏺ earlier reply", "────", "❯ [Image #1] what color", "────", "  0/1000k (0%)"].join("\n");
   expect(inputPending(cap)).toBe(true);
 });
 
-test("inputPending: false once the input cleared (last ❯ line empty)", () => {
-  // An earlier ❯ echo of the submitted message must NOT count — only the LAST ❯ line does.
-  const cap = ["❯ [Image #1] what color", "  ⎿ [Image #1]", "⏺ Purple.", "❯ ", "────"].join("\n");
+test("inputPending: false once the input cleared (an earlier ❯ echo is not the box)", () => {
+  const cap = ["❯ [Image #1] what color", "  ⎿ [Image #1]", "⏺ Purple.", "────", "❯ ", "────"].join("\n");
   expect(inputPending(cap)).toBe(false);
 });
 
@@ -1171,4 +1173,133 @@ test("trustCursor: reads the selected option, whichever it is", () => {
 
 test("trustCursor: null without the gate — a transcript ❯ line is never read as an option", () => {
   expect(trustCursor(["❯ yes, trust it", "⏺ ok", RULE, "❯ ", RULE].join("\n"))).toBeNull();
+});
+
+// --- dialogs covering the input box --------------------------------------------------
+// Lab captures (Claude Code 2.1.284): switching model on a warm conversation opens a
+// "Switch model?" confirm in place of the input box. The last `❯` row is then an echoed
+// prompt, which read as a draft: the kill walk ran into the dialog and every send aborted
+// with draft-stash-failed. With no ❯ row on screen at all, a send typed straight into it
+// (a "1" in the message confirmed the switch).
+
+test("inputBoxRow: the framed prompt row, incl. a labelled history rule and shell mode", () => {
+  expect(inputBoxRow(["⏺ ok", RULE, "❯ ", RULE, "  ⏸ manual mode on"])).toBe(2);
+  expect(inputBoxRow(["⏺ ok", "─── History 2/3 " + "─".repeat(30), "❯ /model sonnet", RULE])).toBe(2);
+  expect(inputBoxRow([RULE, "! ", RULE, "  ! for shell mode"])).toBe(1);
+  expect(inputBoxRow([RULE, "❯ first row", "  second row", RULE])).toBe(1);
+});
+
+test("model-switch dialog: no input box, so the echoed prompt is not a draft", () => {
+  const cap = fixture("viewport/model-switch-dialog.plain.txt");
+  expect(cap).toContain("❯ Reply with just the word ok.");
+  expect(inputBoxRow(cap.split("\n"))).toBe(-1);
+  expect(inputPending(cap)).toBe(false);
+  expect(draftText(cap)).toBe("");
+});
+
+test("inputBoxRow: AskUserQuestion's 'Chat about this' row sits under a rule but isn't the box", () => {
+  const cap = fixture("viewport/ask-user-question.plain.txt")
+    .replace("❯ 1. Red", "  1. Red")
+    .replace("  5. Chat about this", "❯ 5. Chat about this");
+  expect(cap).toContain("❯ 5. Chat about this");
+  expect(inputBoxRow(cap.split("\n"))).toBe(-1);
+});
+
+test("flattenStyled: the cursor cell on a queued placeholder's first char is ghost, not a draft", () => {
+  // Real row: Claude's reverse-video cursor sits on the dim placeholder's first letter,
+  // and used to survive the ghost drop as the draft "P".
+  const row = "\x1b[38;5;246m❯ \x1b[7m\x1b[39mP\x1b[0;2mress up to edit queued messages\x1b[0m";
+  expect(inputPending(flattenStyled([RULE, row, RULE].join("\n"), true))).toBe(false);
+});
+
+test("flattenStyled: a cursor at the end of or inside a real draft keeps every typed char", () => {
+  const end = [RULE, "\x1b[39m❯ hello draft text\x1b[7m \x1b[0m", RULE].join("\n");
+  expect(draftText(flattenStyled(end, true))).toBe("hello draft text");
+  expect(flattenStyled("❯ hel\x1b[7ml\x1b[0mo", true)).toBe("❯ hello");
+});
+
+test("parseDialog: model-switch confirm", () => {
+  expect(parseDialog(fixture("viewport/model-switch-dialog.plain.txt"))).toEqual({
+    text: [
+      "Switch model?",
+      "Your next response will be slower and use more tokens",
+      "This conversation is cached for the current model. Switching to Sonnet 5.5 means the full history gets re-read on your next message.",
+    ],
+    options: ["Yes, switch to Sonnet 5.5", "No, go back"],
+    cursor: 0,
+  });
+});
+
+test("parseDialog: /model picker — cursor on the current model, key hint kept", () => {
+  const d = parseDialog(fixture("viewport/model-picker.plain.txt"))!;
+  expect(d.options).toHaveLength(5);
+  expect(d.options[4]).toBe("Haiku ✔ Haiku 4.5 · Fastest for quick answers");
+  expect(d.cursor).toBe(4);
+  expect(d.hint).toBe("Enter to set as default · s to use this session only · Esc to cancel");
+});
+
+test("parseDialog: tool permission prompt", () => {
+  const d = parseDialog(fixture("viewport/permission-prompt.plain.txt"))!;
+  expect(d.options).toEqual(["Yes", "Yes, and always allow access to scrapes/ from this project", "No"]);
+  expect(d.cursor).toBe(0);
+  expect(d.text).toContain("Do you want to proceed?");
+});
+
+test("parseDialog: unnumbered list (trust gate) — the rows aligned with the cursor row", () => {
+  const d = parseDialog(fixture("viewport/trust-gate.plain.txt"))!;
+  expect(d.options).toEqual(["No, exit", "Yes, I trust this folder"]);
+  expect(d.cursor).toBe(0);
+  expect(d.hint).toBe("Enter to confirm · Esc to cancel");
+});
+
+test("parseDialog: null while the input box is on screen", () => {
+  expect(parseDialog(["⏺ ok", RULE, "❯ ", RULE, "  ⏸ manual mode on"].join("\n"))).toBe(null);
+  expect(parseDialog(fixture("viewport/running.plain.txt"))).toBe(null);
+});
+
+test("commandConfirmation: an earlier switch's line on screen is not this command's", () => {
+  const cap = ["❯ /effort medium", "  ⎿  Set effort level to medium (saved as your default for new sessions)", "❯ /model sonnet"].join("\n");
+  expect(commandConfirmation(cap, "/model sonnet")).toBe(null);
+  const done = cap + "\n  ⎿  Set model to Sonnet 5.5 and saved as your default for new sessions";
+  expect(commandConfirmation(done, "/model sonnet")).toBe("Set model to Sonnet 5.5 and saved as your default for new sessions");
+});
+
+test("parseDialog: numbered prose above the options stays text (plan steps, command lines)", () => {
+  const cap = [
+    "❯ plan it",
+    RULE,
+    " Ready to code?",
+    " Here is Claude's plan:",
+    " 1. Edit a",
+    " 2. Edit b",
+    "",
+    " Would you like to proceed?",
+    " ❯ 1. Yes, auto-accept edits",
+    "   2. Yes, manually approve edits",
+    "   3. No, keep planning",
+  ].join("\n");
+  const d = parseDialog(cap)!;
+  expect(d.options).toEqual(["Yes, auto-accept edits", "Yes, manually approve edits", "No, keep planning"]);
+  expect(d.text).toContain("1. Edit a");
+});
+
+test("parseDialog: a tall prompt anchors on its own rule, however far above the options", () => {
+  const body = Array.from({ length: 50 }, (_, i) => `   ${i + 1} + line ${i + 1}`);
+  const cap = [RULE, " Edit file", ...body, " Do you want to make this edit?", " ❯ 1. Yes", "   2. No"].join("\n");
+  expect(parseDialog(cap)!.options).toEqual(["Yes", "No"]);
+});
+
+test("parseDialog: an echoed prompt is never a text-only notice's cursor", () => {
+  const cap = ["❯ my earlier prompt", "● reply", RULE, " File sync is offline", " Enter to continue"].join("\n");
+  expect(parseDialog(cap)).toEqual({ text: ["File sync is offline"], options: [], cursor: -1, hint: "Enter to continue" });
+});
+
+test("inputBoxRow: a two-dash labelled top rule; a draft's own box-drawing row doesn't end it", () => {
+  expect(inputBoxRow(["── History 2/3 " + "─".repeat(30), "❯ recalled", RULE])).toBe(1);
+  expect(draftText([RULE, "❯ hi", "  ────── x", "  more", RULE].join("\n"))).toBe("hi ────── x more");
+});
+
+test("commandConfirmation: another command's echo that merely starts the same doesn't count", () => {
+  const cap = ["❯ /model opus[1m]", "  ⎿  Set model to Opus 5.5 (1M context)", "❯ /model opu"].join("\n");
+  expect(commandConfirmation(cap, "/model opus")).toBe(null);
 });

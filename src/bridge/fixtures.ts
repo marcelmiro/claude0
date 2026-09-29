@@ -33,6 +33,21 @@ export const FIXTURE_SESSIONS = [
     inbox: { section: "needs-you", since: agoMs(2 * 60_000) },
   },
   {
+    id: "fix-dialog",
+    repo: "claude0",
+    branch: "main",
+    status: "waiting",
+    name: "Blockquote Copy",
+    label: "Blockquote Copy",
+    pending: "dialog",
+    unread: false,
+    messageCount: 32,
+    summary: "Tap a blockquote to copy it as markdown",
+    statusSource: "fixture",
+    modified: ago(4 * 60_000),
+    inbox: { section: "needs-you", since: agoMs(4 * 60_000) },
+  },
+  {
     id: "push-retry",
     repo: "claude0",
     branch: "push-retry-backoff",
@@ -472,7 +487,19 @@ export const FIXTURE_TRANSCRIPT = {
     ],
   },
   approval: null,
+  dialog: null,
   pendingTool: null,
+};
+
+// The model-switch confirm Claude Code shows on a warm conversation (lab capture, 2.1.284).
+const FIXTURE_DIALOG = {
+  text: [
+    "Switch model?",
+    "Your next response will be slower and use more tokens",
+    "This conversation is cached for the current model. Switching to Opus 5.5 (default) means the full history gets re-read on your next message.",
+  ],
+  options: ["Yes, switch to Opus 5.5 (default)", "No, go back"],
+  cursor: 0,
 };
 
 export const FIXTURE_REPOS = [
@@ -661,6 +688,7 @@ export function fixtureData(method: string, path: string, params?: URLSearchPara
   // others the composer (and, on a running session, the working indicator) stays visible.
   const tm = path.match(/^\/sessions\/([^/]+)\/transcript$/);
   if (method === "GET" && tm) {
+    if (tm[1] === "fix-dialog") return { ...FIXTURE_TRANSCRIPT, openQuestion: null, dialog: FIXTURE_DIALOG };
     return tm[1] === "fix-auth" ? FIXTURE_TRANSCRIPT : { ...FIXTURE_TRANSCRIPT, openQuestion: null };
   }
   if (method === "GET" && /^\/sessions\/[^/]+\/changes$/.test(path)) return FIXTURE_CHANGES;
@@ -673,7 +701,7 @@ export function fixtureData(method: string, path: string, params?: URLSearchPara
     method === "POST" &&
     // `archive` included: its real handler now writes the inbox store even for pane-less
     // ids (fixtures mode never populates discovery), which would pollute the real inbox.db.
-    /^\/sessions\/[^/]+\/(decision|message|answer|read|rewind|snooze|block|unpark|unarchive|archive)$/.test(path)
+    /^\/sessions\/[^/]+\/(decision|dialog|message|answer|read|rewind|snooze|block|unpark|unarchive|archive)$/.test(path)
   ) {
     return { ok: true };
   }

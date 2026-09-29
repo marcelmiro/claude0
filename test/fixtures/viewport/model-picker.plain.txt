@@ -1,0 +1,50 @@
+
+ ▐▛███▛█   Claude Code v2.1.284
+▝▜██████▀  Haiku 4.5 · Claude Max
+ ▝▝   ▝▝   /home/marcel/dev/lab
+
+
+❯ Reply with just the word ok.
+
+● ok
+
+✻ Crunched for 1s · done 10:13 AM
+
+❯ /model sonnet
+  ⎿  Kept model as Haiku 4.5
+
+❯ /model sonnet
+  ⎿  Set model to Sonnet 5.5 and saved as your default for new sessions
+
+❯ /model haiku
+  ⎿  Set model to Haiku 4.5 and saved as your default for new sessions
+
+❯ Reply with just the word ok.
+
+● ok
+
+✻ Sautéed for 1s · done 10:16 AM
+
+❯ /model sonnet
+  ⎿  Kept model as Haiku 4.5
+
+❯ /effort low
+  ⎿  Set effort level to low (saved as your default for new sessions): Quick, straightforward implementation with minimal overhead
+
+
+
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+   Select model
+   Switch between Claude models. Your pick becomes the default for new sessions. For other/previous model names, specify with --model.
+
+     1. Default (recommended)  Opus 5.5 · Best for everyday, complex tasks
+     2. Opus                   Opus 5.5 · Best for everyday, complex tasks
+     3. Fable                  Fable 5.1 · Most capable for your hardest and longest-running tasks
+     4. Sonnet                 Sonnet 5.5 · Efficient for routine tasks
+   ❯ 5. Haiku ✔                Haiku 4.5 · Fastest for quick answers
+
+   ○ Effort not supported for Haiku
+
+   Use /fast to turn on Fast mode (Opus 5.5).
+
+   Enter to set as default · s to use this session only · Esc to cancel

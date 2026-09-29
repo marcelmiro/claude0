@@ -249,6 +249,11 @@ const deciding = signal(null);
 // arrived and its card must show. Cleared on reconcile, on failure, or by the
 // post-settle verify timer in QuestionCard. null = off.
 const decidingQuestion = signal(null);
+// Optimistic dialog answer: {id, sig} of the dialog card just tapped. Pinned to the
+// dialog's content like decidingQuestion to its toolUseId: a pick in one dialog can open
+// the next at once (a /model pick → the switch confirm), whose card must show. null = off.
+const decidingDialog = signal(null);
+const dialogSig = (d) => d.text.join("\n") + "\n" + d.options.join("\n");
 
 let es = null;
 
@@ -416,6 +421,7 @@ async function refreshPreferences() {
 // lastPromptAt, rev) is kept from the copy we already hold.
 const VOLATILE_FIELDS = [
   "approval",
+  "dialog",
   "pendingTool",
   "openQuestion",
   "openQuestions",
@@ -500,6 +506,8 @@ function applyTranscript(id, data) {
   }
   // Retire the optimistic answer once ITS question left the payload — either resolved
   // (no question) or replaced (different toolUseId, whose card must show immediately).
+  const dd = decidingDialog.value;
+  if (dd && dd.id === id && !(data.dialog && dialogSig(data.dialog) === dd.sig)) decidingDialog.value = null;
   const dq = decidingQuestion.value;
   if (dq && dq.id === id) {
     const openId = data.pendingTool && data.pendingTool.toolUseId;
@@ -859,6 +867,14 @@ function notify(msg) {
   if (msg) noticeTimer = setTimeout(() => (notice.value = ""), 4500);
 }
 
+// Rejection reasons worth words over the raw code.
+const REASON_TEXT = {
+  "no-input-box": "a dialog is open on the terminal",
+  "stale-dialog": "the dialog changed — try again",
+  "no-dialog": "the dialog is already gone",
+};
+const reasonText = (data, status) => REASON_TEXT[data.reason] || data.reason || status;
+
 // Send an action and report ok/failure to the caller — the bridge gates
 // answer/decision/message server-side and returns {ok,reason}. Failures flash; success
 // is silent (the caller updates the UI optimistically).
@@ -879,7 +895,7 @@ async function action(path, body) {
       refreshSessionsSoon();
       return true;
     }
-    flashError(`✗ ${data.reason || r.status}`);
+    flashError(`✗ ${reasonText(data, r.status)}`);
     return false;
   } catch {
     flashError("✗ bridge unreachable");
@@ -906,7 +922,7 @@ async function actionJson(path, body) {
       refreshSessionsSoon();
       return data;
     }
-    flashError(`✗ ${data.reason || r.status}`);
+    flashError(`✗ ${reasonText(data, r.status)}`);
     return null;
   } catch {
     flashError("✗ bridge unreachable");
@@ -928,7 +944,7 @@ async function actionForm(path, formData) {
       refreshSessionsSoon();
       return true;
     }
-    flashError(`✗ ${data.reason || r.status}`);
+    flashError(`✗ ${reasonText(data, r.status)}`);
     return false;
   } catch {
     flashError("✗ bridge unreachable");
@@ -1790,7 +1806,7 @@ function List() {
         </span>
         ${pending &&
         html`<span class="pendingbadge ${pending === "question" ? "q" : "a"}"
-          >${pending === "question" ? "answer" : "approve"}</span
+          >${pending === "question" ? "answer" : pending === "dialog" ? "respond" : "approve"}</span
         >`}
         <span class="age">${formatTimeAgo(new Date(ib.since).toISOString(), { now: tick.value })}</span>
       </button>`;
@@ -2765,6 +2781,40 @@ function ApprovalCard({ approval }) {
   `;
 }
 
+// A Claude Code dialog covering the input box (e.g. the "Switch model?" confirm), scraped
+// from the pane. Tapping an option walks the pane's cursor there and confirms; the label
+// rides along so the bridge refuses if the dialog changed underneath. Optimistic like
+// ApprovalCard: the card clears on tap, reverts on failure.
+function DialogCard({ dialog }) {
+  function post(body) {
+    const pin = { id: selectedId.value, sig: dialogSig(dialog) };
+    decidingDialog.value = pin;
+    const clear = () => {
+      if (decidingDialog.value === pin) decidingDialog.value = null;
+    };
+    action(`/sessions/${encodeURIComponent(pin.id)}/dialog`, body).then((ok) => ok || clear());
+    setTimeout(clear, 5000);
+  }
+  const [title, ...rest] = dialog.text;
+  return html`
+    <div class="card alert qcard">
+      <div class="who">dialog on the terminal</div>
+      ${title && html`<div class="qtext">${title}</div>`}
+      ${rest.map((line) => html`<div class="opt-desc">${line}</div>`)}
+      <div class="opts">
+        ${dialog.options.map(
+          (label, i) => html`
+            <button class="opt" key=${i} onClick=${() => post({ option: i, label })}>
+              <span class="opt-label">${label}</span>
+            </button>
+          `,
+        )}
+      </div>
+      <button class="chat-about" onClick=${() => post({ dismiss: true })}>Dismiss (Esc)</button>
+    </div>
+  `;
+}
+
 // In-flight tool with NO decision required (e.g. auto-approved) whose tool_use record
 // hasn't reached the thread yet — a live chip standing in until ToolChip takes over in
 // place. Read-only info, never Allow/Deny. Its timer counts from when this client first
@@ -3509,10 +3559,15 @@ function Detail() {
     (decidingQuestion.value && decidingQuestion.value.id === selectedId.value);
   const questions = optimisticHide ? null : rawQuestions;
   const approval = optimisticHide ? null : t && t.approval;
-  // While blocked on a question/approval, the structured answer UI takes the dock —
+  const dd = decidingDialog.value;
+  const dialog =
+    optimisticHide || !t || !t.dialog || (dd && dd.id === selectedId.value && dd.sig === dialogSig(t.dialog))
+      ? null
+      : t.dialog;
+  // While blocked on a question/approval/dialog, the structured answer UI takes the dock —
   // otherwise it's the free-text composer (this is the "replace the message box with
   // the question/answers" behavior).
-  const blocked = questions || approval;
+  const blocked = questions || approval || dialog;
   // The in-flight tool's own chip renders live once its tool_use record is in the thread;
   // until then a stand-in chip (RunningTool) holds its place at the bottom.
   const liveInThread =
@@ -3835,7 +3890,7 @@ function Detail() {
             </svg>
           </button>
         </div>
-        <div class=${"dock-inner" + (questions || approval ? " card" : "")}>
+        <div class=${"dock-inner" + (blocked ? " card" : "")}>
           ${archived
             ? session && (session.restorable === "yes" || session.restorable === "relocated")
               ? html`<div class="flash archived restore-row">
@@ -3905,7 +3960,9 @@ function Detail() {
             ? html`<${QuestionCard} questions=${questions} toolUseId=${t.pendingTool && t.pendingTool.toolUseId} />`
             : approval
               ? html`<${ApprovalCard} approval=${approval} />`
-              : html`<${Composer} disabled=${archived} status=${status} />`}
+              : dialog
+                ? html`<${DialogCard} dialog=${dialog} />`
+                : html`<${Composer} disabled=${archived} status=${status} />`}
         </div>
       </div>
     </div>
