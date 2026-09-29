@@ -46,6 +46,10 @@
   const css = document.createElement("style");
   css.textContent = `
     :root.iphone-pwa.blurlab-noclear { --ios-blur-clearance: 0px; }
+    /* black-translucent hands a standalone app a viewport one status bar shorter than
+       the screen, leaving dead space at the bottom; extend the document to fill it. */
+    :root.iphone-pwa.blurlab-translucent { height: calc(100% + env(safe-area-inset-top)); }
+    :root.iphone-pwa.blurlab-translucent #app { height: 100%; }
     .blurlab-nostrip1 .status-bar-background { display: none; }
     .bl-strip { position: fixed; top: 0; left: 0; right: 0; height: 11px; background-color: #101010;
       pointer-events: none; z-index: 2147483000; }
@@ -80,6 +84,7 @@
   document.head.appendChild(css);
   const root = document.documentElement;
   if (!on("clear16")) root.classList.add("blurlab-noclear");
+  if (lab === "translucent") root.classList.add("blurlab-translucent");
   if (!on("strip1")) root.classList.add("blurlab-nostrip1");
 
   // Strips go in before first paint (this script runs at the top of <body>): febbbi's
