@@ -44,6 +44,11 @@ test("busy/idle/waiting map to running/ready/waiting", async () => {
   expect(map.get("wait")).toBe("waiting");
 });
 
+test("shell (turn over, a background shell still running) maps to ready", async () => {
+  writeFile("4.json", { ...base, sessionId: "sh", status: "shell" });
+  expect((await loadNativeStatuses(dir)).get("sh")).toBe("ready");
+});
+
 test("dead pid excluded, live pid included", async () => {
   writeFile("dead.json", { ...base, sessionId: "dead", pid: 999999, status: "busy" });
   writeFile("live.json", { ...base, sessionId: "live", pid: process.pid, status: "busy" });

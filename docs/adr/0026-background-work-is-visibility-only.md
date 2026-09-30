@@ -136,3 +136,12 @@ Completed/killed scripts are deliberately absent: no artifact, no action.
   race (locks, retries) was rejected in favor of removing it structurally.
 - **In-memory caching** — only helps a process that outlives the probe, and none
   does; the TUI re-proved the same permanently-dead verdicts on every launch.
+
+## Addendum 2026-09-30: Claude's native `shell` status
+
+Claude Code's session status set is `busy | shell | idle | waiting` (read from its own
+source; present back to 2.1.263). `shell` means the turn is over while a background
+shell still runs: Claude's own agent list labels it "working", and treats it as idle for
+input. The native reader dropped the unknown value, so the event model's
+`UserPromptSubmit → running` latch showed a stopped session as running for as long as its
+shell lived. It maps to `ready`; the shell itself stays the ⏳ visibility mark.

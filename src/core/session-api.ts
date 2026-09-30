@@ -202,7 +202,7 @@ export async function readPaneStatusline(paneId: string, capture?: string): Prom
 /** Outcome of a send; `reason` is set only on rejection (nothing was sent). */
 export type SendResult = {
   ok: boolean;
-  reason?: "no-pane" | "no-question" | "stale-question" | "not-presented" | "not-held" | "no-prompt" | "no-session" | "rewind-unavailable" | "rewind-mismatch" | "rewind-mode" | "bad-image" | "bad-selection" | "no-confirm" | "no-repo" | "no-transcript" | "resume-failed" | "not-found" | "shell-draft" | "shell-clear-failed" | "draft-stash-failed" | "clear-failed" | "notification-clear-failed" | "agent-list-focused" | "draft-present" | "draft-clear-failed" | "no-input-box" | "no-dialog" | "stale-dialog";
+  reason?: "no-pane" | "no-question" | "stale-question" | "not-presented" | "not-held" | "no-prompt" | "no-session" | "rewind-unavailable" | "rewind-mismatch" | "rewind-mode" | "bad-image" | "bad-selection" | "no-confirm" | "no-repo" | "no-transcript" | "resume-failed" | "not-found" | "shell-draft" | "shell-clear-failed" | "draft-stash-failed" | "clear-failed" | "notification-clear-failed" | "agent-list-focused" | "draft-present" | "draft-clear-failed" | "no-input-box" | "no-dialog" | "stale-dialog" | "stash-occupied";
   /** Fresh session id, set by createSession to the dictated id. */
   sessionId?: string;
 };
@@ -499,6 +499,9 @@ export async function rewindSession(
   const input = await prepareInput(sessionId, paneId);
   if (!input.ok) return input;
   if (input.draft === "stash") return { ok: false, reason: "draft-present" };
+  // A completed rewind overwrites the input with the rewound prompt, and Claude's stash is
+  // lost with it (lab-verified).
+  if (stashPresent(await capturePane(paneId))) return { ok: false, reason: "stash-occupied" };
   if (input.draft === "discard" && !(await killInput(paneId))) return { ok: false, reason: "draft-clear-failed" };
   return rewindByPane(paneId, upCount, expectedText, mode);
 }
@@ -1407,15 +1410,14 @@ export function composeMessageSteps(text: string, imagePaths: string[] = []): Me
  */
 export type DraftAction = "none" | "stash" | "discard";
 
-/** One step in the full send plan — the message steps plus the draft stash/restore guard. */
+/** One step in the full send plan — the message steps plus the draft guard. */
 export type SendStep =
-  | { kind: "stash" } // cut a Mac-side draft into Claude's kill-ring (killInput) before sending
-  | { kind: "discard" } // cut a submitted-prompt leftover (killInput), never yanked back
+  | { kind: "stash" } // Claude's own Ctrl+S stash of a Mac-side draft; Claude restores it after our submit
+  | { kind: "discard" } // cut a submitted-prompt leftover (killInput), never brought back
   | { kind: "text"; text: string } // text-only: the proven coalescing-safe literal+Enter
   | { kind: "paste"; text: string } // bracketed-paste an image path → [Image #N]
   | { kind: "literal"; text: string } // type caption text literally
-  | { kind: "submit" } // verify-retry Enter after image paste(s)
-  | { kind: "restore" }; // after the prompt clears, paste the stashed draft back (C-y)
+  | { kind: "submit" }; // verify-retry Enter after image paste(s)
 
 /**
  * Pure builder for the complete tmux interaction of a send (extracted for testability,
@@ -1430,14 +1432,11 @@ export type SendStep =
  *
  * Draft guard: the Mac may be attached with a half-typed draft in the prompt. A bare send
  * types our message onto the END of that draft and submits BOTH as one turn. So when a
- * draft is present we wrap the body in `stash` (kill the whole draft into Claude's
- * kill-ring — see `killInput`) … `restore` (once our message clears the prompt, yank it
- * back with C-y) —
- * leaving it waiting, unsubmitted, for when the user returns to the Mac. Gated on a real
- * draft so we never yank stale kill-ring content into an otherwise-empty prompt. A
- * `discard` draft is cut without the restore: it is text Claude itself put back (a
- * /rewind or an interrupt revert), and stash/restore would carry it across every future
- * send.
+ * draft is present the body starts with `stash` (Claude's own Ctrl+S — see `stashInput`),
+ * and Claude puts the draft back into the input after our submit, leaving it waiting,
+ * unsubmitted, for when the user returns to the Mac. A `discard` draft is cut instead: it
+ * is text Claude itself put back (a /rewind or an interrupt revert), and a stash would
+ * carry it across every future send.
  */
 export function buildSendPlan(
   text: string,
@@ -1451,11 +1450,7 @@ export function buildSendPlan(
           s.kind === "enter" ? { kind: "submit" } : s,
         );
   if (draft === "discard") return [{ kind: "discard" }, ...body];
-  return [
-    ...(draft === "stash" ? [{ kind: "stash" } as const] : []),
-    ...body,
-    ...(draft === "stash" ? [{ kind: "restore" } as const] : []),
-  ];
+  return draft === "stash" ? [{ kind: "stash" }, ...body] : body;
 }
 
 /**
@@ -1464,33 +1459,71 @@ export function buildSendPlan(
  * start of its row, and repeated C-u walks upward — rows BELOW the cursor and wrapped
  * continuation rows survive a single C-u. A reverted prompt (see `clearPaneInput`) leaves
  * the cursor mid-text, which is how sends used to splice the message into leftover draft
- * rows. So: walk to the bottom first — Down is history-next, a no-op at the newest entry
- * (Up must NEVER be sent here: at the top row it RECALLS history and replaces the input)
- * — then C-e to the row end, then kill row by row until the input reads empty.
+ * rows. So: walk to the last row first, then C-e to the row end, then kill row by row until
+ * the input reads empty. The walk is one Down at a time and must not leave the input: from
+ * the last row Down selects the footer's background-task item, and a second Down opens the
+ * task manager over the box. It stops on the last row when the cursor cell shows; Claude
+ * hides that cell while its terminal is unfocused, so otherwise it stops when focus has left
+ * the input and hands it back with Up, which lands on the last row (lab-verified). Up must
+ * NEVER be sent from inside the input: at the top row it RECALLS history and replaces it.
  * Consecutive kills accumulate into ONE kill-ring chain, so a later single C-y restores
  * the whole draft, newlines included — but ANY motion (or typing) between kills RESETS
  * the chain (verified: the earlier chunk drops out of the yank). Hence the strict shape
  * here: all motions first, then only kills — never retry with a second walk. The Downs
  * are gapped (100ms — the input editor registered arrows reliably at 60-80ms in the same
- * lab; the picker's 250ms KEY_GAP floor is a different widget) so a dropped Down can't
- * strand rows below the cursor. Returns whether the input actually read empty; callers
- * fail loud on false — proceeding would splice the message into the remnant.
+ * lab; the picker's 250ms KEY_GAP floor is a different widget). Returns whether an empty
+ * input box is on screen; callers fail loud on false — proceeding would splice the message
+ * into the remnant, or type it into whatever covers the box.
  * All verified against a live pane (ADR 9).
  */
 async function killInput(paneId: string): Promise<boolean> {
   for (let i = 0; i < 12; i++) {
+    const cursor = inputCursor(await capturePane(paneId, { escapes: true }));
+    if (cursor && cursor.row >= cursor.rows - 1) break;
     await sendKey(paneId, "Down");
     await Bun.sleep(100);
+    const styled = await capturePane(paneId, { escapes: true });
+    if (agentListFocused(flattenStyled(styled, false)) || footerFocused(styled)) {
+      if (!(await releaseAgentList(paneId))) return false;
+      break;
+    }
   }
-  // Down past the last row walks into the background-agent list when one is shown.
-  if (!(await releaseAgentList(paneId))) return false;
   await sendKey(paneId, "C-e");
   await Bun.sleep(KEY_GAP);
   for (let i = 0; i < 12 && inputPending(await captureTyped(paneId)); i++) {
     await sendKey(paneId, "C-u");
     await Bun.sleep(KEY_GAP);
   }
-  return !inputPending(await captureTyped(paneId));
+  const typed = await captureTyped(paneId);
+  return inputBoxRow(typed.split("\n")) !== -1 && !inputPending(typed);
+}
+
+/**
+ * Stash the pane's draft with Claude's own Ctrl+S (`chat:stash`): the whole input from any
+ * cursor position, pasted images included, and Claude puts it back into the input after the
+ * next submit — a message, a slash command, a send queued mid-turn (lab-verified). The stash
+ * has one slot, so callers check `stashPresent` first: a second Ctrl+S pushes the first
+ * stash out to the kill ring. Returns whether the box emptied under the stash marker.
+ */
+async function stashInput(paneId: string): Promise<boolean> {
+  await sendKey(paneId, "C-s");
+  for (let i = 0; i < 6; i++) {
+    await Bun.sleep(KEY_GAP);
+    const styled = await capturePane(paneId, { escapes: true });
+    const typed = flattenStyled(styled, true);
+    if (inputBoxRow(typed.split("\n")) !== -1 && !inputPending(typed) && stashPresent(flattenStyled(styled, false))) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether Claude holds a stashed draft: its `› stashed` marker in the slot above the input
+ * box, where it shares the row with other hints (`Ctrl+Y to paste deleted text · › stashed`).
+ */
+export function stashPresent(capture: string): boolean {
+  const lines = capture.split("\n");
+  const box = inputBoxRow(lines);
+  return box >= 2 && lines[box - 2]!.includes("› stashed");
 }
 
 /**
@@ -1501,8 +1534,8 @@ async function killInput(paneId: string): Promise<boolean> {
 async function runSendStep(paneId: string, step: SendStep): Promise<boolean> {
   switch (step.kind) {
     case "stash":
+      return stashInput(paneId);
     case "discard":
-      // Whole draft into the kill-ring; for `stash`, C-y (restore) yanks it back.
       return killInput(paneId);
     case "text":
       await sendTextAndEnter(paneId, step.text);
@@ -1525,15 +1558,6 @@ async function runSendStep(paneId: string, step: SendStep): Promise<boolean> {
         await Bun.sleep(450);
         if (!inputPending(await captureTyped(paneId))) break;
       }
-      return true;
-    case "restore":
-      // Yank ONLY after our message clears the prompt — a premature C-y would paste the
-      // draft into the not-yet-submitted input and ride along with our message.
-      for (let i = 0; i < 8; i++) {
-        if (!inputPending(await captureTyped(paneId))) break;
-        await Bun.sleep(KEY_GAP);
-      }
-      await sendKey(paneId, "C-y"); // Claude's yank: re-adds the draft cut by the stash kills
       return true;
   }
 }
@@ -1579,7 +1603,11 @@ async function prepareInput(
   const typed = flattenStyled(styled, true);
   if (!inputPending(typed)) return { ok: true, draft: "none" };
   const prompts = await submittedPrompts(sessionId);
-  return { ok: true, draft: isSubmittedText(draftText(typed), prompts) ? "discard" : "stash" };
+  if (isSubmittedText(draftText(typed), prompts)) return { ok: true, draft: "discard" };
+  // Claude's stash has one slot: stashing this draft would push the user's own stash out to
+  // the kill ring, and cutting it would merge it into the stash Claude pops after our submit.
+  if (stashPresent(flattenStyled(styled, false))) return { ok: false, reason: "stash-occupied" };
+  return { ok: true, draft: "stash" };
 }
 
 /**
@@ -1656,15 +1684,10 @@ export async function setSessionModelEffort(
   if (!input.ok) return input;
   const command = `/${kind} ${value}`;
   const staleToast = toastConfirmation(await capturePane(paneId));
-  // The draft's yank waits until the switch settles: a confirm replaces the prompt right
-  // after the command's Enter, and a yank into it leaves the draft cut.
-  const plan = buildSendPlan(command, [], input.draft);
-  const restore = plan.at(-1)?.kind === "restore" ? plan.pop() : undefined;
-  for (const step of plan) {
+  for (const step of buildSendPlan(command, [], input.draft)) {
     // Same abort-on-failed-stash as sendMessage: never type into a remnant draft.
     if (!(await runSendStep(paneId, step))) return { ok: false, reason: "draft-stash-failed" };
   }
-  let result: SendResult & { line?: string; dialog?: boolean } = { ok: false, reason: "no-confirm" };
   let accepted = false;
   for (let i = 0; i < 12; i++) {
     const capture = await captureAfter(paneId, 200);
@@ -1673,23 +1696,15 @@ export async function setSessionModelEffort(
       // A switch on a warm cache asks "Switch model?" first. The phone tap already chose, as
       // a pick in Claude's own /model picker does without asking; the phone's sheet states
       // the cost instead. Any other dialog goes to the phone's dialog card.
-      if (kind !== "model" || !isModelSwitchConfirm(dialog)) {
-        result = { ok: true, dialog: true };
-        break;
-      }
+      if (kind !== "model" || !isModelSwitchConfirm(dialog)) return { ok: true, dialog: true };
       if (!accepted) await sendKey(paneId, "Enter");
       accepted = true;
       continue;
     }
     const line = commandConfirmation(capture, command, staleToast);
-    if (line) {
-      result = { ok: true, line };
-      break;
-    }
+    if (line) return { ok: true, line };
   }
-  // Under a dialog left for the card the draft stays in the kill ring (C-y at the Mac).
-  if (restore && !result.dialog) await runSendStep(paneId, restore);
-  return result;
+  return { ok: false, reason: "no-confirm" };
 }
 
 /**
@@ -1893,9 +1908,46 @@ const QUEUED_PLACEHOLDER = "Press up to edit queued messages";
  */
 export function flattenStyled(styled: string, dropDim: boolean): string {
   let out = "";
+  let held = ""; // the reverse cell, until the next char shows whether it starts a ghost
+  eachStyledChar(styled, (ch, dim, reverse) => {
+    if (ch === "\n") {
+      out += held + ch;
+      held = "";
+    } else if (!dropDim) out += ch;
+    else if (dim) held = "";
+    else {
+      out += held;
+      held = reverse ? ch : "";
+      if (!reverse) out += ch;
+    }
+  });
+  return out + held;
+}
+
+/**
+ * The live input's cursor: the display row of Claude's reverse-video cursor cell within the
+ * input box (0 = the `❯` row) and the box's row count. Null when no box is on screen or no
+ * cursor cell sits inside it.
+ */
+export function inputCursor(styled: string): { row: number; rows: number } | null {
+  const lines = flattenStyled(styled, false).split("\n");
+  const box = inputBoxRow(lines);
+  if (box === -1) return null;
+  let end = box + 1;
+  while (end < lines.length && !BOTTOM_RULE.test(lines[end]!)) end++;
+  let line = 0;
+  let at = -1;
+  eachStyledChar(styled, (ch, _dim, reverse) => {
+    if (ch === "\n") line++;
+    else if (reverse && at === -1 && line >= box && line < end) at = line;
+  });
+  return at === -1 ? null : { row: at - box, rows: end - box };
+}
+
+/** Walk a styled capture's visible characters (newlines included) with the SGR dim/reverse state each is drawn in. */
+function eachStyledChar(styled: string, visit: (ch: string, dim: boolean, reverse: boolean) => void): void {
   let dim = false;
   let reverse = false;
-  let held = ""; // the reverse cell, until the next char shows whether it starts a ghost
   for (let i = 0; i < styled.length; i++) {
     const ch = styled[i]!;
     if (ch === "\x1b") {
@@ -1922,18 +1974,8 @@ export function flattenStyled(styled: string, dropDim: boolean): string {
       if (other) i += other[0].length - 1;
       continue;
     }
-    if (ch === "\n") {
-      out += held + ch;
-      held = "";
-    } else if (!dropDim) out += ch;
-    else if (dim) held = "";
-    else {
-      out += held;
-      held = reverse ? ch : "";
-      if (!reverse) out += ch;
-    }
+    visit(ch, dim, reverse);
   }
-  return out + held;
 }
 
 /** The pane's typed-input view: styled capture with ghost (dim) text dropped. */
@@ -1970,19 +2012,45 @@ export function agentListFocused(capture: string): boolean {
 }
 
 /**
- * Hand focus back from the agent list to the input: `Up` from the list's top row returns
- * to the input with the cursor on its last row and the kill-ring chain intact
- * (lab-verified). One Up per re-capture — an extra Up in the input recalls history. Never
+ * Whether keyboard focus sits in the footer under the input box. `Down` from the input's
+ * last row selects its background-task item, drawn in reverse video like the input's own
+ * cursor cell (`1 shell`); there `Enter` opens the task and `x` stops it. `❯`-led rows
+ * below the box are other widgets (notification rows, the agent list) with their own
+ * handling, and a false positive here costs an `Up` into the input.
+ */
+export function footerFocused(styled: string): boolean {
+  const lines = flattenStyled(styled, false).split("\n");
+  const box = inputBoxRow(lines);
+  if (box === -1) return false;
+  let bottom = box + 1;
+  while (bottom < lines.length && !BOTTOM_RULE.test(lines[bottom]!)) bottom++;
+  let line = 0;
+  let found = false;
+  eachStyledChar(styled, (ch, _dim, reverse) => {
+    if (ch === "\n") line++;
+    else if (reverse && line > bottom && ch.trim() && !lines[line]!.startsWith("❯")) found = true;
+  });
+  return found;
+}
+
+/**
+ * Hand focus back from the agent list, or the footer's background-task item, to the input:
+ * `Up` from the list's top row (or the item) returns to the input with the cursor on its
+ * last row and the kill-ring chain intact (lab-verified). One Up per re-capture — an extra Up in the input recalls history. Never
  * Escape: from the list it interrupts a running turn and leaves focus where it was.
  * Returns whether focus is out.
  */
 async function releaseAgentList(paneId: string): Promise<boolean> {
+  const focused = async () => {
+    const styled = await capturePane(paneId, { escapes: true });
+    return agentListFocused(flattenStyled(styled, false)) || footerFocused(styled);
+  };
   for (let i = 0; i < 20; i++) {
-    if (!agentListFocused(await capturePane(paneId))) return true;
+    if (!(await focused())) return true;
     await sendKey(paneId, "Up");
     await Bun.sleep(KEY_GAP);
   }
-  return !agentListFocused(await capturePane(paneId));
+  return !(await focused());
 }
 
 /**

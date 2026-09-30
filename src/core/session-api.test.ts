@@ -53,6 +53,9 @@ import {
   commandConfirmation,
   liveDialog,
   isModelSwitchConfirm,
+  inputCursor,
+  footerFocused,
+  stashPresent,
   parseDialog,
   isModelArg,
   isEffortArg,
@@ -468,20 +471,16 @@ test("composeMessageSteps: whitespace-only caption is dropped", () => {
 
 // --- buildSendPlan (full tmux send sequence + draft-preserving guard) -----------
 // These lock down HOW we drive Claude Code's prompt over tmux: the keystroke ORDER
-// and, critically, that a Mac-side draft is cut (C-u, via the `stash` step) BEFORE our
-// message and yanked back (C-y, via `restore`) AFTER it — never combined into one turn,
-// and never touched when there's no draft to preserve.
+// and, critically, that a Mac-side draft is stashed (Claude's Ctrl+S, via the `stash`
+// step) BEFORE our message — never combined into one turn, and never touched when there's
+// no draft to preserve. Claude itself puts the stash back after the submit.
 
 test("buildSendPlan: text-only, no draft → just the coalescing-safe text step", () => {
   expect(buildSendPlan("hello", [], "none")).toEqual([{ kind: "text", text: "hello" }]);
 });
 
-test("buildSendPlan: text-only WITH draft → stash, text, restore (in that order)", () => {
-  expect(buildSendPlan("hello", [], "stash")).toEqual([
-    { kind: "stash" }, // C-u: cut the Mac draft first so it can't ride along
-    { kind: "text", text: "hello" },
-    { kind: "restore" }, // C-y: put the draft back after our message submits
-  ]);
+test("buildSendPlan: text-only WITH draft → stash, then text", () => {
+  expect(buildSendPlan("hello", [], "stash")).toEqual([{ kind: "stash" }, { kind: "text", text: "hello" }]);
 });
 
 test("buildSendPlan: image-only, no draft → paste then verify-retry submit", () => {
@@ -491,17 +490,16 @@ test("buildSendPlan: image-only, no draft → paste then verify-retry submit", (
   ]);
 });
 
-test("buildSendPlan: image + caption WITH draft → stash wraps paste/literal/submit, then restore", () => {
+test("buildSendPlan: image + caption WITH draft → stash, then paste/literal/submit", () => {
   expect(buildSendPlan("what is this", ["/u/a.png"], "stash")).toEqual([
     { kind: "stash" },
     { kind: "paste", text: "/u/a.png" },
     { kind: "literal", text: " what is this" },
     { kind: "submit" },
-    { kind: "restore" },
   ]);
 });
 
-test("buildSendPlan: draft guard is symmetric — stash is first iff restore is last", () => {
+test("buildSendPlan: a draft only prepends the stash — the body is exactly the no-draft plan", () => {
   for (const [text, imgs] of [
     ["hi", []],
     ["", ["/u/a.png"]],
@@ -509,12 +507,8 @@ test("buildSendPlan: draft guard is symmetric — stash is first iff restore is 
   ] as const) {
     const withDraft = buildSendPlan(text, [...imgs], "stash");
     const noDraft = buildSendPlan(text, [...imgs], "none");
-    // present together or not at all
-    expect(withDraft[0]).toEqual({ kind: "stash" });
-    expect(withDraft[withDraft.length - 1]).toEqual({ kind: "restore" });
-    expect(noDraft.some((s) => s.kind === "stash" || s.kind === "restore")).toBe(false);
-    // the body between the guards is exactly the no-draft plan
-    expect(withDraft.slice(1, -1)).toEqual(noDraft);
+    expect(withDraft).toEqual([{ kind: "stash" }, ...noDraft]);
+    expect(noDraft.some((s) => s.kind === "stash")).toBe(false);
   }
 });
 
@@ -1358,4 +1352,31 @@ test("isModelSwitchConfirm: only the switch confirm with its cursor on Yes", () 
   expect(isModelSwitchConfirm(d)).toBe(true);
   expect(isModelSwitchConfirm({ ...d, cursor: 1 })).toBe(false);
   expect(isModelSwitchConfirm(parseDialog(fixture("viewport/model-picker.plain.txt"))!)).toBe(false);
+});
+
+test("inputCursor: the cursor cell's display row within the box — plain and wrapped drafts", () => {
+  expect(inputCursor(fixture("viewport/input-cursor-top.txt"))).toEqual({ row: 0, rows: 3 });
+  expect(inputCursor(fixture("viewport/input-cursor-wrapped.txt"))).toEqual({ row: 0, rows: 4 });
+});
+
+test("inputCursor: null when Claude hides the cell (terminal unfocused) or focus left the input", () => {
+  expect(inputCursor(fixture("viewport/input-cursor-top.txt").replaceAll("\x1b[7m", ""))).toBe(null);
+  expect(inputCursor(fixture("viewport/footer-focused.txt"))).toBe(null);
+  expect(inputCursor(fixture("viewport/shell-details.txt"))).toBe(null);
+});
+
+test("footerFocused: the background-task item selected under the box, with or without a draft", () => {
+  expect(footerFocused(fixture("viewport/footer-focused.txt"))).toBe(true);
+  expect(footerFocused(fixture("viewport/footer-focused-draft.txt"))).toBe(true);
+  expect(footerFocused(fixture("viewport/input-cursor-top.txt"))).toBe(false);
+  expect(footerFocused(fixture("viewport/shell-details.txt"))).toBe(false);
+  // A reverse-drawn notification row below the box is its own widget, not footer focus.
+  const notif = fixture("viewport/input-cursor-top.txt").trimEnd() + "\n\x1b[7m❯ ⧉  a-task · Enter to open · x to dismiss\x1b[0m\n";
+  expect(footerFocused(notif)).toBe(false);
+});
+
+test("stashPresent: the marker shares the slot above the box with other hints", () => {
+  expect(stashPresent(flattenStyled(fixture("viewport/stash-marker.txt"), false))).toBe(true);
+  expect(stashPresent(flattenStyled(fixture("viewport/input-cursor-top.txt"), false))).toBe(false);
+  expect(stashPresent(flattenStyled(fixture("viewport/shell-details.txt"), false))).toBe(false);
 });

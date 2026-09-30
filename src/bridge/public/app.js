@@ -872,6 +872,7 @@ const REASON_TEXT = {
   "no-input-box": "a dialog is open on the terminal",
   "stale-dialog": "the dialog changed — try again",
   "no-dialog": "the dialog is already gone",
+  "stash-occupied": "a stashed draft is waiting at the Mac (Ctrl+S) — resolve it there first",
 };
 const reasonText = (data, status) => REASON_TEXT[data.reason] || data.reason || status;
 

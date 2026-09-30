@@ -105,3 +105,9 @@ Opus never marks the current row, whichever version it is.
   right after the command's Enter, as `sendMessage` does, the C-y landed in the confirm
   and left the draft cut (lab-verified). Under a dialog left for the card, the draft stays
   in the kill ring for C-y at the Mac.
+
+## Addendum 2026-09-30: the draft rides Claude's stash
+
+The switcher no longer times the draft's restore around the switch confirm: the draft is
+stashed with Claude's Ctrl+S, and Claude puts it back once the confirm is accepted
+([ADR 9](0009-interrupt-revert-mirroring.md) addendum 2026-09-30).

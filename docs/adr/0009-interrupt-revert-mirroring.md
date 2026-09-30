@@ -167,3 +167,41 @@ driver's Escape reverted the send back into the input, and each retry did the sa
   last held into the prompt, where the next message got glued onto it. `flattenStyled`
   now drops a reverse cell followed directly by dim text; a cursor at the end of, or
   inside, real typed text is kept.
+
+## Addendum (2026-09-30): drafts ride Claude's own stash; the kill walk never leaves the input
+
+A real session got stuck: after a Stop reverted the prompt, `clear-input`'s blind
+`Down` ×12 walked past the input's last row. With a background shell running, the first
+Down selects the footer's task item and the second opens the task manager ("Shell
+details") over the input box; `killInput` then read "no box" as "empty" and reported
+success, and every later send refused `no-input-box`. Lab-verified on 2.1.285 (the
+bindings below are present back to the oldest running build, 2.1.263):
+
+- **A draft around a send is stashed with Claude's Ctrl+S (`chat:stash`)**, not cut into
+  the kill ring. It takes the whole input from any cursor position, shows `› stashed` in
+  the slot above the box, and Claude puts the draft back after the next submit: a message,
+  a slash command (after a `/model` confirm is accepted), a send queued mid-turn. Pasted
+  images survive it; the kill-ring `C-u`/`C-y` restore silently dropped them (the draft
+  resubmitted as text only). The `restore` step is gone.
+- **The stash has one slot.** A second Ctrl+S pushes the first out to the kill ring, and
+  cutting a draft while a stash exists merged it into the stash Claude pops after the
+  submit (`USER STASH` + `MAC DRAFT` glued into one line). With a stash present, a send
+  with a draft refuses `stash-occupied`; without a draft it goes through, and Claude pops
+  the user's stash into the input as it does at the Mac. A completed `/rewind` overwrites
+  the input and the stash is lost, so rewind refuses `stash-occupied` too.
+- **Discards still use `killInput`**, whose walk now never leaves the input: it stops on
+  the last row when the cursor cell shows, and otherwise stops when focus has left the
+  input (`footerFocused`: the selected task item is drawn in reverse video below the box)
+  and hands it back with one `Up`, which lands on the last row with the draft intact.
+  Claude hides its cursor cell while its terminal is unfocused (a focus-out event, with
+  tmux `focus-events on`), which is the usual state while the user is on the phone, so
+  the cell alone can't steer the walk. "Cleared" now requires an empty box on screen.
+- **Footer focus is released before any send.** A Mac-side `Down` leaves focus on the
+  task item, where `x` stops the task and Enter opens it; `agentListFocused` didn't see it.
+  `releaseAgentList` now also checks `footerFocused`.
+- Ctrl+End, Meta+>, Ctrl+Down, PageDown and Meta+Down don't move the input's cursor
+  (Ctrl+End scrolls the transcript, Ctrl+Down steps the diff file list); End only reaches
+  the end of the row, and Ctrl+L didn't clear the input.
+- Pinned by styled lab captures in `test/fixtures/viewport/`: `input-cursor-top`,
+  `input-cursor-wrapped`, `footer-focused`, `footer-focused-draft`, `stash-marker`,
+  `shell-details`.

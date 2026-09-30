@@ -55,7 +55,7 @@ tmux, from a tty-less process (daemon/bridge — always "outside tmux"):
 - Bun's `setInterval` awaits an async callback before rescheduling — long loops must be self-scheduling with a watchdog. (All: [ADR 13](docs/adr/0013-inbox-lifecycle-model.md) addenda.)
 
 Sending keys to a Claude pane:
-- Never send `Up` to clear or recall a draft — it recalls prompt history. One `C-u` kills only the cursor's display row; draft clearing is the `killInput` walk, restored with a single `C-y` ([ADR 9](docs/adr/0009-interrupt-revert-mirroring.md)).
+- Never send `Up` to clear or recall a draft — it recalls prompt history — and never `Down` past the input's last row: with background work running it opens the task manager over the box, where `x` stops the task. A draft around a send is stashed with Claude's Ctrl+S (one slot — check `stashPresent`); discards use the `killInput` walk ([ADR 9](docs/adr/0009-interrupt-revert-mirroring.md)).
 - The `❯`-keyed input probes are blind to a shell-mode prompt — a plain send into it executes as bash. Pre-flight `shellModeInput` ([ADR 12](docs/adr/0012-bang-commands.md)).
 - The live input is the `❯` row framed by rules, never "the last `❯` row": a dialog replaces the box, leaving echoed prompts and dialog options as the last `❯` rows. No framed row means a dialog is up — send nothing ([ADR 31](docs/adr/0031-dialogs-covering-the-input-box.md)).
 - Never fire a bare digit without pre-flighting a fresh capture — permission prompts are digit-actionable and a focused free-text row turns digits into text ([ADR 8](docs/adr/0008-question-hold-not-send-keys.md)).

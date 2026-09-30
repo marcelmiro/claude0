@@ -2,14 +2,16 @@
  * Claude native session-status reader (headless).
  *
  * Claude Code maintains its OWN authoritative status at
- * `~/.claude/sessions/<pid>.json` (`status` = `busy|idle|waiting`). It flips to
+ * `~/.claude/sessions/<pid>.json` (`status` = `busy|shell|idle|waiting`). It flips to
  * `idle` ~1.5s after a turn ends — including the revert/interrupt cases that emit
  * NO hook, where the event model's `UserPromptSubmit → running` edge latches and
  * strands a session at "running" forever. Reading this file de-latches that and,
  * more broadly, aligns Claude0's displayed status to Claude's own. It's the PRIMARY
  * source for live sessions, with the event model then the scraper as fallbacks.
  *
- * Status mapping (verified empirically): busy→running, idle→ready, waiting→waiting.
+ * Status mapping (verified empirically): busy→running, idle→ready, waiting→waiting,
+ * shell→ready (the turn is over but a background shell still runs; claude0 shows that
+ * as ⏳ beside a ready status, never as a running turn — ADR 26).
  *
  * NOTE on the home root: Claude writes to the REAL home (`homedir()`), not Claude0's
  * `CLAUDE0_HOME` test seam (config.ts:4-6). This reader intentionally diverges from
@@ -33,6 +35,7 @@ function mapStatus(status: unknown): SessionStatus | null {
     case "busy":
       return "running";
     case "idle":
+    case "shell":
       return "ready";
     case "waiting":
       return "waiting";

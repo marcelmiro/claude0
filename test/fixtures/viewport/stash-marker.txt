@@ -1,0 +1,45 @@
+
+[38;5;174m ▐[48;5;16m▛███▛█[39m[49m   [1mClaude Code[0m [38;5;246mv2.1.285[39m
+[38;5;174m▝▜[48;5;16m█████[49m█▀[39m  [38;5;246mHaiku 4.5 · Claude Max[39m
+[38;5;174m ▝▝   ▝▝ [39m  [38;5;246m/home/marcel/dev/lab[39m
+
+
+[38;5;239m[48;5;237m❯ [38;5;231mStart bash 'sleep 3000' in the background (run_in_background true) and reply with just: started[39m
+
+[49m  [38;5;246mRan [1m1[0m[38;5;246m shell command [39m
+
+[38;5;231m●[39m started
+
+[38;5;246m✻[39m [38;5;246mCooked for 3s · done 12:20 AM · 1 shell still running[39m
+
+[38;5;231m●[39m Background shell command didn't finish before the previous session ended
+
+[38;5;239m[48;5;237m❯ [38;5;231mStart bash 'sleep 3000' in the background (run_in_background true) and reply with just: started2[39m
+
+[49m  [38;5;246mRan [1m1[0m[38;5;246m shell command [39m
+
+[38;5;231m●[39m started2
+
+[38;5;246m✻[39m [38;5;246mWorked for 3s · done 12:21 AM · 1 shell still running[39m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                              [38;5;246mCtrl+Y to paste deleted text · › stashed[39m
+[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[39m❯ [7m [0m
+[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[39m  [38;5;246m⏸ manual mode on · [38;5;44m1 shell[38;5;246m · ← for agents · ↓ to manage[39m
