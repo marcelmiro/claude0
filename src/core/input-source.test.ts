@@ -61,6 +61,54 @@ test('"tui" when a newer UserPromptSubmit follows the anchor turn', () => {
   expect(sourceForSession("s4")).toEqual({ source: "tui" });
 });
 
+test('a background task finishing mid-turn does NOT shadow the marker (still "portkey")', () => {
+  // Claude logs a completed background task as its own UserPromptSubmit. Comparing the
+  // marker text against THAT dropped the attribution, and the turn-complete push with
+  // it — the prompt_id anchor can't save this path because markPortkeySource runs on the
+  // send route, so turnPromptId names the previous turn (here: "p0", not "from phone").
+  writeLog("s10", [{ hook_event_name: "UserPromptSubmit", prompt: "earlier", prompt_id: "p0" }]);
+  markPortkeySource("s10", { deviceId: "ipad-1", text: "from phone" });
+  writeLog("s10", [
+    { hook_event_name: "UserPromptSubmit", prompt: "earlier", prompt_id: "p0" },
+    { hook_event_name: "UserPromptSubmit", prompt: "from phone", prompt_id: "p1" },
+    { hook_event_name: "UserPromptSubmit", prompt: "<task-notification>\n<task-id>abc</task-id>", prompt_id: "p2" },
+  ]);
+  expect(sourceForSession("s10")).toEqual({ source: "portkey", deviceId: "ipad-1" });
+});
+
+test('a subagent hand-back does NOT shadow the marker (still "portkey")', () => {
+  writeLog("s11", [{ hook_event_name: "UserPromptSubmit", prompt: "from phone", prompt_id: "p1" }]);
+  markPortkeySource("s11", { deviceId: "ipad-1", text: "from phone" });
+  writeLog("s11", [
+    { hook_event_name: "UserPromptSubmit", prompt: "from phone", prompt_id: "p1" },
+    { hook_event_name: "UserPromptSubmit", prompt: "<agent-message from=\"x\">done</agent-message>", prompt_id: "p2" },
+  ]);
+  expect(sourceForSession("s11")).toEqual({ source: "portkey", deviceId: "ipad-1" });
+});
+
+test('a message queued into a task-notification\'s turn attributes via prompt_id', () => {
+  // The injected turn IS the active turn here, so the prompt_id anchor must still read
+  // the latest prompt of ANY kind — skipping injected turns outright would lose this.
+  writeLog("s12", [
+    { hook_event_name: "UserPromptSubmit", prompt: "typed at desk", prompt_id: "turn-1" },
+    { hook_event_name: "UserPromptSubmit", prompt: "<task-notification>\n<task-id>abc</task-id>", prompt_id: "turn-2" },
+    { hook_event_name: "PreToolUse", tool_name: "Bash", tool_use_id: "t1" },
+  ]);
+  markPortkeySource("s12", { deviceId: "iphone-1", text: "queued from phone" }); // anchors turn-2
+  expect(sourceForSession("s12")).toEqual({ source: "portkey", deviceId: "iphone-1" });
+});
+
+test('a real typed prompt AFTER the portkey turn still shadows, even with an injection after it', () => {
+  writeLog("s13", [{ hook_event_name: "UserPromptSubmit", prompt: "from phone", prompt_id: "p1" }]);
+  markPortkeySource("s13", { deviceId: "ipad-1", text: "from phone" });
+  writeLog("s13", [
+    { hook_event_name: "UserPromptSubmit", prompt: "from phone", prompt_id: "p1" },
+    { hook_event_name: "UserPromptSubmit", prompt: "typed at desk", prompt_id: "p2" },
+    { hook_event_name: "UserPromptSubmit", prompt: "<task-notification>\n<task-id>abc</task-id>", prompt_id: "p3" },
+  ]);
+  expect(sourceForSession("s13")).toEqual({ source: "tui" });
+});
+
 test('"portkey" for a message queued mid-turn (no UPS of its own — prompt_id anchor)', () => {
   // The turn was desk-typed; the phone sends while it runs. The queued message is
   // consumed inside the tool loop and never fires UserPromptSubmit, so the text alone

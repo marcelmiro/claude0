@@ -68,11 +68,30 @@ export function markPortkeySource(
 }
 
 /**
+ * Turns the harness injects, which Claude logs as `UserPromptSubmit` with a
+ * prompt_id of their own: a completed background task and a subagent's hand-back.
+ * The human did not type them, so they must not shadow the portkey marker — the
+ * phone still drove this session. Sibling list for JSONL records (not hook events):
+ * `NON_PROMPT_PREFIXES` in last-turn.ts.
+ */
+const INJECTED_PROMPT =
+  /^\s*<(task-notification|agent-message|teammate-message|system-reminder)\b/;
+
+/**
  * Whether the most recent input on this session came from portkey — and if so,
  * from which device (the push target). No marker ⇒ `"tui"`. Matches when the
- * current turn's `UserPromptSubmit` was the portkey message (text-match) OR
- * portkey acted inside that still-current turn (`prompt_id`-match). A newer turn
- * (different prompt/prompt_id) shadows the marker ⇒ `"tui"`.
+ * human's latest real prompt was the portkey message (text-match) OR portkey acted
+ * inside the still-current turn (`prompt_id`-match). A newer TYPED turn shadows the
+ * marker ⇒ `"tui"`.
+ *
+ * The two anchors deliberately read different references. `text` compares against the
+ * latest NON-injected prompt: a background task finishing mid-turn logs its own
+ * UserPromptSubmit, and comparing against that would drop the attribution and silently
+ * kill the turn-complete push — with no fallback, because `turnPromptId` names the
+ * PREVIOUS turn on this path (`markPortkeySource` runs on the send route, before Claude
+ * has logged the new turn's UserPromptSubmit). `prompt_id` compares against the latest
+ * prompt of ANY kind, because it identifies the currently-active turn — which is exactly
+ * an injected one when a message is queued into a task-notification's turn.
  */
 export function sourceForSession(sessionId: string): InputSource {
   let marker: SourceMarker;
@@ -83,16 +102,20 @@ export function sourceForSession(sessionId: string): InputSource {
   }
 
   const events = readEvents(sessionId);
-  let lastUps: { prompt?: string; prompt_id?: string } | undefined;
+  let lastUps: { prompt?: string; prompt_id?: string } | undefined; // any kind — the active turn
+  let lastTyped: { prompt?: string; prompt_id?: string } | undefined; // the human's own
   for (let i = events.length - 1; i >= 0; i--) {
-    if (events[i]!.hook_event_name === "UserPromptSubmit") {
-      lastUps = events[i]!;
+    const e = events[i]!;
+    if (e.hook_event_name !== "UserPromptSubmit") continue;
+    lastUps ??= e;
+    if (!INJECTED_PROMPT.test(e.prompt ?? "")) {
+      lastTyped = e;
       break;
     }
   }
 
   const portkey: InputSource = { source: "portkey", deviceId: marker.deviceId };
-  if (marker.text != null && lastUps?.prompt?.trim() === marker.text.trim()) return portkey;
+  if (marker.text != null && lastTyped?.prompt?.trim() === marker.text.trim()) return portkey;
   if (marker.turnPromptId != null && lastUps?.prompt_id === marker.turnPromptId) return portkey;
   return { source: "tui" };
 }

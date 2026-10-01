@@ -263,18 +263,56 @@ export async function dispatchNotifications(
       }
     }
 
-    // Tier 4: Web Push — only to the device that drove the most recent input, and
-    // only when that device isn't watching live via SSE (an open portkey already
-    // shows the change; a push would just duplicate it). Skip unresolved sessions
-    // (no id ⇒ can't attribute) and markers without a device (pre-web-push format —
-    // self-heals on the next portkey action). No subscription ⇒ sendWebPush no-ops.
-    if (session.id) {
-      const src = sourceForSession(session.id);
-      if (src.source === "portkey" && src.deviceId && !deviceConnected(src.deviceId)) {
-        await sendWebPush(src.deviceId, pushPayloadFor(event, session, nameCache));
-      }
-    }
+    // Tier 4 is NOT dispatched here — see dispatchAttentionPushes, which retries per
+    // tick off the attention set instead of firing once on this edge.
   }
+}
+
+/**
+ * Tier 4: Web Push, for every session that currently NEEDS ATTENTION — retried each
+ * monitor tick until a push actually goes out. Only to the device that drove the most
+ * recent input, and only while that device isn't watching live via SSE (an open portkey
+ * already shows the change).
+ *
+ * This used to ride `dispatchNotifications` above, inline with the transition, which made
+ * delivery ONE-SHOT: a push suppressed because the device still looked connected was lost
+ * for good, since `detectTransitions` never fires that edge again. Backgrounding does not
+ * reliably clear a device's consumer marker — an iPad app-switch sends no goodbye beacon,
+ * so the marker only ages out via the staleness window — and that window is exactly when
+ * the user walks away, i.e. the case a phone notification exists for.
+ *
+ * Returns the pane keys pushed this tick. The monitor persists them as `phonePushed` so one
+ * attention episode notifies once; anything that clears attention (the session runs again,
+ * the pane is focused at the desk, the phone opens it) resets the flag and re-arms the next
+ * episode. Sessions with no id are skipped (can't attribute), as are markers without a
+ * device (pre-web-push format — self-heals on the next portkey action); no subscription ⇒
+ * sendWebPush no-ops.
+ */
+export async function dispatchAttentionPushes(
+  sessions: Session[],
+  needsAttention: Set<string>,
+  attentionTypes: Map<string, "blocked" | "turnComplete">,
+  alreadyPushed: (paneKey: string) => boolean,
+  nameCache?: NameCache,
+): Promise<Set<string>> {
+  const pushed = new Set<string>();
+  for (const session of sessions) {
+    const key = session.tmuxPane?.paneId;
+    if (!key || !needsAttention.has(key) || alreadyPushed(key) || !session.id) continue;
+    const src = sourceForSession(session.id);
+    if (src.source !== "portkey" || !src.deviceId || deviceConnected(src.deviceId)) continue;
+    const classification = attentionTypes.get(key) ?? "turnComplete";
+    const event: TransitionEvent = {
+      sessionKey: key,
+      previousStatus: "running",
+      currentStatus: classification === "blocked" ? "waiting" : "ready",
+      classification,
+      session,
+    };
+    await sendWebPush(src.deviceId, pushPayloadFor(event, session, nameCache));
+    pushed.add(key);
+  }
+  return pushed;
 }
 
 /**

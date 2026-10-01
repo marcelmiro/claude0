@@ -109,6 +109,7 @@ export function buildSessionStates(
   needsAttention: Set<string>,
   attentionTypes: Map<string, "blocked" | "turnComplete">,
   previousStates?: Record<string, SessionNotificationState>,
+  pushedKeys?: Set<string>,
 ): Record<string, SessionNotificationState> {
   const states: Record<string, SessionNotificationState> = {};
 
@@ -116,10 +117,16 @@ export function buildSessionStates(
     if (!session.tmuxPane) continue;
     const key = session.tmuxPane.paneId;
     const prev = previousStates?.[key];
+    // Scoped to the attention episode, exactly like lastTransition below: carried while
+    // attention persists, dropped the moment it clears so the next episode pushes again.
+    const phonePushed =
+      needsAttention.has(key) &&
+      (pushedKeys?.has(key) === true || (prev?.needsAttention === true && prev.phonePushed === true));
     states[key] = {
       status: session.status,
       needsAttention: needsAttention.has(key),
       attentionType: attentionTypes.get(key),
+      phonePushed: phonePushed || undefined,
       tmuxSession: session.tmuxPane.sessionName,
       tmuxWindow: session.tmuxPane.windowIndex,
       tmuxPane: session.tmuxPane.paneId,

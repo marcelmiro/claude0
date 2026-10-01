@@ -12,7 +12,8 @@ import { CONFIG_DIR } from "../../test/helpers/home";
 import { test, expect, beforeEach } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { loadPaneSessions, savePaneSessions, processHookEvents, reconcilePaneFiles } from "./state";
+import { loadPaneSessions, savePaneSessions, processHookEvents, reconcilePaneFiles, buildSessionStates } from "./state";
+import type { Session, SessionNotificationState } from "../types";
 
 const PANES_DIR = join(CONFIG_DIR, "panes");
 
@@ -61,4 +62,53 @@ test("reconcilePaneFiles drops only files for panes absent from tmux", async () 
   await savePaneSessions({ "%1": "live", "%2": "dead" });
   await reconcilePaneFiles(new Set(["%1"]));
   expect(await loadPaneSessions()).toEqual({ "%1": "live" });
+});
+
+// --- phonePushed: scoped to one attention episode ----------------------------------
+// It gates the per-tick tier-4 retry, so carrying it one episode too far would mute a
+// real notification — the exact failure the retry exists to prevent.
+
+const attentive = (over: Partial<Session> = {}): Session => ({
+    id: "sess-1",
+    repo: "claude0",
+    repoPath: "/x",
+    baseRepoPath: "/x",
+    branch: "",
+    status: "waiting",
+    messageCount: 0,
+    summary: "",
+    modified: new Date(0),
+    firstPrompt: "",
+    lastPrompt: "",
+    name: "claude0/x",
+    tmuxPane: { sessionName: "main", windowIndex: 1, paneId: "%1", windowName: "claude0" },
+    ...over,
+  });
+
+const build = (attn: boolean, prev?: Partial<SessionNotificationState>, pushedNow?: string[]) =>
+  buildSessionStates(
+    [attentive()],
+    new Set(attn ? ["%1"] : []),
+    new Map(attn ? [["%1", "turnComplete" as const]] : []),
+    prev ? { "%1": prev as SessionNotificationState } : undefined,
+    pushedNow ? new Set(pushedNow) : undefined,
+  )["%1"]!;
+
+test("phonePushed is set when this tick pushed, and carried while attention persists", () => {
+  expect(build(true, undefined, ["%1"]).phonePushed).toBe(true);
+  expect(build(true, { needsAttention: true, phonePushed: true, status: "waiting" }).phonePushed).toBe(true);
+});
+
+test("phonePushed resets when attention clears, re-arming the next episode", () => {
+  // Attention gone this tick ⇒ dropped outright.
+  expect(build(false, { needsAttention: true, phonePushed: true, status: "ready" }).phonePushed).toBeUndefined();
+  // Cleared earlier (needsAttention false in prev), now attention again ⇒ a NEW episode,
+  // so the stale flag must not carry over and mute it.
+  expect(build(true, { needsAttention: false, phonePushed: true, status: "running" }).phonePushed).toBeUndefined();
+});
+
+test("phonePushed is absent rather than false when no push has gone out", () => {
+  const s = build(true);
+  expect(s.phonePushed).toBeUndefined();
+  expect(JSON.stringify(s)).not.toContain("phonePushed");
 });

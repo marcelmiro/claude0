@@ -67,3 +67,102 @@ notifications):
   rejected because the iPad would have no notifications at all.
 - **`web-push` npm package** — battle-tested, but the repo's first real server dependency for
   ~200 lines of verifiable crypto; the RFC test vector makes the hand-rolled version provable.
+
+## Addendum (2026-10-01): harness-injected turns must not shadow the source marker
+
+A phone stopped getting notifications. Everything downstream was healthy — the
+subscription was live (a hand-rolled probe to all five endpoints returned 201), the gate
+opened, and a real turn-complete push was accepted by APNs mid-investigation. The
+attribution was what broke: `sourceForSession` read `"tui"` for a session the phone
+demonstrably drove, with the marker file intact.
+
+**Claude Code logs a `UserPromptSubmit` for turns the human never typed** — a completed
+background task (`<task-notification>`) and a subagent's hand-back (`<agent-message>`),
+each with a `prompt_id` of its own. Matching the marker against the single most recent
+`UserPromptSubmit` therefore let a background task finishing mid-turn shadow the marker,
+and the turn-complete push was lost outright: `dispatchNotifications` fires only on a
+`detectTransitions` edge, so nothing ever re-pushes for that turn. (Held approvals escaped
+this — `dispatchHeldApprovalPushes` re-runs over the live `pending/*` markers each tick.)
+
+The `turnPromptId` anchor could not cover it, because on the fresh-prompt path it is
+**systematically stale**: `markPortkeySource` runs on the bridge's send route, before Claude
+has logged the new turn's `UserPromptSubmit`, so it records the PREVIOUS turn's id. Observed
+directly — a marker written for prompt `356230af` carried `turnPromptId: c581dbce`. The anchor
+still works for its documented queued-mid-turn case, where the in-flight turn's id is already
+on disk; it is the idle-session send that has no working fallback.
+
+The two anchors now read deliberately different references:
+
+- **`text`** compares against the latest **non-injected** prompt — the human's own.
+- **`prompt_id`** compares against the latest prompt of **any** kind, because it identifies the
+  currently-active turn, and that is exactly an injected one when a message is queued into a
+  task-notification's turn. Skipping injected turns for both anchors would have traded this bug
+  for that regression; both directions are pinned by tests.
+
+A consequence worth naming: a session the phone drove now stays attributed across an injected
+turn, so a background task completing after the turn ended can push again. That is intended —
+the phone drove the session and it needs attention again.
+
+Separately observed: on two backgroundings the `/push/goodbye` beacon did not arrive — the
+consumer marker expired via the staleness fallback instead of being cleared — leaving a window
+in which pushes were still suppressed. Later client-side instrumentation showed the beacon is
+only INTERMITTENTLY lost, not structurally broken (see the second addendum below). The addendum
+immediately below is what makes that window cost latency instead of the notification, and is
+the reason the intermittency no longer matters for delivery.
+
+## Addendum (2026-10-01): tier 4 retries off the attention set, not the transition edge
+
+The suppression gate is a guess about whether a human is looking, and the goodbye beacon — the
+only thing that makes it *promptly* correct — is unreliable on backgrounding (above). The
+real defect was that a wrong guess was unrecoverable: `dispatchNotifications` sent the tier-4
+push inline with the `detectTransitions` edge, and that edge never fires again, so a push
+suppressed because the device still *looked* connected was lost permanently. The suppressed
+window is precisely when the user walks away — the case a phone notification exists for.
+
+Tier 4 now runs as `dispatchAttentionPushes` over the **attention set** every monitor tick, so
+a suppressed push is retried until one actually goes out. Delivery no longer depends on beacon
+reliability; a lost beacon costs latency instead of the notification — measured end to end at
+45s from suppressed transition to delivered push, in a reproduction that held the consumer
+marker fresh across the transition and then released it. Real-world is the same order: the
+socket dies ~10s after an app-switch, +40s staleness, +one 3s tick. This is the shape
+`dispatchHeldApprovalPushes` already used for hook-held approvals, which is why those kept
+arriving while turn-complete pushes went missing.
+
+- **One push per attention episode**, tracked by `phonePushed` in `state.json`, scoped exactly
+  like `lastTransition`: carried while attention persists, dropped the moment it clears. The
+  things that clear attention — the session runs again, the pane is focused at the desk, the
+  phone opens the session — each re-arm the next episode. The other `state.json` writers
+  load-mutate-save, so the field survives them.
+- **Suppression no longer spends the push.** A device that was watching at the transition is
+  re-offered the push on later ticks; only an actual send sets the flag.
+- Tiers 2 and 3 (window prefix, native notification) stay on the transition edge — they are
+  desk surfaces and repeating them would be spam.
+
+Known gap, left deliberately: the monitor's `freshState` bail (another process wrote
+`state.json` mid-poll) drops that tick's pushed-key set, so a push can repeat. The service
+worker collapses per-session notifications by tag, so a duplicate is near-invisible — not worth
+a second sidecar to prevent.
+
+## Addendum (2026-10-01): the goodbye beacon is intermittent, not broken — don't design on it
+
+Instrumented the client (record synchronously into localStorage at hide time, upload on the
+next foreground — a suspended app cannot report) and logged server-side receipt, to find out
+why the beacon went missing. It mostly doesn't:
+
+- **`visibilitychange` DOES fire** on an app-switch, and `pagehide` fires too. Across four hide
+  records on two devices, `navigator.sendBeacon` returned `true` every time and the bridge
+  received a matching `/push/goodbye` every time (6 receipts). The device that had twice shown
+  no goodbye at all sent two clean ones afterwards.
+- **`es.close()` is not a factor.** `tailscale serve` negotiates HTTP/2, so the SSE stream and
+  the beacon multiplex over one TLS connection — closing the stream costs no handshake
+  (measured). Nothing in `sendGoodbye` can throw before `sendBeacon` either.
+- A reload fires `pagehide` (while still `visible`, stream open) and then
+  `visibilitychange`→hidden, so one departure sends **two** goodbyes. Harmless — the route is
+  idempotent — but it explains receipt counts exceeding hide counts.
+
+What actually differed between the failing and succeeding observations is unidentified; the
+bridge had been up 23h with a 1.1 GB memory peak when the losses were seen and was restarted
+before the successes, which fits this repo's documented bridge memory-leak history but is not
+established. Left there deliberately: the beacon is a latency optimisation whose success the
+client cannot verify, so the correct design is the retry above, which does not depend on it.
+Chasing the intermittency further buys ~45s of latency and nothing for correctness.

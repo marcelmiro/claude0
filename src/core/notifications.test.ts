@@ -10,7 +10,7 @@
 import "../../test/helpers/home";
 import { test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdirSync, rmSync, utimesSync, writeFileSync, readFileSync, existsSync } from "node:fs";
-import { pushLabel, pushAction, deviceConnected, pushPayloadFor, dispatchHeldApprovalPushes } from "./notifications";
+import { pushLabel, pushAction, deviceConnected, pushPayloadFor, dispatchHeldApprovalPushes, dispatchAttentionPushes } from "./notifications";
 import { CONSUMERS_DIR } from "./web-push";
 import { PENDING_DIR } from "./approval";
 import { markPortkeySource, SOURCE_DIR } from "./input-source";
@@ -214,6 +214,89 @@ test("no push for desk-driven turns or unknown sessions", async () => {
   driveFromPhone("sess-gone", "dev-1");
   await dispatchHeldApprovalPushes([mkSession()]); // sess-gone not in the list
   expect(existsSync(sidecar("sess-gone"))).toBe(false);
+});
+
+// --- dispatchAttentionPushes (tier 4 retries off the attention set) --------------
+// The returned key set is the observable "push path taken" signal (no subscription
+// exists under temp HOME, so sendWebPush itself no-ops). The retry is the point: a
+// push suppressed while the device still looked connected used to be lost for good,
+// because detectTransitions never fires that edge again.
+
+function paneSession(paneId: string, sessionId: string): Session {
+  return mkSession({
+    id: sessionId,
+    tmuxPane: { sessionName: "main", windowIndex: 1, paneId, windowName: "claude0" },
+  });
+}
+
+const connect = (deviceId: string) => {
+  mkdirSync(CONSUMERS_DIR, { recursive: true });
+  writeFileSync(`${CONSUMERS_DIR}/${deviceId}`, "");
+};
+
+test("attention + portkey + device not watching ⇒ pushes and reports the pane key", async () => {
+  driveFromPhone("sess-1", "dev-1");
+  const pushed = await dispatchAttentionPushes(
+    [paneSession("%1", "sess-1")],
+    new Set(["%1"]),
+    new Map([["%1", "turnComplete"]]),
+    () => false,
+  );
+  expect([...pushed]).toEqual(["%1"]);
+});
+
+test("a push suppressed while the device watched RETRIES once it backgrounds", async () => {
+  // The defect this exists for: an iPad app-switch sends no goodbye beacon, so the
+  // consumer marker only ages out — the suppressed window is exactly when the user
+  // walks away. One-shot dispatch lost that notification permanently.
+  driveFromPhone("sess-1", "dev-1");
+  connect("dev-1");
+  const tick1 = await dispatchAttentionPushes(
+    [paneSession("%1", "sess-1")],
+    new Set(["%1"]),
+    new Map([["%1", "turnComplete"]]),
+    () => false,
+  );
+  expect([...tick1]).toEqual([]); // suppressed, and NOT marked as pushed
+
+  rmSync(`${CONSUMERS_DIR}/dev-1`); // marker aged out / beacon finally landed
+  const tick2 = await dispatchAttentionPushes(
+    [paneSession("%1", "sess-1")],
+    new Set(["%1"]),
+    new Map([["%1", "turnComplete"]]),
+    () => false,
+  );
+  expect([...tick2]).toEqual(["%1"]);
+});
+
+test("one push per attention episode — alreadyPushed stops the retry", async () => {
+  driveFromPhone("sess-1", "dev-1");
+  const pushed = await dispatchAttentionPushes(
+    [paneSession("%1", "sess-1")],
+    new Set(["%1"]),
+    new Map([["%1", "turnComplete"]]),
+    (key) => key === "%1",
+  );
+  expect([...pushed]).toEqual([]);
+});
+
+test("no push without attention, and none for a desk-driven session", async () => {
+  driveFromPhone("sess-1", "dev-1");
+  const noAttention = await dispatchAttentionPushes(
+    [paneSession("%1", "sess-1")],
+    new Set(),
+    new Map(),
+    () => false,
+  );
+  expect([...noAttention]).toEqual([]);
+
+  const desk = await dispatchAttentionPushes(
+    [paneSession("%2", "sess-desk")], // no source marker ⇒ "tui"
+    new Set(["%2"]),
+    new Map([["%2", "turnComplete"]]),
+    () => false,
+  );
+  expect([...desk]).toEqual([]);
 });
 
 afterEach(() => {

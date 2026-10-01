@@ -15,7 +15,7 @@ import { reapDeadSessionFiles } from "./core/approval";
 import { loadConfig, configCache, PATHS } from "./core/config";
 import { debugLog } from "./core/debug";
 import { loadState, saveState, computeAggregate, buildSessionStates, loadPaneSessions, savePaneSessions, processHookEvents } from "./core/state";
-import { detectTransitions, dispatchNotifications, dispatchHeldApprovalPushes, syncWindowPrefix, ATTENTION_PREFIX, RUNNING_PREFIX, SCRIPT_PREFIX, stripAllPrefixes, desiredPrefix, buildBaseName, abbreviateRepo, NAME_SEPARATOR } from "./core/notifications";
+import { detectTransitions, dispatchNotifications, dispatchHeldApprovalPushes, dispatchAttentionPushes, syncWindowPrefix, ATTENTION_PREFIX, RUNNING_PREFIX, SCRIPT_PREFIX, stripAllPrefixes, desiredPrefix, buildBaseName, abbreviateRepo, NAME_SEPARATOR } from "./core/notifications";
 import { clearSource } from "./core/input-source";
 import { classifyActivity } from "./core/presence";
 import { detectScriptWaits } from "./core/script-wait";
@@ -345,6 +345,17 @@ async function main(): Promise<void> {
     }, nameCache);
   }
 
+  // Tier-4 pushes run off the attention SET, not the transition edge, so one that the
+  // driving device was still (apparently) watching retries on later ticks instead of
+  // being lost — backgrounding a phone does not reliably clear its consumer marker.
+  const phonePushedKeys = await dispatchAttentionPushes(
+    sessions,
+    needsAttention,
+    attentionTypes,
+    (key) => state.sessions[key]?.phonePushed === true && state.sessions[key]?.needsAttention === true,
+    nameCache,
+  );
+
   // Approvals HELD by the PreToolUse hook never render the pane picker, so the
   // status stays `running` and no transition can push for them — tell the driving
   // phone directly (once per hold, skipped while it watches via SSE).
@@ -451,7 +462,7 @@ async function main(): Promise<void> {
   }
 
   await debugLog(`saving: needsAttention={${[...needsAttention].join(", ")}}`);
-  const sessionStates = buildSessionStates(sessions, needsAttention, attentionTypes, state.sessions);
+  const sessionStates = buildSessionStates(sessions, needsAttention, attentionTypes, state.sessions, phonePushedKeys);
   const newState = { lastUpdatedBy: "monitor" as const, lastUpdatedAt: Date.now(), sessions: sessionStates };
   await saveState(newState);
 

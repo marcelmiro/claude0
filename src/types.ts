@@ -112,6 +112,12 @@ export interface SessionNotificationState {
   needsAttention: boolean;
   /** Classification of the transition that caused attention */
   attentionType?: "blocked" | "turnComplete";
+  /**
+   * A tier-4 push went out for THIS attention episode, so the per-tick retry in
+   * `dispatchAttentionPushes` stops. Reset whenever attention clears, which re-arms the
+   * next episode. Absent rather than false when unset.
+   */
+  phonePushed?: boolean;
   tmuxSession?: string;
   tmuxWindow?: number;
   tmuxPane?: string;
