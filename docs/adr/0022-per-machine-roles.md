@@ -50,6 +50,10 @@ single-purpose, and easy to defeat.
   explicitly pinned `host` runs its own daemon/bridge over a separate inbox.db.
   Accepted; revisit (active claim or bridge handshake) if a second host machine
   ever becomes routine.
+- A client and the host each run their own clone. Host commands execute the
+  host's checkout (`~/.bun/bin/claude0` → `~/dev/claude0/bin/claude0.ts`), so a
+  `git pull` in a Mac shell leaves the host on old code: check the host's
+  `git log -1` before asking for a retest of a host-side change.
 
 ## Rejected
 

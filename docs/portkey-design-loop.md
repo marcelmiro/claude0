@@ -44,3 +44,24 @@ fine; never tap approve/archive/send there.
 
 `bun run shoot` captures the fixture screens headlessly
 (login/list/detail/agents PNGs); `inspect-ui` is the interactive tool.
+
+## Real Claude TUI lab
+
+For behaviour that needs real Claude Code TUI states (dialogs, mid-turn
+switches) without touching live sessions, the inbox, or the phone:
+
+- **Lab Claude on its own tmux server:** `tmux -L c0lab new-session -d -s lab -c <scratch>`,
+  then `claude --settings '{"disableAllHooks":true}'` (no hooks, so no events or
+  panes file; this also disables the statusline). Restart it as
+  `claude --resume <id> …` so `resolveSessionPane` resolves through the
+  command-line fallback.
+- **claude0 code against it:** run with `TMUX=/tmp/tmux-$UID/c0lab,0,0`, and every
+  tmux call goes to the lab server.
+- **Whole stack in a browser:** a second bridge with `CLAUDE0_HOME=<scratch>/c0home`
+  (copy `names.json` and `config.json` in first, or it AI-names every archived
+  session), the lab `TMUX`, `CLAUDE0_BRIDGE_HOST=127.0.0.3`, its own port and
+  token. Its "inbox snapshot is stale" banner is expected (no daemon).
+- **`/model` and `/effort` write the global `~/.claude/settings.json`.** Snapshot
+  it before the lab and restore it afterwards.
+- **Cleanup:** `tmux -L c0lab kill-server`, then delete the lab's
+  `~/.claude/projects/*` dir, or it shows up in portkey history.
