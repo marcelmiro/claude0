@@ -15,6 +15,7 @@ import {
   declineQuestion,
   buildAnswersMap,
   listPendingApprovals,
+  questionHeld,
   reapDeadSessionFiles,
   PENDING_DIR,
   DECISIONS_DIR,
@@ -131,6 +132,21 @@ test("a hold from a live hook still answers via the file channel", () => {
     JSON.stringify({ sessionId: id, kind: "question", tool_use_id: "tu_q", ts: Date.now(), pid: process.pid }),
   );
   expect(decideQuestion(id, "tu_q", { Pick: "B" })).toBe(true);
+});
+
+test("questionHeld: only a live question hold counts — not an approval hold, not a dead hook", async () => {
+  const hold = (id: string, kind: string, pid: number) =>
+    writeFileSync(
+      `${PENDING_DIR}/${id}.json`,
+      JSON.stringify({ sessionId: id, kind, tool_use_id: "tu", ts: Date.now(), pid }),
+    );
+  hold("qh-live", "question", process.pid);
+  hold("qh-approval", "approval", process.pid);
+  hold("qh-dead", "question", await deadPid());
+  expect(questionHeld("qh-live")).toBe(true);
+  expect(questionHeld("qh-approval")).toBe(false);
+  expect(questionHeld("qh-dead")).toBe(false);
+  expect(questionHeld("qh-absent")).toBe(false);
 });
 
 test("a live hold near the end of its poll window is still honoured, not reaped", () => {

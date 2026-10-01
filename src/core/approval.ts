@@ -97,6 +97,11 @@ function readOrReapHold(sessionId: string): PendingHold | null {
   return null;
 }
 
+/** Is a live question-hook holding this session's AskUserQuestion for the phone? */
+export function questionHeld(sessionId: string): boolean {
+  return readOrReapHold(sessionId)?.kind === "question";
+}
+
 /** All sessions blocked on a detached approval (globs `pending/*.json`). */
 export function listPendingApprovals(): PendingApproval[] {
   let files: string[];

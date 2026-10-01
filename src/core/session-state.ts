@@ -26,6 +26,7 @@
 import { homedir } from "os";
 import { Glob } from "bun";
 import type { SessionStatus } from "./status";
+import { questionHeld } from "./approval";
 
 const DEFAULT_DIR = `${homedir()}/.claude/sessions`;
 
@@ -202,6 +203,10 @@ let cacheAt = 0;
  * Native status for a single session, or null when absent (older Claude,
  * non-interactive, dead pid, unknown status, or the brief pre-write window).
  * Callers fall back to event ?? scraper on null.
+ *
+ * Exception: while claude0's question-hook holds an AskUserQuestion for the phone,
+ * Claude reports `busy` (a PreToolUse hook is still running) — but the session is
+ * blocked on the user, so a live hold reads as `waiting`.
  */
 export async function nativeStatus(sessionId: string): Promise<SessionStatus | null> {
   const now = Date.now();
@@ -209,5 +214,6 @@ export async function nativeStatus(sessionId: string): Promise<SessionStatus | n
     cache = await loadNativeStatuses();
     cacheAt = now;
   }
-  return cache.get(sessionId) ?? null;
+  const status = cache.get(sessionId) ?? null;
+  return status === "running" && questionHeld(sessionId) ? "waiting" : status;
 }
