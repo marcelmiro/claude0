@@ -475,7 +475,7 @@ function isSubsequence(sub: string, str: string): boolean {
 // claude0 setup
 // ---------------------------------------------------------------------------
 
-export const HOOK_VERSION = 22;
+export const HOOK_VERSION = 23;
 
 // A bridge-consumer marker older than this is a dead phone connection: the bridge
 // touches it on SSE connect and every 15s heartbeat, so 40s tolerates one missed
@@ -494,6 +494,12 @@ SESSION_ID=$(echo "$INPUT" | grep -o '"session_id":"[^"]*"' | head -1 | cut -d'"
 # Only use $TMUX_PANE — never fall back to tmux display-message which returns
 # the active pane, not the pane running this Claude session.
 PANE_ID="$TMUX_PANE"
+# A nested \`claude -p\` run from a session's Bash tool inherits that session's TMUX_PANE
+# but has no controlling tty — it must not claim the pane. CLAUDE_PID is the claude running
+# this hook (the hook itself is tty-less); procps prints "?" for no tty, BSD ps "??".
+if [ -n "$CLAUDE_PID" ]; then
+  case "$(ps -o tty= -p "$CLAUDE_PID" 2>/dev/null | tr -d ' ')" in '?'|'??') exit 0 ;; esac
+fi
 if [ -n "$SESSION_ID" ] && [ -n "$PANE_ID" ]; then
   D=~/.config/claude0/panes
   mkdir -p "$D"
