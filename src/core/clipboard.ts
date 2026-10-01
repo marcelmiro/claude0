@@ -9,13 +9,16 @@
 import { openSync, writeSync, closeSync } from "node:fs";
 
 /**
- * tmux's OSC 52 buffer tops out near 100,000 bytes INCLUDING base64's 4/3 growth,
- * and tmux is the binding hop — cap the plaintext under that with margin.
+ * mosh-server keeps at most 16 KiB of an OSC string ("52;c;" included) and silently
+ * drops the rest, so over mosh it — not tmux's ~100 KB buffer — is the binding hop.
  */
-export const OSC52_MAX_TEXT_BYTES = 72_000;
+export const MOSH_OSC_STRING_MAX = 16 * 1024;
+
+/** The largest plaintext whose base64 payload fits mosh's OSC string limit. */
+export const OSC52_MAX_TEXT_BYTES = Math.floor((MOSH_OSC_STRING_MAX - "52;c;".length) / 4) * 3;
 
 /**
- * The OSC 52 write for `text`, or null when it exceeds the tmux ceiling (a silent
+ * The OSC 52 write for `text`, or null when it exceeds the mosh ceiling (a silent
  * partial write would corrupt what lands in the clipboard — refuse instead).
  *
  * Inside tmux the sequence must ride a DCS passthrough envelope: every ESC of the

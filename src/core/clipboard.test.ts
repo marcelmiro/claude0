@@ -4,7 +4,7 @@
  * here, including the tmux DCS passthrough envelope and the size refusal.
  */
 import { test, expect } from "bun:test";
-import { osc52Sequence, OSC52_MAX_TEXT_BYTES } from "./clipboard";
+import { osc52Sequence, OSC52_MAX_TEXT_BYTES, MOSH_OSC_STRING_MAX } from "./clipboard";
 
 const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
 
@@ -29,4 +29,11 @@ test("oversized text is refused, boundary is inclusive", () => {
   expect(osc52Sequence("x".repeat(OSC52_MAX_TEXT_BYTES + 1), false)).toBeNull();
   // Byte budget, not code points: a 4-byte emoji spends 4.
   expect(osc52Sequence("🌍".repeat(OSC52_MAX_TEXT_BYTES / 4 + 1), false)).toBeNull();
+});
+
+test("the largest accepted write fits mosh's OSC string limit whole", () => {
+  // mosh buffers everything between ESC ] and BEL.
+  const oscString = (text: string) => `52;c;${b64(text)}`;
+  expect(oscString("x".repeat(OSC52_MAX_TEXT_BYTES)).length).toBeLessThanOrEqual(MOSH_OSC_STRING_MAX);
+  expect(oscString("x".repeat(OSC52_MAX_TEXT_BYTES + 1)).length).toBeGreaterThan(MOSH_OSC_STRING_MAX);
 });
