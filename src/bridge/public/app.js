@@ -4768,12 +4768,15 @@ function App() {
 // `opus` on the statusline, so Opus is marked when Default is active. One tap applies ONE
 // change and closes — the config route takes a single field per request, and Claude's own
 // confirmation line is what the user reads next.
+// Every option is an alias, never a versioned model id. Claude saves the arg verbatim as the
+// new-session default, so a row like `claude-opus-5[1m]` pinned EVERY future session to the
+// previous Opus from one tap; the aliases keep tracking the current version. Reaching an
+// older version stays Claude's own picker, at the desk.
 const MODEL_OPTS = [
   { key: "default", label: "Default", sub: "recommended · Opus 5.5 1M" },
   { key: "opus[1m]", label: "Opus", sub: "Opus 5.5 · 1M context" },
-  { key: "claude-opus-5[1m]", label: "Opus 5", sub: "previous Opus · 1M context" },
   { key: "fable", label: "Fable", sub: "Fable 5.1" },
-  { key: "sonnet", label: "Sonnet", sub: "Sonnet 5" },
+  { key: "sonnet", label: "Sonnet", sub: "Sonnet 5.5" },
   { key: "haiku", label: "Haiku", sub: "Haiku 4.5" },
 ];
 const EFFORT_OPTS = [
@@ -4785,12 +4788,14 @@ const EFFORT_OPTS = [
   { key: "ultracode", label: "Ultra" },
 ];
 
-// "Opus · High" for the session sheet row. A bare `opus` (non-1M base) isn't a menu option
-// but still reads as Opus; an unparsed value (statusline not rendering it) shows as "—".
+// "Opus · High" for the session sheet row. Values that aren't options still read: a bare
+// `opus` (non-1M base) as "Opus", and a session left on an older Opus — whose arg key is its
+// full id — as its version. An unparsed value (statusline not rendering it) shows as "—".
 function configLabel(t) {
   const m = t && t.model;
   const mo = MODEL_OPTS.find((o) => o.key === m);
-  const model = mo ? mo.label : m === "opus" ? "Opus" : "—";
+  const ver = typeof m === "string" ? m.match(/^claude-opus-(\d+)(?:-(\d+))?/) : null;
+  const model = mo ? mo.label : ver ? `Opus ${ver[1]}${ver[2] ? `.${ver[2]}` : ""}` : m === "opus" ? "Opus" : "—";
   const eo = EFFORT_OPTS.find((o) => o.key === (t && t.effort));
   return `${model} · ${eo ? eo.label : "—"}`;
 }

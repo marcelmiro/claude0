@@ -1290,6 +1290,12 @@ test("parseDialog: a tall prompt anchors on its own rule, however far above the 
   expect(parseDialog(cap)!.options).toEqual(["Yes", "No"]);
 });
 
+test("parseDialog: a border with nothing under it yet → null (dialog caught mid-paint)", () => {
+  // Live crash, 2026-09-30: a /model switch captured the confirm's border as the last row and
+  // the bridge 500'd on POST /sessions/:id/config. The next poll sees the painted dialog.
+  expect(parseDialog(["⏺ ok", "▔▔▔▔▔▔▔▔▔▔", "", "  "].join("\n"))).toBe(null);
+});
+
 test("parseDialog: an echoed prompt is never a text-only notice's cursor", () => {
   const cap = ["❯ my earlier prompt", "● reply", RULE, " File sync is offline", " Enter to continue"].join("\n");
   expect(parseDialog(cap)).toEqual({ text: ["File sync is offline"], options: [], cursor: -1, hint: "Enter to continue" });

@@ -120,13 +120,13 @@ export interface PaneStatusline {
 
 // The model/effort arg forms Claude accepts (`/model <x>`, `/effort <x>`) — the switcher's
 // allowlists. Note the `[1m]` suffix, NOT the bare alias: `opus` resolves to the non-1M base
-// model, whereas the picker's "Opus" and "Default" both select the 1M variant. The `opus`
-// alias tracks the current Opus (Opus 5.5); the previous Opus has no alias and is reachable
-// only by its full model id.
+// model, whereas the picker's "Opus" and "Default" both select the 1M variant. Every entry is
+// an alias, never a versioned model id: Claude saves the arg verbatim as the new-session
+// default, so an id would pin every future session to that version, while `opus[1m]` keeps
+// tracking the current Opus.
 export const MODEL_ARGS = [
   "default",
   "opus[1m]",
-  "claude-opus-5[1m]",
   "fable",
   "sonnet",
   "haiku",
@@ -1786,6 +1786,8 @@ export function parseDialog(capture: string): PaneDialog | null {
   }
   if (start < 0) return null;
   const region = lines.slice(start, last + 1);
+  // Nothing under the border yet: a dialog caught mid-paint. Not a dialog until it has a row.
+  if (!region.length) return null;
 
   let cursorRow = -1;
   for (let i = region.length - 1; i >= 0 && cursorRow < 0; i--) if (isCursorRow(region[i]!)) cursorRow = i;

@@ -111,3 +111,25 @@ Opus never marks the current row, whichever version it is.
 The switcher no longer times the draft's restore around the switch confirm: the draft is
 stashed with Claude's Ctrl+S, and Claude puts it back once the confirm is accepted
 ([ADR 9](0009-interrupt-revert-mirroring.md) addendum 2026-09-30).
+
+## Addendum 2026-10-01: the picker offers aliases only
+
+The picker's rows had included the previous Opus by its full id (`claude-opus-5[1m]`), one row
+under the current one. Claude saves a `/model <arg>` **verbatim** as the new-session default
+(lab, 2.1.286, isolated HOME: `/model opus[1m]` → `"model": "opus[1m]"`, confirmed as "Set
+model to Opus 5.5 (1M context) and saved as your default for new sessions"; `/model
+claude-opus-5[1m]` → `"model": "claude-opus-5[1m]"`, "Set model to Opus 5 (1M context) …";
+`/model default` removes the key, "Set model to Opus 5.5 (default) …"). So that one row pinned
+*every future session* to a frozen version from a single tap, while the sheet's model hint —
+unlike the effort hint — never mentioned the scope. New sessions were observed starting on
+Opus 5 (1M) from their first message while Opus 5.5 was current, which only that saved id
+produces.
+
+- `MODEL_ARGS` and the sheet's rows now carry **aliases only** (`default`, `opus[1m]`,
+  `fable`, `sonnet`, `haiku`). An alias tracks the current version of its family, so a saved
+  default can never be stale. Reaching an older version stays Claude's own picker, at the desk.
+- `parseStatusline` still resolves an older Opus to its full id, so such a session marks no
+  row (it is no longer selectable) — and `configLabel` now derives the readout from that id
+  (`claude-opus-5[1m]` → "Opus 5") instead of reading "—".
+- Family aliases are version-free, so a family's version bump is a sub-label edit: Sonnet's
+  alias now resolves to Sonnet 5.5 (verified: `claude --model sonnet -p` → `claude-sonnet-5-5`).

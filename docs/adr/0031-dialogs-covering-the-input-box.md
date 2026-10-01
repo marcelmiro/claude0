@@ -89,3 +89,11 @@ was pending. The session was unanswerable from the phone. Lab-verified on the sa
   addendum); any other dialog after `/model` or `/effort` still goes to the card.
 - Pinned by lab captures `model-switch-dialog-running`, `transcript-view-running` and
   `effort-toast-running` in `test/fixtures/viewport/`.
+
+## Addendum 2026-10-01: a border with nothing under it is not a dialog
+
+`parseDialog` anchored on the dialog's `▔` border and then read the region below it. Captured
+the instant the border painted, that region is empty and the parse threw — the bridge 500'd on
+`POST /sessions/:id/config` mid model switch (2026-09-30 14:02, `region[region.length - 1]`
+on `[]`). An empty region now returns null, the same as no dialog: the switcher and the card
+both poll, so the next capture sees the painted dialog.
