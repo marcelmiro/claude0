@@ -262,6 +262,8 @@ test("listPendingApprovals returns [] when the dir is absent", () => {
 test("reapDeadSessionFiles removes dead ids across all dirs, keeps live", () => {
   writeFileSync(eventLogPath("live"), "{}\n");
   writeFileSync(eventLogPath("dead"), "{}\n");
+  writeFileSync(`${eventLogPath("live")}.old`, "{}\n");
+  writeFileSync(`${eventLogPath("dead")}.old`, "{}\n");
   writeFileSync(`${PENDING_DIR}/live.json`, "{}");
   writeFileSync(`${PENDING_DIR}/dead.json`, "{}");
   writeFileSync(`${DECISIONS_DIR}/live.json`, "{}");
@@ -273,6 +275,8 @@ test("reapDeadSessionFiles removes dead ids across all dirs, keeps live", () => 
   expect(existsSync(`${PENDING_DIR}/live.json`)).toBe(true);
   expect(existsSync(`${DECISIONS_DIR}/live.json`)).toBe(true);
   expect(existsSync(eventLogPath("dead"))).toBe(false);
+  expect(existsSync(`${eventLogPath("live")}.old`)).toBe(true);
+  expect(existsSync(`${eventLogPath("dead")}.old`)).toBe(false);
   expect(existsSync(`${PENDING_DIR}/dead.json`)).toBe(false);
   expect(existsSync(`${DECISIONS_DIR}/dead.json`)).toBe(false);
 });

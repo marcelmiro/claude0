@@ -475,7 +475,7 @@ function isSubsequence(sub: string, str: string): boolean {
 // claude0 setup
 // ---------------------------------------------------------------------------
 
-export const HOOK_VERSION = 23;
+export const HOOK_VERSION = 24;
 
 // A bridge-consumer marker older than this is a dead phone connection: the bridge
 // touches it on SSE connect and every 15s heartbeat, so 40s tolerates one missed
@@ -511,9 +511,9 @@ fi
 // line, to events/<session_id>.jsonl. Newlines in the stdin payload are collapsed
 // to spaces so each event is exactly one line — JSON escapes real newlines inside
 // strings (\\n), so this only flattens pretty-print formatting, never string
-// contents. Trim to the last 200 lines ONLY when over budget, via atomic rename
-// (.tmp + mv -f) so the ~3s concurrent readers never see a torn file; the common
-// path stays a bare append (~5ms, A7).
+// contents. At 200 lines the log rotates to <session_id>.jsonl.old (readEvents reads
+// both), so readers never see a torn file; the common path stays a bare append
+// (~5ms, A7).
 const LOG_EVENT_SNIPPET = `INPUT=$(cat)
 # Whitespace-tolerant (handles compact AND pretty-printed payloads); cut -f4 yields
 # the value either way. session-start.sh keeps its proven compact-only pattern.
@@ -524,9 +524,19 @@ if [ -n "$SESSION_ID" ]; then
   F="$DIR/$SESSION_ID.jsonl"
   LINE=$(printf '%s' "$INPUT" | tr '\\n' ' ')
   printf '%s\\n' "$LINE" >> "$F"
-  LINES=$(wc -l < "$F")
-  if [ "$LINES" -gt 200 ]; then
-    tail -200 "$F" > "$F.tmp" && mv -f "$F.tmp" "$F"
+  # Bounded by rotation, never a rewrite: hooks fire concurrently and appends take no
+  # lock, so a copy-and-replace trim loses lines appended mid-copy. A rename can't —
+  # a hook that opened the log just before it writes into .old, which readers read too.
+  if [ "$(wc -l 2>/dev/null < "$F")" -ge 200 ] 2>/dev/null; then
+    L="$F.lock"
+    # a hook killed mid-rotation must not freeze rotation for the session's lifetime
+    [ -n "$(find "$L" -maxdepth 0 -mmin +1 2>/dev/null)" ] && rmdir "$L" 2>/dev/null
+    if mkdir "$L" 2>/dev/null; then
+      # re-check under the lock: a second rotation would push a fresh, near-empty log
+      # over the 200-line .old
+      [ "$(wc -l 2>/dev/null < "$F")" -ge 200 ] 2>/dev/null && mv -f "$F" "$F.old"
+      rmdir "$L"
+    fi
   fi
 fi`;
 

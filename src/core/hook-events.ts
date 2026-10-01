@@ -10,7 +10,7 @@
  * contract of the separate `hook-events` pane-map (`state.ts`, untouched). Corrupt
  * or half-written lines are skipped (per-line try/parse) for forward/partial-write
  * safety. Sync to match the contract signature and avoid an await on the ~3s
- * discovery hot path (the log is bounded to ~200 lines).
+ * discovery hot path (the log is bounded to 200–400 lines).
  */
 
 import { readFileSync } from "node:fs";
@@ -39,14 +39,23 @@ export function hasEventLog(sessionId: string): boolean {
   }
 }
 
-/** Read a session's hook events in append order (newest last); [] if no log. */
+/**
+ * Read a session's hook events in append order (newest last); [] if no log. The
+ * writer rotates the log to `.old` at 200 lines, so the rotated half comes first.
+ */
 export function readEvents(sessionId: string): HookEvent[] {
-  let raw: string;
-  try {
-    raw = readFileSync(eventLogPath(sessionId), "utf8");
-  } catch {
-    return []; // no log yet (ENOENT) — opt-in fallback handles this
-  }
+  // Current half FIRST: a rotation landing between the two reads then duplicates a
+  // generation (harmless) instead of skipping one. Each half is read on its own —
+  // just after a rotation only `.old` exists.
+  const read = (path: string): string => {
+    try {
+      return readFileSync(path, "utf8");
+    } catch {
+      return ""; // absent — no log yet (opt-in fallback handles it) or not rotated yet
+    }
+  };
+  const current = read(eventLogPath(sessionId));
+  const raw = read(`${eventLogPath(sessionId)}.old`) + current;
 
   const events: HookEvent[] = [];
   for (const line of raw.split("\n")) {
