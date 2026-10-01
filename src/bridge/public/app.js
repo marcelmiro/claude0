@@ -4189,6 +4189,9 @@ function SessionSheet() {
                     <button class="vrow" onClick=${() => setConfirm("fork")}>
                       <span class="vg">${vicon(VICONS.fork)}</span>Fork session…
                     </button>
+                    <button class="vrow" onClick=${() => (close(), copyText(s.id))}>
+                      <span class="vg">${vicon(VICONS.copy)}</span>Copy session ID
+                    </button>
                     ${section !== "done" &&
                     html`<button class="vrow danger" onClick=${() => setConfirm("archive")}>
                       <span class="vg">${vicon(VICONS.done)}</span>Archive session…
