@@ -26,12 +26,17 @@ function resolveClaudePath(): string {
 
 const CLAUDE_PATH = resolveClaudePath();
 
+/** Per-draw budget for the bridge's naming loop, which nothing awaits. */
+export const BACKGROUND_NAMING_TIMEOUT_MS = 60_000;
+// A live holder's lock must not read as stale while its draws can still be running.
+const NAMING_LOCK_STALE_MS = 2 * BACKGROUND_NAMING_TIMEOUT_MS;
+
 export async function acquireNamingLock(): Promise<boolean> {
   try {
     const file = Bun.file(NAMING_LOCK);
     if (await file.exists()) {
       const { pid, ts } = JSON.parse(await file.text());
-      if (Date.now() - ts < 60_000) {
+      if (Date.now() - ts < NAMING_LOCK_STALE_MS) {
         try { process.kill(pid, 0); return false; } catch {} // dead → stale
       }
     }

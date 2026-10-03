@@ -102,7 +102,7 @@ rather than papered over.
 
 A naming attempt that leaves a session unnamed used to return `""` with no trace. Now,
 when all draws fail, one line goes to `~/.config/claude0/naming.log`: timestamp, pid,
-session id, then each draw's reason — `timeout Nms`, `exit N <stderr>`,
+session id, then each draw's reason — `timeout Nms`, `exit N <stderr, else stdout>`,
 `error output <stdout>`, `refusal <stdout>`, `empty after normalize`, or `spawn <err>`.
 Successes and partial failures (some draws usable) write nothing, so the log is not a
 failure *rate*. It is a file because the monitor's tmux `#()` stderr is discarded and the
@@ -113,11 +113,15 @@ Its first two days showed 13 of 17 failures were all three draws killed at the 1
 default: haiku draws measured 5–35s even for small prompts, with no CLI flag (MCP, tools,
 settings, system prompt) removing the tail. The bridge's naming loop is fire-and-forget,
 so it now passes a 60s budget; the monitor keeps 15s because a hung draw stalls its poll.
+The naming lock's staleness window is derived from that budget (2×): at the old fixed
+60s, a live bridge mid-batch could read as stale, letting the monitor take the lock and
+the bridge's release then unlink the monitor's.
 A usage limit surfaces as `exit 1 "You've hit your weekly limit · resets …"` and needs no
 special handling: draws fail fast, the 60s unnamed retry names the session after reset.
 
 The log's first real catch: the stdout error filter matched single words (`credit`,
 `error`, `balance`, `rate limit`), so every draw for a session about YC credits
 ("Platform Credits Audit") was discarded until one happened to omit the word. It now matches
-only the CLI's error phrases (`API Error…`, `credit balance`); other CLI errors exit
-non-zero, and sentence-shaped text is still caught by the refusal filter.
+only the CLI's error phrases (`API Error…`, `credit balance`). The other CLI errors
+probed fail without reaching that filter — a bad model exits 1, a bad API key hangs
+until the timeout — and sentence-shaped text is still caught by the refusal filter.

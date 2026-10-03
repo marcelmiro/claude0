@@ -85,6 +85,7 @@ import {
   generateAIName,
   getSessionName,
   acquireNamingLock,
+  BACKGROUND_NAMING_TIMEOUT_MS,
   releaseNamingLock,
   loadNamingSkips,
   setNamingSkip,
@@ -877,7 +878,7 @@ function maybeGenerateNames(sessions: Session[], cache: NameCache): void {
             currentName: shouldRebaseline(cache, s.id, transcriptBytes) ? undefined : cache.names[s.id],
             // Nothing awaits this loop, so it can outwait haiku's latency spikes
             // (draws measured 5–35s) that killed every draw at the 15s default.
-            timeoutMs: 60_000,
+            timeoutMs: BACKGROUND_NAMING_TIMEOUT_MS,
           });
           // Cooldown on success too — the post-rename guard against drift-thrash.
           await setNamingSkip(s.id);

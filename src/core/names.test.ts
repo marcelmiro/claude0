@@ -3,7 +3,7 @@ import { CONFIG_DIR } from "../../test/helpers/home";
 import { test, expect } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { getSessionName, loadNameCache, normalizeName, slugify, looksLikeCliError, looksLikeRefusal, salvageName, pruneNameCache, needsNaming, inNamingCooldown, shouldRebaseline, pickConsensusName, buildNamingPrompt, saveNameCache, type NameCache } from "./names";
+import { getSessionName, loadNameCache, normalizeName, slugify, looksLikeCliError, looksLikeRefusal, salvageName, pruneNameCache, needsNaming, inNamingCooldown, shouldRebaseline, pickConsensusName, buildNamingPrompt, saveNameCache, acquireNamingLock, releaseNamingLock, BACKGROUND_NAMING_TIMEOUT_MS, type NameCache } from "./names";
 
 const CACHE_FILE = join(CONFIG_DIR, "names.json");
 function writeCache(obj: unknown) {
@@ -271,4 +271,17 @@ test("inNamingCooldown: unnamed sessions retry early, named ones hold the full T
   expect(inNamingCooldown(skips, "s2", named)).toBe(false); // unnamed: 90s > 60s retry
   expect(inNamingCooldown(skips, "s3", named)).toBe(true); // unnamed: 30s < 60s
   expect(inNamingCooldown(skips, "s4", named)).toBe(false); // no cooldown at all
+});
+
+test("acquireNamingLock: a live holder still inside its draw budget keeps the lock", async () => {
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  const lock = join(CONFIG_DIR, "naming.lock");
+  // This process stands in for a live bridge whose draws ran the full budget, plus
+  // the transcript reads before them.
+  writeFileSync(lock, JSON.stringify({ pid: process.pid, ts: Date.now() - (BACKGROUND_NAMING_TIMEOUT_MS + 5_000) }));
+  expect(await acquireNamingLock()).toBe(false);
+  // A dead holder's lock is taken over at any age.
+  writeFileSync(lock, JSON.stringify({ pid: 2 ** 22 + 1, ts: Date.now() }));
+  expect(await acquireNamingLock()).toBe(true);
+  await releaseNamingLock();
 });
