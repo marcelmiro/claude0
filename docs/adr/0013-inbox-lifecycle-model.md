@@ -431,3 +431,21 @@ the window prefix ranks ⚡ above ⏳ and the status bar counts it, so a bare `�
 under-reported the status bar. ⚡ never rides an in-flight turn — the monitor clears the
 flag on running, and gating on `script` covers the tick where its write lags the paint.
 
+## Addendum: hidden windows are pre-sized to the client (2026-10-03)
+
+**tmux resizes a window only while a client shows it** (3.4, every `window-size` mode,
+verified), so a window last shown at another client size keeps that size. Switching to
+it shrinks the window and splits the delta across panes: a 253→161 switch painted a
+frame with a 1-col sidebar, which the tick's `resize-pane` snapped back to 30 up to a
+second later — a visible layout shift, plus a second Claude reflow.
+
+**The renderer pre-sizes hidden windows every tick**: any stub window no client views,
+whose size differs from the window its attached session shows, gets `resize-window` to
+exactly that size (not `-A`: with two clients `-A` picks the larger while `latest`
+shows the latest, and the mismatch would re-resize every tick), `set -wu window-size`
+(drops the manual pin resize-window leaves), and a stub `resize-pane` — all before any
+switch, so the first frame is already right and Claude reflows out of sight. A
+`window-resized` hook restores the stub width in-server as a backstop (the shown
+window, client resizes); it alone was not enough — it runs after the first frame is
+drawn (raw client output showed the col-2 border before the col-31 one). Both skip
+zoomed windows: `resize-pane` unzooms.

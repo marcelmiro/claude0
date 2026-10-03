@@ -1100,6 +1100,37 @@ export function runSidebarRenderer(): void {
     );
   }
 
+  // tmux resizes a window only while a client shows it, so a hidden window
+  // keeps the size of whatever client last showed it. Switching to it then
+  // paints a first frame with the shrink split across panes (a 253→161
+  // switch squeezes the sidebar to 1 col) — and the window-resized hook runs
+  // only AFTER that frame. Resize hidden windows to the size their session
+  // shows ahead of time instead. resize-window pins window-size=manual;
+  // the unset hands it back to the global policy without resizing it.
+  // Zoomed windows are skipped: resize-pane unzooms.
+  async function prewarmHidden(): Promise<void> {
+    let rows: string[][];
+    try {
+      const fmt = ["#{session_id}", "#{window_id}", "#{window_active}", "#{session_attached}", "#{window_active_clients}", "#{window_zoomed_flag}", "#{window_width}x#{window_height}"].join(SEP);
+      rows = (await Bun.$`tmux list-windows -a -F ${fmt}`.quiet().text()).trim().split("\n").filter(Boolean).map((l) => l.split(SEP));
+    } catch {
+      return;
+    }
+    const shownSize = new Map<string, string>();
+    for (const [session, , active, attached, , , size] of rows) {
+      if (active === "1" && attached !== "0") shownSize.set(session!, size!);
+    }
+    for (const [session, winId, , , viewers, zoomed, size] of rows) {
+      const target = shownSize.get(session!);
+      const stub = wins.get(winId!)?.stubPane;
+      if (!target || viewers !== "0" || zoomed === "1" || size === target || !stub) continue;
+      try {
+        const [x, y] = target.split("x");
+        await Bun.$`tmux resize-window -x ${x} -y ${y} -t ${winId} ${";"} set -wu -t ${winId} window-size ${";"} resize-pane -t ${stub} -x ${COLS}`.quiet();
+      } catch {}
+    }
+  }
+
   // A stub that outlived a previous renderer holds a DEAD relay: its `cat`
   // blocks reading the tty and only notices the vanished socket when a
   // keystroke dies into it (SIGPIPE) — eating that keystroke, one per pane.
@@ -1351,6 +1382,12 @@ export function runSidebarRenderer(): void {
       // cycling windows never lands you inside a sidebar — bounce to the pane
       // right of it (pure tmux, alt+[ / ] untouched)
       await Bun.$`tmux set-hook -g after-select-window ${`if -F "#{&&:#{m:*${STUB_MARK}*,#{pane_start_command}},#{e|>:#{window_panes},1}}" "select-pane -t '{right-of}'"`}`.quiet();
+      // a window resize splits the delta across panes, sidebar included —
+      // restore its width in-server (ms) rather than on the next tick (≤1s).
+      // Backstop for prewarmHidden: covers the shown window and client
+      // resizes. '{left}' must stay quoted — bare, tmux parses it as a block.
+      // Not when zoomed: resize-pane unzooms.
+      await Bun.$`tmux set-hook -g window-resized ${`if -F "#{&&:#{?window_zoomed_flag,,1},#{P:#{?#{&&:#{==:#{pane_left},0},#{m:*${STUB_MARK}*,#{pane_start_command}}},1,}}}" "resize-pane -t '{left}' -x ${COLS}"`}`.quiet();
       // copy mode on a sidebar is only ever accidental (wheel racing the
       // mouse-mode preamble, habitual prefix-[): it freezes the frame and
       // hijacks j/k, and the renderer scrolls wheel itself — eject instantly.
@@ -1404,6 +1441,8 @@ export function runSidebarRenderer(): void {
       if (tmuxEpoch !== null && epoch !== tmuxEpoch) resumedWindows.clear();
       tmuxEpoch = epoch;
     } catch {}
+    phase = "prewarm";
+    await prewarmHidden();
     phase = "ensure";
     await ensure();
     phase = "topology";
