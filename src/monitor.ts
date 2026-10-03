@@ -567,7 +567,7 @@ async function phase2(
             .filter((s) => s.repoPath === unnamed.repoPath && s.tmuxPane && paneSessionMap[s.tmuxPane.paneId] !== sessionId)
             .map((s) => nameCache.names[paneSessionMap[s.tmuxPane!.paneId]] ?? "")
             .filter(Boolean);
-          const name = await generateAIName({ firstPrompt, summary, lastPrompt, ...extras, branch: extras.dominantBranch || branch, currentName: anchor, siblingNames });
+          const name = await generateAIName({ sessionId, firstPrompt, summary, lastPrompt, ...extras, branch: extras.dominantBranch || branch, currentName: anchor, siblingNames });
           if (name) {
             // Reload: names the bridge wrote (or pruned) during the ≤15s claude -p
             // run must not be clobbered or resurrected by this stale in-memory copy —

@@ -242,6 +242,7 @@ function handleRename() {
   void (async () => {
     const extras = await readNamingExtras(session.repoPath, sessionId);
     const name = await generateAIName({
+      sessionId,
       firstPrompt: sessionFirstPrompt,
       summary: sessionSummary,
       branch: session.branch,

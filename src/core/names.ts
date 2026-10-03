@@ -342,6 +342,8 @@ export interface NamingContext {
    *  these, sessions covering one PR of a long migration all land on the migration's
    *  own name and become indistinguishable in the list. */
   siblingNames?: string[];
+  /** Only labels the failure log line. */
+  sessionId?: string;
   /** Bounds the subprocess — keep it low (15s default) for the background monitor so a
    *  hung `claude -p` can't stall its poll loop; the interactive TUI rename passes a
    *  longer budget so a cold haiku start resolves in one attempt. */
@@ -448,21 +450,39 @@ export function pickConsensusName(candidates: string[]): string {
 export async function generateAIName(ctx: NamingContext): Promise<string> {
   const { firstPrompt, summary, lastPrompt } = ctx;
   if (!firstPrompt && !summary && !lastPrompt) return "";
-  const candidates = await Promise.all(
+  const draws = await Promise.all(
     Array.from({ length: NAME_SAMPLES }, () => generateOneName(ctx)),
   );
-  return pickConsensusName(candidates);
+  const name = pickConsensusName(draws.map((d) => d.name));
+  if (!name) await logNamingFailure(`${ctx.sessionId ?? "?"} ${draws.map((d) => `[${d.failure}]`).join(" ")}`);
+  return name;
 }
 
-/** One `claude -p` draw. */
-async function generateOneName(ctx: NamingContext): Promise<string> {
+const NAMING_LOG = `${CLAUDE0_ROOT}/.config/claude0/naming.log`;
+const NAMING_LOG_MAX = 256 * 1024;
+
+/** A file, not stderr: the monitor's tmux `#()` stderr is discarded and the TUI's
+ *  stderr is the blessed screen. Rotates to `.1` past NAMING_LOG_MAX. */
+async function logNamingFailure(line: string): Promise<void> {
+  try {
+    const { appendFile, rename, stat } = await import("fs/promises");
+    const size = await stat(NAMING_LOG).then((s) => s.size, () => 0);
+    if (size > NAMING_LOG_MAX) await rename(NAMING_LOG, `${NAMING_LOG}.1`);
+    await appendFile(NAMING_LOG, `${new Date().toISOString()} pid=${process.pid} ${line}\n`);
+  } catch {}
+}
+
+const clip = (s: string) => JSON.stringify(s.trim().replace(/\s+/g, " ").slice(0, 200));
+
+/** One `claude -p` draw: a name, or why there isn't one. */
+async function generateOneName(ctx: NamingContext): Promise<{ name: string; failure?: string }> {
   const { timeoutMs = 15_000 } = ctx;
   try {
     const namePrompt = buildNamingPrompt(ctx);
     const proc = Bun.spawn([CLAUDE_PATH, "-p", "--model", "haiku", "--no-session-persistence"], {
       stdin: new Response(namePrompt),
       stdout: "pipe",
-      stderr: "ignore",
+      stderr: "pipe",
       // Neutral cwd: `claude -p` loads workspace context from its working directory,
       // and inheriting the caller's cwd biased names toward the CALLER'S repo — four
       // unrelated sessions once named after the directory the generator ran from.
@@ -472,22 +492,26 @@ async function generateOneName(ctx: NamingContext): Promise<string> {
     });
     // Kill the subprocess after `timeoutMs` so a hung `claude -p` can't stall the
     // caller (the monitor's tmux #() runs one instance — a hang blocks all polls).
-    const killTimer = setTimeout(() => proc.kill(), timeoutMs);
-    const result = await new Response(proc.stdout).text();
+    let timedOut = false;
+    const killTimer = setTimeout(() => { timedOut = true; proc.kill(); }, timeoutMs);
+    const [result, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
     clearTimeout(killTimer);
     await proc.exited;
-    if (proc.exitCode !== 0) return "";
+    if (timedOut) return { name: "", failure: `timeout ${timeoutMs}ms` };
+    if (proc.exitCode !== 0) return { name: "", failure: `exit ${proc.exitCode} ${clip(stderr || result)}` };
     // Reject error/rate-limit messages that survive sanitization
     const lower = result.trim().toLowerCase();
-    if (lower.includes("error") || lower.includes("credit") || lower.includes("balance") || lower.includes("rate limit") || lower.includes("unauthorized") || lower.includes("overloaded")) return "";
+    if (lower.includes("error") || lower.includes("credit") || lower.includes("balance") || lower.includes("rate limit") || lower.includes("unauthorized") || lower.includes("overloaded")) {
+      return { name: "", failure: `error output ${clip(result)}` };
+    }
     // Refusal-shaped output: try to salvage a name from it before giving up —
     // rejection leaves the session unnamed for the whole skip cooldown.
     const usable = looksLikeRefusal(result) ? salvageName(result) : result.trim();
-    if (!usable) return "";
+    if (!usable) return { name: "", failure: `refusal ${clip(result)}` };
     const name = normalizeName(usable);
-    return name.length > 0 ? name : "";
-  } catch {
-    return "";
+    return name ? { name } : { name: "", failure: `empty after normalize ${clip(result)}` };
+  } catch (e) {
+    return { name: "", failure: `spawn ${clip(String(e))}` };
   }
 }
 

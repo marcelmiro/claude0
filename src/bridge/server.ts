@@ -861,6 +861,7 @@ function maybeGenerateNames(sessions: Session[], cache: NameCache): void {
         todo.map(async (s) => {
           const { transcriptBytes, ...extras } = await readNamingExtras(s.repoPath, s.id);
           const name = await generateAIName({
+            sessionId: s.id,
             firstPrompt: s.firstPrompt,
             summary: s.summary,
             lastPrompt: s.lastPrompt,
@@ -874,6 +875,9 @@ function maybeGenerateNames(sessions: Session[], cache: NameCache): void {
             // Withheld once the session has outgrown its name, so a stale one can
             // self-correct instead of anchoring forever (see `shouldRebaseline`).
             currentName: shouldRebaseline(cache, s.id, transcriptBytes) ? undefined : cache.names[s.id],
+            // Nothing awaits this loop, so it can outwait haiku's latency spikes
+            // (draws measured 5–35s) that killed every draw at the 15s default.
+            timeoutMs: 60_000,
           });
           // Cooldown on success too — the post-rename guard against drift-thrash.
           await setNamingSkip(s.id);
