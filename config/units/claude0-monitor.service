@@ -12,7 +12,7 @@ Environment=PATH=%h/.bun/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 # (~5 min, matching RESURRECT_SAVE_INTERVAL_MS) is NOT gated on attachment: it
 # is the only periodic saver on linux
 # (no continuum), keeping the layout and pane→session map fresh for a hard
-# reboot regardless of who is looking (ExecStop only covers a clean stop).
+# reboot regardless of who is looking.
 ExecStart=/bin/bash -c 'n=0; while true; do if [ -z "$(tmux list-clients 2>/dev/null)" ]; then claude0 status >/dev/null 2>&1; fi; n=$((n+1)); if [ "$n" -ge 100 ]; then n=0; claude0 resurrect save >/dev/null 2>&1 || true; fi; sleep 3; done'
 Restart=always
 RestartSec=5s

@@ -84,3 +84,22 @@ Restore also skips panes already running a foreground process, and skips a
 coordinate whose session id was already resumed this pass — one id can sit at
 two coordinates, and resuming it twice is the same two-processes-one-transcript
 fight the `@resurrect-processes` exclusion prevents.
+
+## Addendum: no session-map save at stop (2026-10-03)
+
+`tmux.service` `ExecStop` no longer runs `claude0 save-sessions`. Ubuntu's tmux
+puts each pane in its own `tmux-spawn-*.scope`, and at shutdown systemd stops
+those scopes in parallel with `tmux.service` — the 2026-10-03 reboot logged the
+scopes stopping ~50ms before `ExecStop` began. The save then ran against a
+dying server: sidebar panes already gone shifted every Claude pane from `.2` to
+`.1`, and a window whose panes had all died renumbered the windows after it. That
+map overwrote the good one, and resurrect (restoring the last periodic layout)
+paired it with panes it no longer described: Claude resumed into the old sidebar
+slot, sessions landed one window early, one window got none.
+
+The pane→session map is coordinates, so it is only meaningful next to the layout
+snapshot it is restored onto. It is now written only by resurrect's
+`post-save-all` hook, i.e. together with that snapshot (every ~5 min from the
+monitor). The accepted cost: a session started in the last ~5 min before a
+reboot isn't resumed — the same window resurrect already loses layout changes
+in. Before a planned reboot, run `claude0 resurrect save`.

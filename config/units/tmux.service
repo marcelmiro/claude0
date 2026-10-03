@@ -17,9 +17,11 @@ ExecStart=/bin/bash -c 'tmux has-session -t main 2>/dev/null || tmux new-session
 # `claude0 restore-sessions` to resume each pane's Claude session. claude0
 # resolves the plugin install at runtime (user-managed or claude0-owned).
 ExecStartPost=/bin/bash -c 'sleep 1; claude0 resurrect restore || true'
-# Save the pane→session map on the way down so restore-sessions can resume every
-# Claude session after the reboot. claude0 resolves via the unit's own PATH above.
-ExecStop=/bin/bash -c 'claude0 save-sessions; /usr/bin/tmux kill-server'
+# No save-sessions here: at shutdown systemd stops every pane's tmux-spawn scope
+# in parallel with this unit, so a save now records half-dead, renumbered
+# coordinates and clobbers the good map. The map is saved only alongside the
+# periodic resurrect snapshot it gets restored onto (ADR 16).
+ExecStop=/usr/bin/tmux kill-server
 Restart=on-failure
 RestartSec=5s
 
