@@ -3,7 +3,7 @@ import { CONFIG_DIR } from "../../test/helpers/home";
 import { test, expect } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { getSessionName, loadNameCache, normalizeName, slugify, looksLikeRefusal, salvageName, pruneNameCache, needsNaming, inNamingCooldown, shouldRebaseline, pickConsensusName, buildNamingPrompt, saveNameCache, type NameCache } from "./names";
+import { getSessionName, loadNameCache, normalizeName, slugify, looksLikeCliError, looksLikeRefusal, salvageName, pruneNameCache, needsNaming, inNamingCooldown, shouldRebaseline, pickConsensusName, buildNamingPrompt, saveNameCache, type NameCache } from "./names";
 
 const CACHE_FILE = join(CONFIG_DIR, "names.json");
 function writeCache(obj: unknown) {
@@ -65,6 +65,14 @@ test("slugify: lowercases, hyphenates, abbreviates via ABBREV", () => {
 
 test("slugify: em-dash-joined words split into separate slug parts (not merged)", () => {
   expect(slugify(normalizeName("Clarification—the first"))).toBe("clarification-the-first");
+});
+
+test("looksLikeCliError: rejects CLI error text, keeps names that share its words", () => {
+  expect(looksLikeCliError('API Error: 529 {"type":"overloaded_error"}')).toBe(true);
+  expect(looksLikeCliError("Credit balance is too low")).toBe(true);
+  for (const name of ["YC Credits Audit", "Platform Credits Inventory", "Error Boundary", "Balance Sheet Import", "Rate Limit Middleware"]) {
+    expect(looksLikeCliError(name)).toBe(false);
+  }
 });
 
 test("looksLikeRefusal: rejects refusals/meta-replies, keeps real names", () => {

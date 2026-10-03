@@ -472,6 +472,13 @@ async function logNamingFailure(line: string): Promise<void> {
   } catch {}
 }
 
+/** Claude CLI error text printed to stdout with exit 0. Phrases, never single words —
+ *  "credit" or "error" alone is also a real session subject ("YC Credits Audit"). */
+export function looksLikeCliError(text: string): boolean {
+  const lower = text.trim().toLowerCase();
+  return lower.startsWith("api error") || lower.includes("credit balance");
+}
+
 const clip = (s: string) => JSON.stringify(s.trim().replace(/\s+/g, " ").slice(0, 200));
 
 /** One `claude -p` draw: a name, or why there isn't one. */
@@ -499,11 +506,7 @@ async function generateOneName(ctx: NamingContext): Promise<{ name: string; fail
     await proc.exited;
     if (timedOut) return { name: "", failure: `timeout ${timeoutMs}ms` };
     if (proc.exitCode !== 0) return { name: "", failure: `exit ${proc.exitCode} ${clip(stderr || result)}` };
-    // Reject error/rate-limit messages that survive sanitization
-    const lower = result.trim().toLowerCase();
-    if (lower.includes("error") || lower.includes("credit") || lower.includes("balance") || lower.includes("rate limit") || lower.includes("unauthorized") || lower.includes("overloaded")) {
-      return { name: "", failure: `error output ${clip(result)}` };
-    }
+    if (looksLikeCliError(result)) return { name: "", failure: `error output ${clip(result)}` };
     // Refusal-shaped output: try to salvage a name from it before giving up —
     // rejection leaves the session unnamed for the whole skip cooldown.
     const usable = looksLikeRefusal(result) ? salvageName(result) : result.trim();
