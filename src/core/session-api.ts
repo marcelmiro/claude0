@@ -119,8 +119,8 @@ export interface PaneStatusline {
 }
 
 // The model/effort arg forms Claude accepts (`/model <x>`, `/effort <x>`) — the switcher's
-// allowlists. Note the `[1m]` suffix, NOT the bare alias: `opus` resolves to the non-1M base
-// model, whereas the picker's "Opus" and "Default" both select the 1M variant. Every entry is
+// allowlists. Note the `[1m]` suffix, NOT the bare alias: the picker's "Opus" and "Default"
+// both select `opus[1m]`, while bare `opus` is a different model id. Every entry is
 // an alias, never a versioned model id: Claude saves the arg verbatim as the new-session
 // default, so an id would pin every future session to that version, while `opus[1m]` keeps
 // tracking the current Opus.
@@ -149,12 +149,12 @@ const MODEL_FAMILIES: Array<[RegExp, string]> = [
  * is absent for models without reasoning effort, and its position shifts. Returns only the
  * fields it can identify; a garbled/foreign statusline yields `{}` (never throws).
  *
- * Opus renders its version in the display name ("Opus 5.5", "Opus 5") plus a "(1M context)"
- * suffix on the 1M variant. The current Opus maps to the `opus` alias — "Opus 5.5 (1M
- * context)" → `opus[1m]` (the menu's Opus option, also how "Default" renders), plain
- * "Opus 5.5" → `opus` (the non-1M base, not in the menu so it simply marks nothing). Any
- * other Opus version becomes its full id (`claude-opus-<major>-<minor>`), so an older model
- * never marks the current row.
+ * Opus renders its version in the display name ("Opus 5.5", "Opus 5"), plus a "(1M context)"
+ * suffix only when selected as `opus[1m]`. The current Opus always maps to the menu's
+ * `opus[1m]`: plain `opus` also runs with a 1M window (Claude Code 2.1.288) but renders
+ * without the suffix, so the suffix tells apart nothing the menu offers. Any other Opus
+ * version becomes its full id (`claude-opus-<major>-<minor>`, `[1m]` when suffixed), so an
+ * older model never marks the current row.
  */
 const CURRENT_OPUS = "5.5";
 export function parseStatusline(line: string): { model?: string; effort?: string } {
@@ -165,8 +165,8 @@ export function parseStatusline(line: string): { model?: string; effort?: string
     if (!out.model) {
       if (/opus/i.test(seg)) {
         const ver = seg.match(/opus\s+(\d+(?:\.\d+)?)/i)?.[1];
-        const base = !ver || ver === CURRENT_OPUS ? "opus" : `claude-opus-${ver.replace(".", "-")}`;
-        out.model = /1m/i.test(seg) ? `${base}[1m]` : base;
+        if (!ver || ver === CURRENT_OPUS) out.model = "opus[1m]";
+        else out.model = `claude-opus-${ver.replace(".", "-")}${/1m/i.test(seg) ? "[1m]" : ""}`;
       } else {
         const fam = MODEL_FAMILIES.find(([re]) => re.test(seg));
         if (fam) out.model = fam[1];

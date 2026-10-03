@@ -133,3 +133,17 @@ produces.
   (`claude-opus-5[1m]` → "Opus 5") instead of reading "—".
 - Family aliases are version-free, so a family's version bump is a sub-label edit: Sonnet's
   alias now resolves to Sonnet 5.5 (verified: `claude --model sonnet -p` → `claude-sonnet-5-5`).
+
+## Addendum 2026-10-03: plain `opus` marks the Opus row
+
+On Claude Code 2.1.288 bare `opus` is no longer a non-1M base. `claude -p --model opus`
+reports `claude-opus-5-5` with a 1,000,000 context window, and `--model opus[1m]` reports
+`claude-opus-5-5[1m]`, also at 1,000,000. Only the latter renders "(1M context)" on the
+statusline. With `"model": "opus"` as the saved default, every new session rendered
+`Opus 5.5`, parsed to `opus`, and the picker marked no row.
+
+- `parseStatusline` maps the current Opus to `opus[1m]` with or without the suffix, so the
+  Opus row is marked for both. An older Opus still keeps its full id, with `[1m]` only when
+  suffixed, so it marks no row.
+- The picker's row stays `opus[1m]`, because a tap saves its arg verbatim as the default and
+  the two aliases resolve to different model ids.

@@ -1051,10 +1051,10 @@ test("parseStatusline: full line → 1M-Opus arg key + effort level", () => {
   });
 });
 
-test("parseStatusline: non-1M Opus → base 'opus' (not the menu's opus[1m])", () => {
-  // bare `/model opus` yields "Opus 5.5" with no "1M context"; not offered in the menu, so it
-  // simply won't pre-mark anything — but must NOT be mistaken for the 1M variant.
-  expect(parseStatusline("0/1000k (0%) • main • Opus 5.5 • medium").model).toBe("opus");
+test("parseStatusline: unsuffixed current Opus → the menu's opus[1m]", () => {
+  // bare `/model opus` renders "Opus 5.5" with no "(1M context)" yet runs 1M; it must still
+  // mark the Opus row.
+  expect(parseStatusline("0/1000k (0%) • main • Opus 5.5 • medium").model).toBe("opus[1m]");
 });
 
 test("parseStatusline: previous Opus is its own arg key, not the current one", () => {

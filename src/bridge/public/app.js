@@ -4768,7 +4768,7 @@ function App() {
 // Combined model + effort picker (reached from /model, /effort, or the session sheet's
 // current-values row). Options mirror Claude's own pickers. The current values are read from
 // the pane-scraped statusline (transcript.model / .effort, arg keys); note "Default" reads as
-// `opus` on the statusline, so Opus is marked when Default is active. One tap applies ONE
+// Opus on the statusline, so Opus is marked when Default is active. One tap applies ONE
 // change and closes — the config route takes a single field per request, and Claude's own
 // confirmation line is what the user reads next.
 // Every option is an alias, never a versioned model id. Claude saves the arg verbatim as the
@@ -4791,14 +4791,14 @@ const EFFORT_OPTS = [
   { key: "ultracode", label: "Ultra" },
 ];
 
-// "Opus · High" for the session sheet row. Values that aren't options still read: a bare
-// `opus` (non-1M base) as "Opus", and a session left on an older Opus — whose arg key is its
-// full id — as its version. An unparsed value (statusline not rendering it) shows as "—".
+// "Opus · High" for the session sheet row. A session left on an older Opus — whose arg key is
+// its full id, not an option — reads as its version. An unparsed value (statusline not
+// rendering it) shows as "—".
 function configLabel(t) {
   const m = t && t.model;
   const mo = MODEL_OPTS.find((o) => o.key === m);
   const ver = typeof m === "string" ? m.match(/^claude-opus-(\d+)(?:-(\d+))?/) : null;
-  const model = mo ? mo.label : ver ? `Opus ${ver[1]}${ver[2] ? `.${ver[2]}` : ""}` : m === "opus" ? "Opus" : "—";
+  const model = mo ? mo.label : ver ? `Opus ${ver[1]}${ver[2] ? `.${ver[2]}` : ""}` : "—";
   const eo = EFFORT_OPTS.find((o) => o.key === (t && t.effort));
   return `${model} · ${eo ? eo.label : "—"}`;
 }
