@@ -1289,6 +1289,8 @@ async function restoreSession() {
 // API actually writes; over plain http navigator.clipboard is undefined, so we fall back to
 // an execCommand path (see legacyCopy). iOS only honors the clipboard at all over HTTPS.
 async function copyText(text) {
+  // Not a full trim: a code block's first-line indent is content (YAML, Python).
+  text = (text || "").replace(/^\n+/, "").trimEnd();
   if (!text) return false;
   let ok = false;
   // Prefer the native Clipboard API on a secure origin (HTTPS) — it actually writes. iOS
