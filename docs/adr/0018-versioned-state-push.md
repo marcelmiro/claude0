@@ -161,3 +161,30 @@ an absolute worktree path (`…/.claude/worktrees/tf-192/src/x.ts`) is all
 prefix noise on a phone — falling back to `~`-shortening outside the cwd.
 Display-only: `input.file_path` stays absolute, since it is the tap target
 the client sends back to `/diff`.
+
+## Addendum (2026-10-03): subscribe declares the held rev; no transcript push on connect
+
+Opening a long session shipped its transcript twice: the gzipped GET (~400KB) and
+the subscribe-time snapshot over SSE, which is never compressed (~1.4MB for a
+1,700-turn thread). The two competed for the link: at 1.5 Mbps the redundant
+snapshot finished ~10s after a first open and ~8s after re-opening a cached,
+unchanged session. Every foreground re-sent it too.
+
+- `/stream/open` takes an optional `rev`, the file revision the device already
+  holds. If the first push's `rev` still matches it, the device gets a zero-turn
+  `append` carrying only the non-turn fields (~9KB) instead of a snapshot. Otherwise
+  it gets a snapshot as before. The held rev is used up by that first push.
+- The client brings the thread current with the GET first (`?rev=` short-circuits
+  to a tiny `unchanged`), then subscribes declaring the rev it now holds. Opening a
+  session and every stream (re)open both go GET-then-subscribe through the
+  serialized subscription chain. A step superseded by a later open or back is skipped.
+- The stream's on-connect transcript push is gone. The client re-declares its
+  subscription on every open, and that request decides between snapshot and append.
+- While the stream is live (OPEN, and heard from within 20s; pings are 15s), a
+  send's post-POST transcript GET is skipped, and the 2.5s send/queue poll runs only
+  if no transcript push has arrived for 10s. The JSONL watcher pushes the appends
+  those polls used to fetch, and on a long session each poll re-downloaded the
+  whole changed thread.
+- The thread header shows "syncing…" from open (or foreground) until a payload for
+  that session applies, so a cached copy is never presented as current. A tail
+  slice counts as current: it is the newest turns.

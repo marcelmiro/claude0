@@ -12,7 +12,8 @@
  * - `sessions`   — the full `/sessions` payload, pushed on connect and whenever
  *                  the recomputed payload differs from the last pushed one.
  * - `transcript` — for a device's ONE subscribed session: `kind:"snapshot"`
- *                  (full payload; on subscribe and on any non-extension change —
+ *                  (full payload; on subscribe — unless the device declared it
+ *                  already holds the current rev — and on any non-extension change:
  *                  rewind, branch flip, compaction) or `kind:"append"`
  *                  (`fromIndex` + `newTurns`; the previously-pushed turn list is
  *                  a prefix, allowing the last turn to have grown mid-stream).
@@ -29,8 +30,12 @@ type Controller = ReadableStreamDefaultController;
 
 type Conn = { deviceId?: string; seq: number };
 
-/** Per-device transcript subscription + what was last pushed to it. */
-type Sub = { sessionId: string; lastKeys: string[] | null };
+/**
+ * Per-device transcript subscription + what was last pushed to it. `heldRev` is the
+ * file revision the device declared it already holds when subscribing: the first push
+ * skips the turns when it still matches, consumed by that push.
+ */
+type Sub = { sessionId: string; lastKeys: string[] | null; heldRev: string | null };
 
 const conns = new Map<Controller, Conn>();
 const subs = new Map<string, Sub>();
@@ -110,23 +115,13 @@ export function pushSessions(payload: unknown, computedAt: number, only?: Contro
 }
 
 /** Set (or clear, with null) a device's one transcript subscription. */
-export function subscribe(deviceId: string, sessionId: string | null): void {
+export function subscribe(deviceId: string, sessionId: string | null, heldRev: string | null = null): void {
   if (!sessionId) {
     subs.delete(deviceId);
     lastSeen.delete(deviceId); // re-stamped on the device's next connect — never grows
   } else {
-    subs.set(deviceId, { sessionId, lastKeys: null });
+    subs.set(deviceId, { sessionId, lastKeys: null, heldRev });
   }
-}
-
-export function subscriptionFor(deviceId: string): string | null {
-  return subs.get(deviceId)?.sessionId ?? null;
-}
-
-/** Force the next transcript push to this device to be a full snapshot. */
-export function forceSnapshot(deviceId: string): void {
-  const sub = subs.get(deviceId);
-  if (sub) sub.lastKeys = null;
 }
 
 export function hasSubscribers(sessionId: string): boolean {
@@ -173,17 +168,25 @@ export function deltaTurns(
 /**
  * Push a composed transcript payload to every device subscribed to `sessionId`.
  * Each device gets its own delta against what it last received; the payload's
- * non-turn fields ship whole either way (omitted = cleared).
+ * non-turn fields ship whole either way (omitted = cleared). A fresh subscription
+ * whose `heldRev` matches the payload's `rev` gets a zero-turn append instead of the
+ * snapshot — the device already holds those turns, and on a long session the
+ * uncompressed snapshot is ~1.4MB.
  */
-export function pushTranscript(sessionId: string, payload: { turns?: unknown[] } & Record<string, unknown>): void {
+export function pushTranscript(
+  sessionId: string,
+  payload: { turns?: unknown[]; rev?: unknown } & Record<string, unknown>,
+): void {
   const turns = Array.isArray(payload.turns) ? payload.turns : [];
   let keys: string[] | null = null; // computed once, only if someone is subscribed
   const computedAt = Date.now();
   for (const [deviceId, sub] of subs) {
     if (sub.sessionId !== sessionId) continue;
     keys ??= turns.map(turnKey);
-    const delta = deltaTurns(sub.lastKeys, keys);
+    const held = sub.lastKeys === null && sub.heldRev !== null && sub.heldRev === payload.rev;
+    const delta = held ? { kind: "append" as const, fromIndex: keys.length } : deltaTurns(sub.lastKeys, keys);
     sub.lastKeys = keys;
+    sub.heldRev = null;
     let bodyJson: string;
     if (delta.kind === "append") {
       const { turns: _t, ...rest } = payload;

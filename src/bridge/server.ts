@@ -1007,7 +1007,7 @@ async function pushTranscriptNow(sessionId: string): Promise<void> {
     const payload = FIXTURES
       ? (fixtureData("GET", `/sessions/${sessionId}/transcript`) as Record<string, unknown>)
       : await composeTranscriptPayload(sessionId);
-    if (payload) stream.pushTranscript(sessionId, payload as { turns?: unknown[] } & Record<string, unknown>);
+    if (payload) stream.pushTranscript(sessionId, payload as { turns?: unknown[]; rev?: unknown } & Record<string, unknown>);
   } catch {
     // compose failed this pass — the next change (or the client's fallback GET) covers it
   }
@@ -1080,19 +1080,12 @@ function streamResponse(deviceId?: string): Response {
       if (deviceId) touchDeviceConsumer(deviceId); // this device is watching live
       controller.enqueue(new TextEncoder().encode(": connected\n\n"));
       // Snapshot-on-connect, to THIS controller only: the current sessions payload
-      // (plus a fresh recompute behind it) and, if this device has a transcript
-      // subscription, a forced-snapshot transcript push. This replaces the client's
-      // three racing foreground refetches.
+      // (plus a fresh recompute behind it). No transcript here — the client re-declares
+      // its subscription on every open, carrying the rev it holds, and that request
+      // decides between a snapshot and a zero-turn append.
       const cached = FIXTURES ? fixtureData("GET", "/sessions") : sessionsCache?.value;
       if (cached) stream.pushSessions(cached, sessionsCache?.ts ?? Date.now(), controller);
       if (!FIXTURES) void startSessionsRefresh().catch(() => {});
-      if (deviceId) {
-        const sub = stream.subscriptionFor(deviceId);
-        if (sub) {
-          stream.forceSnapshot(deviceId);
-          scheduleTranscriptPush(sub, 0);
-        }
-      }
     },
     cancel() {
       if (stream.removeClient(self) === 0) clearMarker(BRIDGE_CONSUMER); // last phone gone — go stale now
@@ -1379,10 +1372,11 @@ async function route(req: Request): Promise<Response> {
 
   // Transcript subscription (versioned state push): the device tells the bridge which
   // ONE session it has open; the bridge pushes that session's transcript over the
-  // stream — a forced snapshot now, then append/snapshot deltas as it changes (JSONL
-  // watcher + hook events). `sessionId: null` unsubscribes.
+  // stream — a snapshot now (a zero-turn append when `rev` says the device already
+  // holds the current file revision), then append/snapshot deltas as it changes
+  // (JSONL watcher + hook events). `sessionId: null` unsubscribes.
   if (method === "POST" && path === "/stream/open") {
-    const body = (await req.json().catch(() => ({}))) as { sessionId?: unknown };
+    const body = (await req.json().catch(() => ({}))) as { sessionId?: unknown; rev?: unknown };
     const sid = body.sessionId;
     // Shape-check the id like deviceId below: it reaches resolveTranscriptPath's Glob,
     // where metacharacters ("*", "../") would widen the scan past the named session.
@@ -1393,12 +1387,9 @@ async function route(req: Request): Promise<Response> {
     // only /stream itself uses ?device=, since EventSource can't set headers.
     const deviceId = deviceOf(req);
     if (!deviceId) return json({ ok: false, reason: "no-device" }, 400);
-    stream.subscribe(deviceId, sid);
+    stream.subscribe(deviceId, sid, typeof body.rev === "string" ? body.rev : null);
     void watchSubscription(deviceId, sid);
-    if (sid) {
-      stream.forceSnapshot(deviceId);
-      void pushTranscriptNow(sid);
-    }
+    if (sid) void pushTranscriptNow(sid);
     return json({ ok: true });
   }
 

@@ -266,6 +266,10 @@ function boundedSet(map, key, value, max = 20) {
   if (map.size > max) map.delete(map.keys().next().value);
 }
 const transcriptCache = new Map(); // sessionId → last /transcript payload (open() paints it)
+// Whether the open thread has been confirmed current since it was opened or the app
+// foregrounded — until then it may be a cached copy, shown with a "syncing…" label.
+const transcriptFresh = signal(false);
+
 const changesDataCache = new Map(); // sessionId → last /changes payload (ChangesCard/FilesView)
 const prDataCache = new Map(); // sessionId → last /pr payload (usePullRequest)
 function cacheTranscript(id, data) {
@@ -498,6 +502,7 @@ async function fetchTailPaint(id) {
 // active conversation branch — replace, never merge (a rewind can shrink it).
 function applyTranscript(id, data) {
   transcript.value = data;
+  transcriptFresh.value = true;
   cacheTranscript(id, data);
   // Retire the optimistic approve/answer flip once the card is actually gone from the
   // refetched transcript (the decision resolved server-side).
@@ -644,17 +649,35 @@ let lastOpenAt = 0;
 // device, last-request-wins, so two parallel POSTs from a rapid A→B switch
 // could land out of order and leave the server pushing A while B is on screen.
 let openSubChain = Promise.resolve();
+const postSubscription = (sessionId, rev = null) =>
+  fetch("/stream/open", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sessionId, rev }),
+  }).catch(() => {
+    /* the fallback GET path still keeps the thread alive */
+  });
 function openSubscription(sessionId) {
-  openSubChain = openSubChain.then(() =>
-    fetch("/stream/open", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ sessionId }),
-    }).catch(() => {
-      /* the fallback GET path still keeps the thread alive */
-    }),
-  );
+  openSubChain = openSubChain.then(() => postSubscription(sessionId));
 }
+// Bring the open thread current, then subscribe declaring the rev now held. The GET is
+// the bulk path (gzipped; a tiny `unchanged` when the held copy is current), so the
+// subscribe answers with a zero-turn append instead of re-shipping the whole thread
+// uncompressed. A step superseded by a later open/back is skipped.
+function subscribeFresh(id) {
+  openSubChain = openSubChain.then(async () => {
+    if (selectedId.value !== id) return;
+    await refreshTranscript();
+    if (selectedId.value !== id) return;
+    await postSubscription(id, (transcript.value && transcript.value.rev) || null);
+  });
+}
+
+// The stream demonstrably works: open, and heard from within ~1 heartbeat (15s pings).
+// While it does, its pushes carry every transcript change, so the fallback GETs around
+// a send would only re-download the whole changed thread.
+const streamLive = () => !!es && es.readyState === 1 && Date.now() - lastStreamActivity < 20_000;
+let lastTranscriptPushAt = 0;
 
 // After a foreground resync, the notification-tap check must run against a FRESH
 // list (the pre-background copy predates the push that brought us here). Normally
@@ -673,7 +696,7 @@ function connectStream() {
     stampStream();
     lastOpenAt = Date.now();
     connected.value = true;
-    if (selectedId.value) openSubscription(selectedId.value);
+    if (selectedId.value) subscribeFresh(selectedId.value);
     if (openSubagent.value) refreshSubagent();
   };
   // The server heartbeats a named `ping` every 15s — named events bypass onmessage,
@@ -707,6 +730,7 @@ function connectStream() {
     }
     if (msg.type === "transcript") {
       if (msg.sessionId !== selectedId.value) return; // stale subscription push
+      lastTranscriptPushAt = Date.now();
       const r = applyTranscriptEvent(transcript.value, msg);
       if (r.needsFetch) return refreshTranscript(); // append base lost — fall back to a full GET
       txAppliedSeq = ++txReqSeq; // pushes supersede in-flight GETs
@@ -879,7 +903,7 @@ const reasonText = (data, status) => REASON_TEXT[data.reason] || data.reason || 
 // Send an action and report ok/failure to the caller — the bridge gates
 // answer/decision/message server-side and returns {ok,reason}. Failures flash; success
 // is silent (the caller updates the UI optimistically).
-async function action(path, body) {
+async function action(path, body, { pushed = false } = {}) {
   try {
     const r = await fetch(path, {
       method: "POST",
@@ -892,7 +916,8 @@ async function action(path, body) {
       data = await r.json();
     } catch {}
     if (r.ok && data.ok !== false) {
-      refreshTranscriptSoon();
+      // `pushed`: the change lands as a transcript append the live stream pushes.
+      if (!(pushed && streamLive())) refreshTranscriptSoon();
       refreshSessionsSoon();
       return true;
     }
@@ -941,7 +966,7 @@ async function actionForm(path, formData) {
       data = await r.json();
     } catch {}
     if (r.ok && data.ok !== false) {
-      refreshTranscriptSoon();
+      if (!streamLive()) refreshTranscriptSoon(); // the image send lands as a pushed append
       refreshSessionsSoon();
       return true;
     }
@@ -998,12 +1023,12 @@ function open(id) {
   diffView.value = null; // drop any diff / changed-files view from the previous session
   filesView.value = false;
   clearAttachments();
+  transcriptFresh.value = false;
   // No cached copy → the screen would sit on "loading…" until a full payload crosses
   // the link. Race a tiny tail slice ahead of it for the first paint (fired before the
   // full fetch so its lower seq can never clobber the full copy).
   if (!transcript.value) fetchTailPaint(id);
-  openSubscription(id); // the pushed snapshot is the primary paint…
-  refreshTranscript(); // …the GET is the fallback (races are settled by seq)
+  subscribeFresh(id);
   markRead(id);
 }
 
@@ -3144,7 +3169,7 @@ function Composer({ disabled, status }) {
     if (items.length === 0) {
       pendingSends.value = [...pendingSends.value, text];
       lastSentText.set(sid, text); // restore-on-interrupt candidate
-      const ok = await action(`/sessions/${encodeURIComponent(sid)}/message`, { text });
+      const ok = await action(`/sessions/${encodeURIComponent(sid)}/message`, { text }, { pushed: true });
       if (!ok) {
         clearStatusOverlay(sid); // never reached the pane — no turn is starting
         const idx = pendingSends.value.lastIndexOf(text);
@@ -3639,9 +3664,14 @@ function Detail() {
   const sendsInFlight = pendingSends.value.length + pendingImageSends.value.length;
   const queuedCount = (t && t.queuedPending && t.queuedPending.length) || 0;
   const restorePending = !!(interruptRestore.value && interruptRestore.value.sessionId === selectedId.value);
+  // With the stream live the JSONL watcher pushes those bare appends too, and a poll
+  // would re-download the whole changed thread — so it only runs while pushes are quiet.
   useEffect(() => {
     if (sendsInFlight === 0 && queuedCount === 0 && !restorePending) return;
-    const iv = setInterval(refreshTranscript, 2500);
+    const iv = setInterval(() => {
+      if (streamLive() && Date.now() - lastTranscriptPushAt < 10_000) return;
+      refreshTranscript();
+    }, 2500);
     return () => clearInterval(iv);
   }, [sendsInFlight > 0, queuedCount > 0, restorePending]);
 
@@ -3921,6 +3951,7 @@ function Detail() {
             <div class="navtitle">
               ${session && html`<span class="dot" style=${dotStyle(session)}></span>`}
               <span class="navname">${session ? listTitle(session) : "session"}</span>
+              ${t && !transcriptFresh.value && html`<span class="syncing">syncing…</span>`}
             </div>
             ${(agents.length > 0 || scripts.length > 0) &&
             html`<button
@@ -4912,6 +4943,7 @@ function startBurst() {
 function resync() {
   if (!authed.value) return;
   tick.value = Date.now(); // ages froze while the tab was hidden — catch them up first
+  transcriptFresh.value = false; // pushes stopped while hidden — unconfirmed until re-synced
   stampStream(); // hold the 40s watchdog off — the burst owns recovery right now
   startBurst();
   // Foregrounding is ONE action now: rebuild the stream. The server's on-connect
@@ -5004,7 +5036,7 @@ function applyDeepLink() {
   const id = new URLSearchParams(location.search).get("s");
   if (!id) return;
   if (sessions.value.some((s) => s.id === id)) open(id);
-  history.replaceState(null, "", location.pathname);
+  window.history.replaceState(null, "", location.pathname); // bare `history` is the History-screen signal
 }
 
 // Push-tap handoff via the SW's cache (see stashTarget in sw.js). Only the COLD launch
