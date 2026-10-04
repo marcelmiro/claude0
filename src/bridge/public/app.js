@@ -269,6 +269,10 @@ const transcriptCache = new Map(); // sessionId → last /transcript payload (op
 // Whether the open thread has been confirmed current since it was opened or the app
 // foregrounded — until then it may be a cached copy, shown with a "syncing…" label.
 const transcriptFresh = signal(false);
+// `!cmd` sends the bridge accepted (keys are in the pane), with when. Claude Code writes a
+// bang command to the transcript only once it EXITS, so until then its optimistic bubble
+// shows "running" with the elapsed time instead of "sending…".
+const deliveredBangs = signal([]); // [{ text, at }]
 
 const changesDataCache = new Map(); // sessionId → last /changes payload (ChangesCard/FilesView)
 const prDataCache = new Map(); // sessionId → last /pr payload (usePullRequest)
@@ -572,7 +576,10 @@ function applyTranscript(id, data) {
     const seen = userTurnTexts(transcript.value);
     for (const q of transcript.value.queuedPending || []) seen.add(q.trim());
     const remaining = pendingSends.value.filter((p) => !seen.has(bangKey(p)));
-    if (remaining.length !== pendingSends.value.length) pendingSends.value = remaining;
+    if (remaining.length !== pendingSends.value.length) {
+      pendingSends.value = remaining;
+      deliveredBangs.value = deliveredBangs.value.filter((d) => remaining.includes(d.text));
+    }
   }
   // Same for optimistic image bubbles, matched on the prefix-stripped caption (an
   // image-only send has caption "" and the transcript text is just "[Image #N]" → "").
@@ -1017,6 +1024,7 @@ function open(id) {
   transcript.value = transcriptCache.get(id) ?? null;
   flash.value = ""; // drop any stale error from the previously-open session
   pendingSends.value = [];
+  deliveredBangs.value = [];
   rewindFloor.value = null; // never carry an optimistic rewind across sessions
   composerPrefill.value = null;
   closeAgents(); // drop any agent list/drill-in from the previously-open session
@@ -1142,6 +1150,7 @@ function back() {
   transcript.value = null;
   historySession.value = null; // the stand-in belongs to the closed detail only
   pendingSends.value = [];
+  deliveredBangs.value = [];
   rewindFloor.value = null;
   composerPrefill.value = null;
   closeAgents();
@@ -2895,6 +2904,11 @@ function SendingTag() {
   return on ? html`<div class="queuedtag">sending…</div>` : null;
 }
 
+function BangRunningTag({ since }) {
+  useTick(true);
+  return html`<div class="queuedtag">running · ${fmtElapsed(Math.max(0, Math.floor((Date.now() - since) / 1000)))}</div>`;
+}
+
 // --- Composer drafts ---------------------------------------------------------
 // Per-session draft persisted to localStorage, so leaving the detail view (the
 // composer unmounts), an app reload, or an iOS PWA eviction never loses typed-but-
@@ -3170,6 +3184,7 @@ function Composer({ disabled, status }) {
       pendingSends.value = [...pendingSends.value, text];
       lastSentText.set(sid, text); // restore-on-interrupt candidate
       const ok = await action(`/sessions/${encodeURIComponent(sid)}/message`, { text }, { pushed: true });
+      if (ok && text.trim().startsWith("!")) deliveredBangs.value = [...deliveredBangs.value, { text, at: Date.now() }];
       if (!ok) {
         clearStatusOverlay(sid); // never reached the pane — no turn is starting
         const idx = pendingSends.value.lastIndexOf(text);
@@ -3867,7 +3882,10 @@ function Detail() {
                   ...${lpProps(lpStartCopyOnly(text))}
                 >
                   <span class="glyph">!</span>${text.trim().slice(1)}
-                  <${SendingTag} />
+                  ${(() => {
+                    const d = deliveredBangs.value.find((x) => x.text === text);
+                    return d ? html`<${BangRunningTag} since=${d.at} />` : html`<${SendingTag} />`;
+                  })()}
                 </div>`
               : html`<div
                   class="bubble user pending"

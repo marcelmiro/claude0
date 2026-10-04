@@ -78,3 +78,14 @@ abort ever actually annoys.
   (restored `!cmd` drafts re-enter the mode via setComposerText, unchanged).
 - **Reusing `killInput` + C-y restore for shell-mode drafts** — unverified in shell mode
   with silent-loss failure; the fail-safe abort is strictly safer.
+
+## Addendum (2026-10-04): a running bang command shows "running", not "sending…"
+
+Claude Code appends a bang command to the transcript only once it exits: the
+`<bash-input>` record keeps the submit timestamp but is written alongside its
+`<bash-stdout>` (observed: a `!cd … && …` submitted at 22:52:05.8 hit the JSONL
+at 22:53:35.9, both records together). The optimistic bubble retires only against
+the folded turn, so for a long command it sat on "sending…" for the whole run, as
+if delivery had stalled. Once the bridge accepts a `!` send (keys are in the pane),
+the bubble's tag now reads "running · <elapsed>" until the turn lands. "sending…"
+keeps meaning not-yet-delivered.
