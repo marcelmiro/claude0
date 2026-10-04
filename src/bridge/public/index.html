@@ -486,6 +486,10 @@
       .bang-cmd:active { transform: scale(0.97); }
       .bang-cmd .glyph { font-weight: 700; margin-right: 6px; }
       .bang-cmd.pending { opacity: 0.5; }
+      /* Delivered, awaiting exit: the live tool chip's mint frame + pulsing dot. */
+      .bang-cmd.running { border-color: rgba(153, 255, 228, 0.45); }
+      .bang-cmd.running .queuedtag { color: var(--mint); }
+      .bang-cmd .livedot { animation: livepulse 1.4s ease-in-out infinite; }
       .bang-cmd.queued { opacity: 0.55; border-style: dashed; }
       .bang-out { width: 100%; margin: 0 0 2px; font-family: var(--mono); font-size: 12px; border-left: 2px solid var(--border); padding-left: 10px; }
       .bang-out pre { margin: 0; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; color: var(--mint); }
@@ -573,7 +577,15 @@
          home row read as the same object; the dot replaces the old status glyph */
       .navtitle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; }
       .navtitle .navname { flex: 1; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .navtitle .syncing { flex: none; color: var(--dim-text); font-size: 12px; font-family: var(--mono); }
+      /* Loud on purpose: until confirmed, the thread may be behind the real session — don't
+         reply to it blind. The fade-in delay keeps a sub-second confirm from flickering it. */
+      .navtitle .syncing {
+        flex: none; color: var(--peach); background: var(--peach-tint); border: 1px solid rgba(255, 199, 153, 0.45);
+        border-radius: 10px; padding: 1px 8px; font-size: 12px; font-weight: 600; font-family: var(--mono);
+        animation: fadein 0.15s ease-out 0.4s both;
+      }
+      .navtitle .syncing .livedot { animation: livepulse 1.4s ease-in-out infinite; }
+      @keyframes fadein { from { opacity: 0; } }
       .attn { background: none; border: 1px solid var(--peach); color: var(--peach); border-radius: 14px; padding: 4px 10px; font-size: 12px; font-weight: 600; white-space: nowrap; }
       .attn:active { background: var(--hover); }
 

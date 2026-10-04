@@ -2906,7 +2906,7 @@ function SendingTag() {
 
 function BangRunningTag({ since }) {
   useTick(true);
-  return html`<div class="queuedtag">running · ${fmtElapsed(Math.max(0, Math.floor((Date.now() - since) / 1000)))}</div>`;
+  return html`<div class="queuedtag"><span class="livedot">⦿</span> running · ${fmtElapsed(Math.max(0, Math.floor((Date.now() - since) / 1000)))}</div>`;
 }
 
 // --- Composer drafts ---------------------------------------------------------
@@ -3875,18 +3875,19 @@ function Detail() {
           .map((text, i) =>
             // A `!cmd` echo renders as the bash command bubble (no output yet) so the
             // optimistic bubble matches the folded turn it retires into.
+            // Once delivered it renders as running (the live tool chip's mint frame, full opacity).
             text.trim().startsWith("!")
-              ? html`<div
-                  class="bang-cmd pending"
-                  key=${`p${i}`}
-                  ...${lpProps(lpStartCopyOnly(text))}
-                >
-                  <span class="glyph">!</span>${text.trim().slice(1)}
-                  ${(() => {
-                    const d = deliveredBangs.value.find((x) => x.text === text);
-                    return d ? html`<${BangRunningTag} since=${d.at} />` : html`<${SendingTag} />`;
-                  })()}
-                </div>`
+              ? (() => {
+                  const d = deliveredBangs.value.find((x) => x.text === text);
+                  return html`<div
+                    class=${`bang-cmd ${d ? "running" : "pending"}`}
+                    key=${`p${i}`}
+                    ...${lpProps(lpStartCopyOnly(text))}
+                  >
+                    <span class="glyph">!</span>${text.trim().slice(1)}
+                    ${d ? html`<${BangRunningTag} since=${d.at} />` : html`<${SendingTag} />`}
+                  </div>`;
+                })()
               : html`<div
                   class="bubble user pending"
                   key=${`p${i}`}
@@ -3969,7 +3970,8 @@ function Detail() {
             <div class="navtitle">
               ${session && html`<span class="dot" style=${dotStyle(session)}></span>`}
               <span class="navname">${session ? listTitle(session) : "session"}</span>
-              ${t && !transcriptFresh.value && html`<span class="syncing">syncing…</span>`}
+              ${t && !transcriptFresh.value &&
+              html`<span class="syncing"><span class="livedot">⦿</span> syncing…</span>`}
             </div>
             ${(agents.length > 0 || scripts.length > 0) &&
             html`<button
