@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { listSlashCommands } from "./skills";
 
 let PROJ: string;
+let HOME: string;
 
 beforeAll(() => {
   PROJ = mkdtempSync(join(tmpdir(), "c0-skills-"));
@@ -50,10 +51,42 @@ beforeAll(() => {
   // (b) namespaced command → dir:name ; flat command
   writeFileSync(join(cmds, "sync.md"), "---\nname: sync\ndescription: sync it\n---\nprompt\n");
   writeFileSync(join(cmds, "git", "amend.md"), "---\ndescription: amend last commit\n---\nprompt\n");
+
+  // Plugins: a throwaway claudeHome with one plugin per enablement case. `demo` has a
+  // default-dir skill, a manifest-listed nested skill and a command; `off` is disabled in
+  // user settings; `proj-off` is enabled for the user but disabled by the project.
+  HOME = mkdtempSync(join(tmpdir(), "c0-home-"));
+  const plugin = (id: string, files: Record<string, string>) => {
+    const root = join(HOME, "plugins", "cache", id);
+    for (const [rel, text] of Object.entries(files)) {
+      mkdirSync(join(root, rel, ".."), { recursive: true });
+      writeFileSync(join(root, rel), text);
+    }
+    return { installPath: root };
+  };
+  const installed = {
+    "demo@mk": [
+      plugin("demo", {
+        ".claude-plugin/plugin.json": JSON.stringify({ name: "demo", skills: ["./skills/group/nested"] }),
+        "skills/top/SKILL.md": "---\nname: top\ndescription: default-dir skill\n---\n",
+        "skills/group/nested/SKILL.md": "---\nname: nested\ndescription: manifest-listed skill\n---\n",
+        "commands/run.md": "---\ndescription: plugin command\n---\n",
+      }),
+    ],
+    "off@mk": [plugin("off", { "skills/gone/SKILL.md": "---\nname: gone\n---\n" })],
+    "proj-off@mk": [plugin("proj-off", { "skills/hidden/SKILL.md": "---\nname: hidden\n---\n" })],
+  };
+  writeFileSync(join(HOME, "plugins", "installed_plugins.json"), JSON.stringify({ version: 2, plugins: installed }));
+  writeFileSync(
+    join(HOME, "settings.json"),
+    JSON.stringify({ enabledPlugins: { "demo@mk": true, "off@mk": false, "proj-off@mk": true } }),
+  );
+  writeFileSync(join(PROJ, ".claude", "settings.json"), JSON.stringify({ enabledPlugins: { "proj-off@mk": false } }));
 });
 
 afterAll(() => {
   rmSync(PROJ, { recursive: true, force: true });
+  rmSync(HOME, { recursive: true, force: true });
 });
 
 test("parses name/description from skill frontmatter", async () => {
@@ -101,4 +134,21 @@ test("project source shadows a builtin of the same name (one row, project wins)"
   const compacts = list.filter((c) => c.name === "compact");
   expect(compacts).toHaveLength(1);
   expect(compacts[0]).toEqual({ name: "compact", description: "PROJECT compact", source: "project" });
+});
+
+test("enabled plugins contribute <plugin>:<name> skills from skills/, the manifest, and commands/", async () => {
+  const list = await listSlashCommands(PROJ, HOME);
+  const plugins = list.filter((c) => c.source === "plugin").sort((a, b) => a.name.localeCompare(b.name));
+  expect(plugins).toEqual([
+    { name: "demo:nested", description: "manifest-listed skill", source: "plugin" },
+    { name: "demo:run", description: "plugin command", source: "plugin" },
+    { name: "demo:top", description: "default-dir skill", source: "plugin" },
+  ]);
+});
+
+test("a plugin disabled in user settings, or by the project's, contributes nothing", async () => {
+  const names = (await listSlashCommands(PROJ, HOME)).map((c) => c.name);
+  expect(names).not.toContain("off:gone");
+  expect(names).not.toContain("proj-off:hidden");
+  expect(names).toContain("my-skill"); // unchanged: project skills still listed alongside plugins
 });
