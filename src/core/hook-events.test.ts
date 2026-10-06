@@ -163,6 +163,33 @@ test("pendingToolCall: a fresh PreToolUse after the last Stop is live → return
   expect(call?.toolUseId).toBe("tu_live");
 });
 
+test("pendingToolCall: a subagent's open tool doesn't shadow the main thread's held question", () => {
+  // Subagents log into their parent's session log (tagged `agent_id`); background agents
+  // keep opening tools while the main thread is blocked on AskUserQuestion.
+  const id = "sess-subagent-shadow";
+  writeLog(id, [
+    ev({ hook_event_name: "PreToolUse", tool_name: "AskUserQuestion", tool_use_id: "tu_ask", tool_input: { questions: [{ question: "Q?", header: "H", multiSelect: false, options: [{ label: "A" }, { label: "B" }] }] } }, "x"),
+    ev({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_use_id: "tu_sub", agent_id: "a1", tool_input: { command: "ls" } }, "x"),
+  ]);
+  expect(pendingToolCall(id)?.toolUseId).toBe("tu_ask");
+});
+
+test("pendingToolCall: a subagent's open tool alone is not the session's pending call", () => {
+  const id = "sess-subagent-only";
+  writeLog(id, [
+    ev({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_use_id: "tu_sub", agent_id: "a1", tool_input: { command: "ls" } }, "x"),
+  ]);
+  expect(pendingToolCall(id)).toBeNull();
+});
+
+test("pendingToolCall: a subagent's AskUserQuestion is still surfaced (the question hook holds it too)", () => {
+  const id = "sess-subagent-ask";
+  writeLog(id, [
+    ev({ hook_event_name: "PreToolUse", tool_name: "AskUserQuestion", tool_use_id: "tu_sub_ask", agent_id: "a1", tool_input: { questions: [{ question: "Q?", header: "H", multiSelect: false, options: [{ label: "A" }, { label: "B" }] }] } }, "x"),
+  ]);
+  expect(pendingToolCall(id)?.toolUseId).toBe("tu_sub_ask");
+});
+
 test("pendingToolCall maps AskUserQuestion questions[0] → structured options", () => {
   const id = "sess-ask";
   const ask = fixtureJson("hooks/pretooluse-askuserquestion.json") as HookEvent;

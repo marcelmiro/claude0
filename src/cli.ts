@@ -475,7 +475,7 @@ function isSubsequence(sub: string, str: string): boolean {
 // claude0 setup
 // ---------------------------------------------------------------------------
 
-export const HOOK_VERSION = 24;
+export const HOOK_VERSION = 25;
 
 // A bridge-consumer marker older than this is a dead phone connection: the bridge
 // touches it on SSE connect and every 15s heartbeat, so 40s tolerates one missed
@@ -518,7 +518,13 @@ const LOG_EVENT_SNIPPET = `INPUT=$(cat)
 # Whitespace-tolerant (handles compact AND pretty-printed payloads); cut -f4 yields
 # the value either way. session-start.sh keeps its proven compact-only pattern.
 SESSION_ID=$(printf '%s' "$INPUT" | grep -oE '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
-if [ -n "$SESSION_ID" ]; then
+# Subagent tool events log under the parent's session_id, and background agents fire
+# hundreds while the main thread blocks — rotating its held question out of the window.
+# Readers want only main-thread tools, plus any AskUserQuestion (the question hook holds
+# subagents' too).
+LOG_AGENT=$(printf '%s' "$INPUT" | grep -oE '"agent_id"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1)
+LOG_TOOL=$(printf '%s' "$INPUT" | grep -oE '"tool_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
+if [ -n "$SESSION_ID" ] && { [ -z "$LOG_AGENT" ] || [ -z "$LOG_TOOL" ] || [ "$LOG_TOOL" = "AskUserQuestion" ]; }; then
   DIR=~/.config/claude0/events
   mkdir -p "$DIR"
   F="$DIR/$SESSION_ID.jsonl"

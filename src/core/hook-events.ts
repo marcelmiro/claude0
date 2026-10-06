@@ -110,9 +110,13 @@ export function pendingToolCall(sessionId: string): PendingToolCall | null {
       break;
     }
   }
+  // Subagents log into the parent's session log and keep opening tools while the main
+  // thread blocks, so their calls would shadow a held question. Their AskUserQuestion
+  // still counts: the question hook doesn't filter subagents, so it can be held too.
   let pre: HookEvent | undefined;
   for (let i = events.length - 1; i > lastStop; i--) {
     const e = events[i];
+    if (e.agent_id && e.tool_name !== "AskUserQuestion") continue;
     if (e.hook_event_name === "PreToolUse" && e.tool_use_id && !closed.has(e.tool_use_id)) {
       pre = e;
       break;

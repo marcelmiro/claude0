@@ -323,6 +323,7 @@ export interface HookEvent {
   tool_name?: string; // PreToolUse / PostToolUse
   tool_input?: unknown; // PreToolUse (AskUserQuestion → { questions: [...] })
   tool_use_id?: string;
+  agent_id?: string; // set when a subagent fired the hook (it logs under the parent's session_id)
   notification_type?: "permission_prompt" | "idle_prompt";
   message?: string; // Notification
   prompt?: string; // UserPromptSubmit — the submitted prompt text
