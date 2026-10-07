@@ -49,6 +49,7 @@ import {
   parseModeMenu,
   modeDowns,
   parseStatusline,
+  readPaneStatusline,
   extractConfirmation,
   commandConfirmation,
   liveDialog,
@@ -1090,6 +1091,30 @@ test("parseStatusline: garbled/foreign line → {} (no throw)", () => {
 test("parseStatusline: effort takes the trailing segment (last match wins)", () => {
   // even if an earlier segment coincidentally equals a level word, the last one is the effort
   expect(parseStatusline("0/1k (0%) • high • Opus 5.5 • max").effort).toBe("max");
+});
+
+test("parseStatusline: parenthesized effort after the model → model + effort", () => {
+  expect(parseStatusline("30.0k/1M (3%) • main • Opus 5.5 (high)")).toEqual({
+    model: "opus[1m]",
+    effort: "high",
+  });
+  expect(parseStatusline("12.3k/200k (6%) • feat/x • Sonnet 5.5 (xhigh)")).toEqual({
+    model: "sonnet",
+    effort: "xhigh",
+  });
+});
+
+test("parseStatusline: a branch ending in a level word is not an effort", () => {
+  expect(parseStatusline("12.3k/200k (6%) • feat/high • Haiku 4.5")).toEqual({ model: "haiku" });
+});
+
+test("readPaneStatusline: anchors on a 1M-sized token fragment", async () => {
+  const cap = "❯ \n  30.0k/1M (3%) • main • Opus 5.5 (medium)\n";
+  expect(await readPaneStatusline("unused", cap)).toEqual({
+    statusline: "30.0k/1M (3%) • main • Opus 5.5 (medium)",
+    model: "opus[1m]",
+    effort: "medium",
+  });
 });
 
 test("extractConfirmation: model set globally", () => {

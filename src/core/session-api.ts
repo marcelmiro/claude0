@@ -112,7 +112,7 @@ export interface ContextUsage {
 
 /** The Claude pane's rendered statusline + permission-mode line, scraped from capture. */
 export interface PaneStatusline {
-  statusline?: string; // the user's custom statusline text (tokens • branch • model • …)
+  statusline?: string; // the user's custom statusline text (tokens • branch • model (effort))
   mode?: string; // e.g. "⏵⏵ auto mode on", "⏸ plan mode on"
   model?: string; // current model as an arg key (opus/sonnet/…), parsed from the statusline
   effort?: string; // current reasoning effort (low/…/ultracode), when the statusline renders it
@@ -145,9 +145,11 @@ const MODEL_FAMILIES: Array<[RegExp, string]> = [
 
 /**
  * Parse the current model (as an arg key) and effort level out of the rendered statusline
- * (`tokens • branch • model • <effort>`), by TOKEN-SCAN not fixed index — the effort segment
- * is absent for models without reasoning effort, and its position shifts. Returns only the
- * fields it can identify; a garbled/foreign statusline yields `{}` (never throws).
+ * (`tokens • branch • model (<effort>)`), by TOKEN-SCAN not fixed index — the effort is
+ * absent for models without reasoning effort, and its position shifts. It's read as a
+ * segment's final word, bare or parenthesized, so `model (high)`, `model high` and a
+ * separate `• high` segment all parse. Returns only the fields it can identify; a
+ * garbled/foreign statusline yields `{}` (never throws).
  *
  * Opus renders its version in the display name ("Opus 5.5", "Opus 5"), plus a "(1M context)"
  * suffix only when selected as `opus[1m]`. The current Opus always maps to the menu's
@@ -157,11 +159,14 @@ const MODEL_FAMILIES: Array<[RegExp, string]> = [
  * older model never marks the current row.
  */
 const CURRENT_OPUS = "5.5";
+// Preceded by start/space/"(" so a branch like `feat/high` never reads as an effort.
+const EFFORT_TAIL = new RegExp(`(?:^|[\\s(])(${EFFORT_ARGS.join("|")})\\)?$`);
 export function parseStatusline(line: string): { model?: string; effort?: string } {
   const out: { model?: string; effort?: string } = {};
   for (const raw of line.split("•")) {
     const seg = raw.trim();
-    if (isEffortArg(seg)) out.effort = seg; // effort is the trailing segment — last match wins
+    const effort = seg.match(EFFORT_TAIL)?.[1];
+    if (effort) out.effort = effort; // effort trails the line — last match wins
     if (!out.model) {
       if (/opus/i.test(seg)) {
         const ver = seg.match(/opus\s+(\d+(?:\.\d+)?)/i)?.[1];
@@ -191,7 +196,7 @@ export async function readPaneStatusline(paneId: string, capture?: string): Prom
     if (!res.mode && /(⏵⏵|⏸|⏵).*(mode|accept edits|permissions)/i.test(l)) {
       res.mode = l.replace(/\s*\(shift\+tab[^)]*\)/i, "").replace(/\s*·.*$/, "").trim();
     }
-    if (!res.statusline && /\d[\d.]*k?\s*\/\s*\d[\d.]*k?\s*\(\d+%\)/i.test(l)) {
+    if (!res.statusline && /\d[\d.]*[km]?\s*\/\s*\d[\d.]*[km]?\s*\(\d+%\)/i.test(l)) {
       res.statusline = l;
     }
   }

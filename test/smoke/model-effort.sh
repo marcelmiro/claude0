@@ -23,7 +23,7 @@ bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 cap() { tmux capture-pane -t "$1" -p; }
 line(){ echo "── $* ──"; }
 model_of() { cap "$1" | grep -oE "• (Opus|Sonnet|Haiku|Fable)[^•]*" | head -1 | sed -E 's/^• //; s/ *$//'; }
-effort_seg() { cap "$1" | grep -oE "• (low|medium|high|xhigh|max|ultracode) *$" | head -1 | sed -E 's/^• //; s/ *$//'; }
+effort_seg() { cap "$1" | grep -oE "[•(] ?(low|medium|high|xhigh|max|ultracode)\)? *$" | head -1 | sed -E 's/^[•(] ?//; s/[) ]*$//'; }
 
 SESSIONS=(); ORIG_MODEL=""; ORIG_EFFORT=""
 launch() { # name
@@ -48,11 +48,10 @@ trap cleanup EXIT
 
 echo "=== SMOKE: portkey model/effort switcher mechanics (option A) ==="; echo
 launch A
-# snapshot original global default so we can restore it (map display → arg key). Opus renders
-# 1M vs non-1M; "1M context" must restore via opus[1m], NOT bare opus (which downgrades to 200k).
+# snapshot original global default so we can restore it (map display → arg key). The statusline
+# drops "(1M context)", so Opus always restores via opus[1m], NOT bare opus.
 case "$(model_of A)" in
-  *Opus*1M*) ORIG_MODEL="opus[1m]";;
-  *Opus*)    ORIG_MODEL="opus";;
+  *Opus*)    ORIG_MODEL="opus[1m]";;
   *Sonnet*)  ORIG_MODEL="sonnet";;
   *Haiku*)   ORIG_MODEL="haiku";;
   *Fable*)   ORIG_MODEL="fable";;
@@ -62,7 +61,7 @@ echo "     baseline: model=$(model_of A) effort=${ORIG_EFFORT:-<none>}"
 
 line "T0  '/model opus[1m]' → the 1M variant (bare 'opus' would be non-1M)"
 tmux send-keys -t A "/model opus[1m]" Enter; sleep 1.6
-cap A | grep -qiE "Set model to Opus 5.5 \(1M context\)" && [[ "$(model_of A)" == *"1M"* ]] \
+cap A | grep -qiE "Set model to Opus 5.5 \(1M context\)" \
   && ok "opus[1m] → Opus 5.5 (1M context)" || bad "opus[1m] did not select the 1M variant"
 
 line "T1  '/model sonnet' arg form → confirmation + statusline flips to Sonnet"
