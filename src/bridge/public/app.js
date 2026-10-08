@@ -101,7 +101,7 @@ const showNewSession = signal(false); // repo picker for launching a new session
 const showShell = signal(false); // shell sheet: run one command on the host, read its output
 const shellRuns = signal(null); // scrollback from GET /shell: null = loading, [] = empty
 const shellPending = signal(""); // command in flight (one at a time — the bridge refuses a second)
-const repos = signal(null); // null = loading, [] = loaded
+const repos = signal(loadSavedRepos()); // null = loading, [] = loaded; hydrated from the last fetch
 const launching = signal(""); // repo name while waiting for a just-launched session to register
 const restoring = signal(false); // true while a /restore request is in flight (blocks the button)
 const menuText = signal(null); // long-pressed user message → action sheet (null = closed)
@@ -1222,14 +1222,31 @@ function openHistoryRow(row) {
 }
 
 // --- new session (repo picker → launch claude in a new tmux window) ---
+// The phone→VM link can stall a request for seconds while the bridge answers in ~1ms, so
+// the picker paints the last-fetched list immediately and revalidates behind it; a failed
+// refresh keeps the held list rather than blanking it.
+function loadSavedRepos() {
+  try {
+    const saved = JSON.parse(localStorage.getItem("claude0-repos") || "null");
+    return Array.isArray(saved) ? saved : null;
+  } catch {
+    return null;
+  }
+}
 async function openNewSession() {
   showNewSession.value = true;
-  repos.value = null;
   try {
     const r = await fetch("/repos");
-    repos.value = r.ok ? await r.json() : [];
+    if (!r.ok) throw new Error(String(r.status));
+    const list = await r.json();
+    repos.value = list;
+    try {
+      localStorage.setItem("claude0-repos", JSON.stringify(list));
+    } catch {
+      /* private mode / quota — persistence is best-effort */
+    }
   } catch {
-    repos.value = [];
+    if (repos.value === null) repos.value = [];
   }
 }
 async function launchSession(repo) {
