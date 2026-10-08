@@ -143,3 +143,32 @@ With `default`, iOS paints the status-bar area with the sampled colour down to
 the web view's top edge, so rows scrolling up are cut off there in a hard line.
 Scroll regions that reach that edge fade out over their top 16px once scrolled
 (a mask toggled by a `scrolled` class). Content at rest is not faded.
+
+## 2026-10-08: mid-session stalls are direct-path failover; the VM relays everything
+
+Stalls also happened mid-session, not only after wake: a request (GET, POST, or an
+SSE push) would sit 3–15s while the bridge answered in milliseconds. A recorder on
+the VM (`tailscale status` every 250ms) tied every stall to the iPad's peer flipping
+from direct to relay: on Three UK mobile broadband (behind a 4G SIM router) the
+direct UDP path died every 7–60s, under light traffic and idle alike. magicsock sends
+UDP-only while a path is trusted (a pong extends trust 6.5s; heartbeats every 3s),
+so a dead path black-holes traffic for 3.5–6.5s before DERP takes over, plus TCP
+retransmit backoff on top. The `CurAddr` flip in `tailscale status` marks the END
+of that window. None of those timers is tunable, and the EC2 security group already
+allowed inbound UDP 41641, so the path can't be fixed from our side.
+
+The VM's tailscaled now runs with `TS_DEBUG_NEVER_DIRECT_UDP=1` in
+`/etc/default/tailscaled` (the unit's `EnvironmentFile`): no direct paths to any
+peer, everything via DERP over TCP 443. The London DERP is 1.3ms from the VM, so
+latency barely changes. Throughput is DERP's unpublished QoS (~15 Mbit/s observed):
+fine for portkey and mosh, slower for bulk transfers.
+
+The knob is an unsupported debug interface. After a tailscale upgrade, confirm
+`envknob: TS_DEBUG_NEVER_DIRECT_UDP="1"` in `journalctl -u tailscaled` and that
+`tailscale ping <peer>` says "via DERP". A per-device alternative is an
+`only-tcp-443` nodeAttr on a tagged device. It is undocumented, and it was not
+tried because tagging the device detaches it from its user.
+
+Stalls also explain stale code after a deploy: the race above serves the cached
+shell whenever the network is slower than `NET_TIMEOUT_MS`. The fresh copy only
+lands in the cache for the next launch.
