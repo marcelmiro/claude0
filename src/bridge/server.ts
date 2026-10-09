@@ -81,6 +81,7 @@ import { capturePane, listPanes } from "../core/tmux";
 import { isPermissionPrompt, sessionActivityAt, type SessionStatus } from "../core/status";
 import {
   loadNameCache,
+  nameOrder,
   saveNameCache,
   generateAIName,
   getSessionName,
@@ -720,7 +721,10 @@ async function computeSessionsPayload(): Promise<unknown> {
   // Apply the cached AI name, mirroring the TUI/tmux.
   for (const s of tracked) s.name = getSessionName(s.id, nameCache) || s.name;
   // Disambiguate same-repo name collisions with a " 2"/" 3" suffix, matching the TUI/tmux.
-  const dnMap = disambiguateByRepo(tracked.map((s) => ({ id: s.id, name: s.name, repo: s.repo })));
+  const dnMap = disambiguateByRepo(
+    tracked.map((s) => ({ id: s.id, name: s.name, repo: s.repo })),
+    nameOrder(nameCache),
+  );
   // Apply the suffixed name onto the projection so the phone's name-first row title
   // (listTitle = s.name || s.label) shows ` 2`/` 3`, matching the TUI/tmux.
   for (const s of tracked) s.name = dnMap.get(s.id) ?? s.name;

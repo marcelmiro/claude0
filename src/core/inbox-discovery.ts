@@ -11,8 +11,8 @@
  * discovery's heap), so the long-lived daemon only spawns and reaps.
  */
 import { discoverSessions } from "./sessions";
-import { loadNameCache, getSessionName } from "./names";
-import { snippet } from "./session-label";
+import { loadNameCache, getSessionName, nameOrder } from "./names";
+import { disambiguateByRepo, snippet } from "./session-label";
 import { branchPullRequest, repoSlug } from "./pull-request";
 import { scanEditDir, workPullRequest } from "./edit-dir";
 import { detectScriptWaits } from "./script-wait";
@@ -141,6 +141,14 @@ export async function discoveryTick(store: InboxStore): Promise<void> {
     row.workScan = p?.workScan;
     byId.set(s.id, row);
   }
+
+  // the same per-repo " 2"/" 3" suffixes as the tmux window and portkey (a fork and its
+  // parent share a name until the fork's first prompt renames it)
+  const dn = disambiguateByRepo(
+    [...byId.values()].map((r) => ({ id: r.id, name: getSessionName(r.id, nameCache), repo: r.repo })),
+    nameOrder(nameCache),
+  );
+  for (const r of byId.values()) r.name = dn.get(r.id) || r.name;
 
   // PR numbers: `gh` per repo is slow (~0.5s), so refresh at most 5 stale rows
   // per tick (oldest first, 60s TTL) — the store is the cache, since each

@@ -125,3 +125,34 @@ The log's first real catch: the stdout error filter matched single words (`credi
 only the CLI's error phrases (`API Error…`, `credit balance`). The other CLI errors
 probed fail without reaching that filter — a bad model exits 1, a bad API key hangs
 until the timeout — and sentence-shaped text is still caught by the refusal filter.
+
+## Addendum (2026-10-09): forks inherit the parent's name; the earliest-named keeps it
+
+A fork used to be named once from its copied transcript, which the sibling-name context
+steered toward a near-synonym of the parent's name ("Session Store Eviction" beside "Redis
+Session Eviction"). It was then never renamed, because drift is read from Claude's
+`last-prompt` records and in a `--fork-session` fork those keep holding the parent's
+prompt after the fork's own turns (verified on 2.1.295, both with and without the
+seeded transcript).
+
+- **Inheritance.** Both fork paths (portkey's `forkSession`, the TUI's fork key) copy the
+  parent's name onto the fork id before launching its window (`inheritName`), so every
+  surface shows "Name" and "Name 2" from the first tick. The copy is saved before launch
+  because a namer that lists the fork while it's unnamed starts the 5-minute rename cooldown.
+  Its size baseline of 1 forces re-baseline on the first rename. Otherwise the inherited
+  name would be the anchor, and the namer keeps an anchor that still fits, which the
+  shared subject always does.
+- **Drift signal.** `getLatestUserPrompt` prefers the newest real prompt record (typed text,
+  slash-command intent, `! cmd`) in the transcript's last 64KB, falling back to the
+  `last-prompt` record. That also catches prompts Claude never wrote a `last-prompt` for
+  (3 of 18 live sessions at rollout).
+- **Who keeps the base name.** `disambiguateNames` orders a colliding group by naming order
+  (`nameOrder`: key order in `names.json`, where renames assign in place), no longer by id. A
+  newcomer takes the " 2" and an existing session is never renamed under you. The sidebar
+  now runs the same disambiguation (it showed raw names before), and `slugify` keeps a
+  trailing number through its 24-char cut, so long colliding names no longer share a
+  window slug.
+
+Verified live: forked a named session from portkey → "Redis Session Eviction Policy" /
+"… 2" on the window, sidebar and portkey; the fork's first prompt renamed it to "Postgres
+Connection Pool" ~9s later with the parent untouched.

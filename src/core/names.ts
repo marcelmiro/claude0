@@ -280,16 +280,19 @@ export function normalizeName(input: string): string {
  * window-name write; `reverseNameMap` keys on this so the round-trip resolves.
  */
 export function slugify(name: string): string {
-  return name
+  const slug = name
     .toLowerCase()
     .split(/\s+/)
     .map((w) => ABBREV[w] ?? w)
     .join("-")
     .replace(/[^a-z0-9-]/g, "")
     .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 24)
-    .replace(/-+$/, "");
+    .replace(/^-|-$/g, "");
+  // A trailing number (the " 2" disambiguation suffix) must survive the width cut, or
+  // two colliding long names land on identical window slugs.
+  const num = slug.length > 24 ? slug.match(/-(\d+)$/)?.[1] : undefined;
+  if (num) return `${slug.slice(0, 23 - num.length).replace(/-+$/, "")}-${num}`;
+  return slug.slice(0, 24).replace(/-+$/, "");
 }
 
 const CACHE_PATH = `${CLAUDE0_ROOT}/.config/claude0/names.json`;
@@ -580,6 +583,33 @@ export async function pruneNameCacheIfLarge(cache: NameCache, projectsDir: strin
     }
     pruneNameCache(cache, liveIds);
   } catch {}
+}
+
+/**
+ * Naming order: each session's position in `cache.names`, which is the order sessions
+ * were first named — JSON keeps string-key insertion order, and renames assign in place.
+ * Feeds `disambiguateNames` so the earliest-named of a colliding group keeps the base name.
+ */
+export function nameOrder(cache: NameCache): Map<string, number> {
+  return new Map(Object.keys(cache.names).map((id, i) => [id, i]));
+}
+
+/**
+ * Give a fork its parent's name, so it collides and reads as "<name> 2" from its first
+ * tick instead of sitting unnamed. `signal` is the fork's current naming signal (its
+ * copied transcript's last prompt), so drift renames it on its first prompt of its own.
+ * The size baseline of 1 forces `shouldRebaseline` on that rename: the inherited name
+ * must not be passed as the stability anchor, or the namer — told to keep a current name
+ * that still fits, which a fork's shared subject does — would keep the parent's name.
+ * No-op (false) when the parent is unnamed or the fork already has a name.
+ */
+export function inheritName(cache: NameCache, parentId: string, forkId: string, signal: string): boolean {
+  const name = cache.names[parentId];
+  if (!name || cache.names[forkId]) return false;
+  cache.names[forkId] = name;
+  cache.sources[forkId] = signal || cache.sources[parentId] || "";
+  (cache.sizes ??= {})[forkId] = 1;
+  return true;
 }
 
 /**

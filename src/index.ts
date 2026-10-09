@@ -7,7 +7,7 @@ import { updatePreview, getPreviewPlainText, renderMessage } from "./ui/preview-
 import { discoverSessions, groupSessions, seedPaneSessionCache, readNamingExtras } from "./core/sessions";
 import { readPreviewMessages, type PendingToolCall, type PendingQuestion } from "./core/jsonl-reader";
 import { switchToPane, getMainSession, killPane, sendKeys, sendKeysSequential, sendTextAndEnter, answerQuestion } from "./core/tmux";
-import { loadNameCache, getSessionName, generateAIName, saveNameCache, slugify, type NameCache } from "./core/names";
+import { loadNameCache, getSessionName, generateAIName, saveNameCache, nameOrder, slugify, type NameCache } from "./core/names";
 import { loadConfig, configCache, DEFAULT_CONFIG } from "./core/config";
 import { loadState, saveState, loadPaneSessions } from "./core/state";
 import { listPendingApprovals, decideApproval, decideQuestion, buildAnswersMap } from "./core/approval";
@@ -20,6 +20,7 @@ import { loadAllSessions, searchEntries, type SearchEntry } from "./core/search"
 import { recoverWorktreeTranscript } from "./core/recover";
 import { detectScriptWaits } from "./core/script-wait";
 import { parkedJobSessions } from "./core/session-state";
+import { seedForkName } from "./core/session-api";
 import { renderSearchResults } from "./ui/search-list";
 import { createSpaceMenuState, renderSpaceMenu, handleSpaceMenuKey, getMenuDimensions, type SpaceMenuState } from "./ui/space-menu";
 import { createQuestionPicker, renderQuestionPicker, handleQuestionPickerKey, getPickerDimensions, type QuestionPickerState } from "./ui/question-picker";
@@ -304,7 +305,7 @@ async function exitSearch() {
     selectedIndex = selectable[0];
   }
   saveSelection();
-  renderSessionList(listBox, rows, selectedIndex, needsAttention);
+  renderSessionList(listBox, rows, selectedIndex, needsAttention, nameOrder(nameCache));
   updateStatusBar();
   // Restore preview for the selected session
   const selectedRow = getSelectedRow();
@@ -560,7 +561,7 @@ async function refresh(opts?: { skipArchivedSummaries?: boolean }) {
     }
 
     const isInitial = !refreshTimer;
-    renderSessionList(listBox, rows, selectedIndex, needsAttention);
+    renderSessionList(listBox, rows, selectedIndex, needsAttention, nameOrder(nameCache));
     updateStatusBar();
     const selectedRow = getSelectedRow();
     const archivedSessions = selectedRow?.type === "archive-collapsed" ? selectedRow.sessions : undefined;
@@ -587,7 +588,7 @@ async function handleSelect(direction: 1 | -1) {
     }
   }
 
-  renderSessionList(listBox, rows, selectedIndex, needsAttention);
+  renderSessionList(listBox, rows, selectedIndex, needsAttention, nameOrder(nameCache));
   updateStatusBar();
   const selectedRow = getSelectedRow();
   const archivedSessions = selectedRow?.type === "archive-collapsed" ? selectedRow.sessions : undefined;
@@ -610,7 +611,7 @@ async function handleGroupSelect(direction: 1 | -1) {
     }
   }
 
-  renderSessionList(listBox, rows, selectedIndex, needsAttention);
+  renderSessionList(listBox, rows, selectedIndex, needsAttention, nameOrder(nameCache));
   updateStatusBar();
   const selectedRow = getSelectedRow();
   const archivedSessions = selectedRow?.type === "archive-collapsed" ? selectedRow.sessions : undefined;
@@ -755,11 +756,12 @@ async function handleFork() {
   // Relocate to the base repo if the session's worktree was deleted, so the fork resume lands.
   const effectivePath = await recoverWorktreeTranscript(sourceId, session.repoPath, session.baseRepoPath);
   const repoName = effectivePath.split("/").filter(Boolean).pop() ?? "claude";
-  const forkName = buildBaseName(repoName, session.name ? slugify(session.name) || undefined : undefined, true);
+  const forkName = buildBaseName(repoName, session.name ? slugify(session.name) || undefined : undefined);
 
   cleanup();
   try {
     const forkId = crypto.randomUUID();
+    await seedForkName(session.id, sourceId, forkId); // before launch: never listed unnamed
     const cmd = `claude --session-id ${forkId} --resume=${sourceId} --fork-session; exec ${USER_SHELL} -l`;
     await Bun.$`tmux new-window -a -t ${targetSession} -n ${forkName} -c ${effectivePath} ${USER_SHELL} -c ${cmd}`.quiet();
   } catch (e) {
@@ -791,7 +793,7 @@ async function advanceToNextWaiting(): Promise<boolean> {
     if (row.type === "session" && row.session.status === "waiting") {
       selectedIndex = idx;
       saveSelection();
-      renderSessionList(listBox, rows, selectedIndex, needsAttention);
+      renderSessionList(listBox, rows, selectedIndex, needsAttention, nameOrder(nameCache));
       updateStatusBar();
       const isCurrent = await safeUpdatePreview(cachedSession, { scrollToBottom: true });
       if (isCurrent) screen.render();
@@ -805,7 +807,7 @@ async function advanceToNextWaiting(): Promise<boolean> {
 function optimisticApprove(session: Session) {
   session.status = "running";
   cachedPendingToolCall = null;
-  renderSessionList(listBox, rows, selectedIndex, needsAttention);
+  renderSessionList(listBox, rows, selectedIndex, needsAttention, nameOrder(nameCache));
   updateStatusBar();
 }
 

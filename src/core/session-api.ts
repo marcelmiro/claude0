@@ -37,7 +37,8 @@ import {
 import { isPermissionPrompt, type SessionStatus } from "./status";
 import { recoverWorktreeTranscript } from "./recover";
 import { buildBaseName } from "./notifications";
-import { slugify } from "./names";
+import { inheritName, loadNameCache, saveNameCache, slugify } from "./names";
+import { getLatestUserPrompt } from "./sessions";
 import { parseBackgroundTasks, liveScripts, type BackgroundTask } from "./background-tasks";
 import { decideQuestion, declineQuestion, buildAnswersMap } from "./approval";
 import { nativeStatus, parkedJobSessions } from "./session-state";
@@ -318,8 +319,9 @@ export async function forkSession(
   if ((await resolveTranscriptPath(sourceId)) === null) return { ok: false, reason: "no-transcript" };
   const effectivePath = await recoverWorktreeTranscript(sourceId, repoPath, baseRepoPath);
   const repoName = effectivePath.split("/").filter(Boolean).pop() ?? "claude";
-  const forkName = buildBaseName(repoName, name ? slugify(name) || undefined : undefined, true);
+  const forkName = buildBaseName(repoName, name ? slugify(name) || undefined : undefined);
   const forkId = crypto.randomUUID();
+  await seedForkName(sessionId, sourceId, forkId); // before launch: never listed unnamed
   const paneId = await launchForkWindow(target, effectivePath, forkName, forkId, sourceId);
   // We minted forkId and passed it via --session-id, so the fork's transcript lands under it;
   // write the pane→session map ourselves (like createSession) rather than wait on the hook,
@@ -335,6 +337,23 @@ export async function forkSession(
   // exactly fork semantics. Best-effort: a failed seed just falls back to empty-until-first-turn.
   await seedForkTranscript(sourceId, forkId, effectivePath);
   return { ok: true, sessionId: forkId };
+}
+
+/**
+ * Name the fork after its parent (see `inheritName`) so the two read as "<name>" and
+ * "<name> 2" on every surface until the fork's own first prompt renames it. Call it before
+ * the fork's window exists: a namer that lists the fork while it is still unnamed starts its
+ * 5-minute rename cooldown, which then blocks the rename on its first prompt. The name is
+ * the listed session's; the naming signal is the transcript the fork was copied from
+ * (`sourceId`, which differs while a parked job owns the pane). Never throws.
+ */
+export async function seedForkName(parentId: string, sourceId: string, forkId: string): Promise<void> {
+  try {
+    const path = await resolveTranscriptPath(sourceId);
+    const signal = path ? await getLatestUserPrompt(path) : "";
+    const cache = await loadNameCache();
+    if (inheritName(cache, parentId, forkId, signal)) await saveNameCache(cache);
+  } catch {}
 }
 
 /**

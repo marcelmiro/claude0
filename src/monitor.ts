@@ -21,7 +21,7 @@ import { classifyActivity } from "./core/presence";
 import { detectScriptWaits } from "./core/script-wait";
 import { getBaseRepoPath } from "./core/git";
 import { repoNameFromPath } from "./core/sessions";
-import { loadNameCache, saveNameCache, generateAIName, getSessionName, slugify, acquireNamingLock, releaseNamingLock, pruneNameCacheIfLarge, loadNamingSkips, setNamingSkip, needsNaming, inNamingCooldown, shouldRebaseline, type NameCache } from "./core/names";
+import { loadNameCache, saveNameCache, generateAIName, getSessionName, nameOrder, slugify, acquireNamingLock, releaseNamingLock, pruneNameCacheIfLarge, loadNamingSkips, setNamingSkip, needsNaming, inNamingCooldown, shouldRebaseline, type NameCache } from "./core/names";
 import { disambiguateByRepo } from "./core/session-label";
 import { findActiveSessionInfo, readNamingExtras } from "./core/sessions";
 import { homedir } from "os";
@@ -498,7 +498,7 @@ function buildRepoDnMap(
     if (!nm) continue;
     items.push({ id: sid, name: nm, repo: repoNameFromPath(s.baseRepoPath) });
   }
-  return disambiguateByRepo(items);
+  return disambiguateByRepo(items, nameOrder(cache));
 }
 
 async function phase2(

@@ -85,3 +85,29 @@ test("disambiguateByRepo: collisions suffix within a repo, never across repos", 
   expect(out.get("b")).toBe("Fix Auth 2");
   expect(out.get("c")).toBe("Fix Auth");
 });
+
+test("disambiguateNames: the earliest-named session keeps the base name, whatever its id", () => {
+  // the newcomer (a fork, say) has the LOWER id — it must still take the suffix
+  const order = new Map([["parent-zz", 0], ["fork-aa", 1]]);
+  const m = disambiguateNames(
+    [
+      { id: "fork-aa", name: "Fix Auth" },
+      { id: "parent-zz", name: "Fix Auth" },
+    ],
+    order,
+  );
+  expect(m.get("parent-zz")).toBe("Fix Auth");
+  expect(m.get("fork-aa")).toBe("Fix Auth 2");
+});
+
+test("disambiguateNames: unranked ids follow ranked ones, by id", () => {
+  const m = disambiguateNames(
+    [
+      { id: "b", name: "X" },
+      { id: "a", name: "X" },
+      { id: "z", name: "X" },
+    ],
+    new Map([["z", 0]]),
+  );
+  expect([m.get("z"), m.get("a"), m.get("b")]).toEqual(["X", "X 2", "X 3"]);
+});

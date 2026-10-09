@@ -194,7 +194,7 @@ async function writeTranscript(lines: string[]): Promise<string> {
 test("finds the newest last-prompt record in the tail", async () => {
   const path = await writeTranscript([
     JSON.stringify({ type: "last-prompt", lastPrompt: "older" }),
-    JSON.stringify({ type: "user", message: { content: "hi" } }),
+    JSON.stringify({ type: "assistant", message: { content: "hi" } }),
     JSON.stringify({ type: "last-prompt", lastPrompt: "newest prompt" }),
   ]);
   expect(await getLatestUserPrompt(path)).toBe("newest prompt");
@@ -212,9 +212,60 @@ test("recovers a last-prompt buried past the first 64KB window, with multi-byte 
   expect(await getLatestUserPrompt(path)).toBe("épreuve — 日本語のプロンプト 🚀");
 });
 
-test("empty result when no last-prompt record exists", async () => {
-  const path = await writeTranscript([JSON.stringify({ type: "user", message: { content: "hi" } })]);
+test("empty result when the transcript has neither a prompt nor a last-prompt record", async () => {
+  const path = await writeTranscript([JSON.stringify({ type: "assistant", message: { content: "hi" } })]);
   expect(await getLatestUserPrompt(path)).toBe("");
+});
+
+// --- getLatestUserPrompt: a real prompt near the tail outranks last-prompt records ---
+const user = (content: unknown, extra: object = {}) => JSON.stringify({ type: "user", message: { content }, ...extra });
+
+test("a fork's own prompt wins over the stale parent last-prompt Claude writes after it", async () => {
+  const path = await writeTranscript([
+    user("parent prompt"),
+    JSON.stringify({ type: "last-prompt", lastPrompt: "parent prompt" }),
+    user("the fork's own prompt"),
+    JSON.stringify({ type: "assistant", message: { content: "ok" } }),
+    JSON.stringify({ type: "last-prompt", lastPrompt: "parent prompt" }), // stale, written after the turn
+  ]);
+  expect(await getLatestUserPrompt(path)).toBe("the fork's own prompt");
+});
+
+test("a prompt Claude never wrote a last-prompt record for still counts", async () => {
+  const path = await writeTranscript([
+    JSON.stringify({ type: "last-prompt", lastPrompt: "older" }),
+    user([{ type: "text", text: "newer\n  prompt" }]),
+  ]);
+  expect(await getLatestUserPrompt(path)).toBe("newer prompt");
+});
+
+test("tool results, bash output and meta commands are not prompts; ! commands and slash intents are", async () => {
+  const skipped = [
+    user([{ type: "tool_result", content: "x" }]),
+    user("<bash-stdout>Ok</bash-stdout><bash-stderr></bash-stderr>"),
+    user("<command-name>/clear</command-name><command-args></command-args>"),
+    user("<system-reminder>x</system-reminder>"),
+    user("typed but meta", { isMeta: true }),
+    user("This session is being continued from a previous conversation…", { isCompactSummary: true }),
+  ];
+  expect(await getLatestUserPrompt(await writeTranscript([user("typed"), ...skipped]))).toBe("typed");
+  expect(await getLatestUserPrompt(await writeTranscript([user("<bash-input> ls -la </bash-input>"), skipped[1]!]))).toBe("! ls -la");
+  expect(
+    await getLatestUserPrompt(
+      await writeTranscript([user("<command-name>/implement-plan</command-name><command-args>@plan.md</command-args>")]),
+    ),
+  ).toBe("/implement-plan @plan.md");
+});
+
+test("a prompt beyond the 64KB tail falls back to the last-prompt record Claude rewrites through the turn", async () => {
+  const pad = JSON.stringify({ type: "assistant", message: { content: "x".repeat(4000) } });
+  const path = await writeTranscript([
+    user("buried prompt"),
+    ...Array.from({ length: 30 }, () => pad),
+    JSON.stringify({ type: "last-prompt", lastPrompt: "current prompt" }),
+    ...Array.from({ length: 5 }, () => pad),
+  ]);
+  expect(await getLatestUserPrompt(path)).toBe("current prompt");
 });
 
 // --- resolveActiveId — a known id with no transcript --------------------------------

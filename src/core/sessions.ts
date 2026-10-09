@@ -14,7 +14,7 @@ import { slugify } from "./names";
 import { processHookEvents, savePaneSessions, reconcilePaneFiles } from "./state";
 import { eventSourcedStatus } from "./hook-events";
 import { nativeSessionIdByPid, nativeStatus, resolveStatus } from "./session-state";
-import { readLastTurnAt, resolveTranscriptPath, latestTranscriptCwd } from "./last-turn";
+import { isPromptRecord, readLastTurnAt, resolveTranscriptPath, latestTranscriptCwd } from "./last-turn";
 import { jsonlLines } from "./jsonl-reader";
 
 const home = homedir();
@@ -1368,28 +1368,75 @@ async function getFirstUserPrompt(sessionPath: string): Promise<string> {
 }
 
 /**
- * Scan a JSONL session file for the most recent `"type":"last-prompt"` entry.
- * Claude Code writes one of these on each user turn, so this reflects the
- * current conversation direction (unlike firstPrompt, which is frozen).
- * Returns a truncated string (first 200 chars) or empty string on failure.
+ * The session's most recent prompt, truncated to 200 chars ("" on failure): the newest
+ * typed prompt (or slash-command intent) in the transcript's last 64KB, else the newest
+ * `last-prompt` record. Claude's `last-prompt` records lag and, in a `--fork-session`
+ * fork, keep holding the PARENT's prompt after the fork's own turns (2.1.295) — so a real
+ * prompt record wins when one is near the tail. Long agentic turns push the prompt past
+ * that window; there the `last-prompt` record, which Claude rewrites through the turn,
+ * stands in.
  */
 export async function getLatestUserPrompt(sessionPath: string): Promise<string> {
-  // Tail scan (the readLastPromptAt pattern): the newest last-prompt record sits
-  // near the end, so this reads KBs of a multi-MB file — and it runs for EVERY
-  // active session on EVERY discovery sweep.
+  // Both reads are tail-bounded — this runs for EVERY active session on EVERY
+  // discovery sweep.
+  const recent = await newestPromptInTail(sessionPath);
+  if (recent) return recent;
   return scanTailForLine(sessionPath, (line) => {
     if (!line.includes('"type":"last-prompt"')) return undefined;
     try {
       const parsed = JSON.parse(line);
       if (parsed.type !== "last-prompt") return undefined;
-      const text: string = parsed.lastPrompt || "";
-      if (!text) return undefined;
-      const clean = text.replace(/\s+/g, " ").trim();
-      return clean.length > 200 ? clean.slice(0, 200) + "..." : clean;
+      return clipPrompt(parsed.lastPrompt || "") || undefined;
     } catch {
       return undefined;
     }
   });
+}
+
+function clipPrompt(text: string): string {
+  const clean = text.replace(/\s+/g, " ").trim();
+  return clean.length > 200 ? clean.slice(0, 200) + "..." : clean;
+}
+
+const PROMPT_TAIL_BYTES = 64 * 1024;
+
+async function newestPromptInTail(sessionPath: string): Promise<string> {
+  try {
+    const file = Bun.file(sessionPath);
+    const stat = await file.stat();
+    const start = Math.max(0, stat.size - PROMPT_TAIL_BYTES);
+    const lines = (await file.slice(start, stat.size).text()).split("\n");
+    for (let i = lines.length - 1; i >= (start > 0 ? 1 : 0); i--) {
+      const line = lines[i]!;
+      if (!line.includes('"type":"user"') && !line.includes('"queued_command"')) continue;
+      try {
+        const text = clipPrompt(promptTextOf(JSON.parse(line)));
+        if (text) return text;
+      } catch {}
+    }
+  } catch {}
+  return "";
+}
+
+/**
+ * A record's typed-prompt text, a slash command's intent, or a `!` command as `! <cmd>`
+ * (the form Claude's `last-prompt` records use); "" for anything else, bash output included.
+ */
+export function promptTextOf(rec: Parameters<typeof isPromptRecord>[0] & { isCompactSummary?: boolean }): string {
+  if (rec.isCompactSummary) return ""; // a user-role record Claude writes after /compact
+  const content = rec.message?.content;
+  if (rec.type === "user" && typeof content === "string" && /^\s*<(command-|bash-)/.test(content)) {
+    if (rec.isMeta || rec.isSidechain) return "";
+    const bang = content.match(/^\s*<bash-input>([\s\S]*)<\/bash-input>\s*$/);
+    if (bang) return `! ${bang[1]!.trim()}`;
+    return slashCommandIntent(content) ?? "";
+  }
+  if (!isPromptRecord(rec)) return "";
+  if (rec.type === "attachment") return typeof rec.attachment?.prompt === "string" ? rec.attachment.prompt : "";
+  if (typeof content === "string") return content;
+  return (content as Array<{ type?: string; text?: unknown }>)
+    .flatMap((b) => (b.type === "text" && typeof b.text === "string" ? [b.text] : []))
+    .join(" ");
 }
 
 export interface SessionTailInfo {

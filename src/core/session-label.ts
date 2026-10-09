@@ -3,12 +3,17 @@ import type { Session } from "../types";
 
 /**
  * Given a set of {id, name}, return a map id→display name where any name shared
- * by more than one item is disambiguated with a ` 2`/` 3`… suffix. Ordering within
- * a colliding group is by `id` ascending — deterministic and independent of caller
- * iteration order or session status, so the same session gets the same suffix on
- * every surface (TUI list, tmux window, phone). Empty names are never suffixed.
+ * by more than one item is disambiguated with a ` 2`/` 3`… suffix. Within a colliding
+ * group the earliest-named session (lowest `order`, see `nameOrder`) keeps the base name,
+ * so a newcomer takes the suffix and an existing session is never renamed under you;
+ * unranked ids follow, by `id`. Deterministic and independent of caller iteration order
+ * or session status, so the same session gets the same suffix on every surface (TUI
+ * list, tmux window, phone). Empty names are never suffixed.
  */
-export function disambiguateNames(items: Array<{ id: string; name: string }>): Map<string, string> {
+export function disambiguateNames(
+  items: Array<{ id: string; name: string }>,
+  order?: Map<string, number>,
+): Map<string, string> {
   const out = new Map<string, string>();
   for (const { id, name } of items) out.set(id, name); // default: identity
   // Group ids by name, deduping repeated ids — the same session can appear on
@@ -28,7 +33,8 @@ export function disambiguateNames(items: Array<{ id: string; name: string }>): M
   const used = new Set(byName.keys());
   for (const [name, ids] of byName) {
     if (ids.length < 2) continue;
-    const ordered = [...ids].sort(); // lowest id keeps the base name
+    const rank = (id: string) => order?.get(id) ?? Infinity;
+    const ordered = [...ids].sort((a, b) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0));
     for (let i = 1; i < ordered.length; i++) {
       let n = 2;
       while (used.has(`${name} ${n}`)) n++;
@@ -53,6 +59,7 @@ export function snippet(text: string, max = 80): string {
  */
 export function disambiguateByRepo(
   items: Array<{ id: string; name: string; repo: string }>,
+  order?: Map<string, number>,
 ): Map<string, string> {
   const byRepo = new Map<string, Array<{ id: string; name: string }>>();
   for (const { id, name, repo } of items) {
@@ -62,7 +69,7 @@ export function disambiguateByRepo(
   }
   const out = new Map<string, string>();
   for (const bucket of byRepo.values()) {
-    for (const [id, name] of disambiguateNames(bucket)) out.set(id, name);
+    for (const [id, name] of disambiguateNames(bucket, order)) out.set(id, name);
   }
   return out;
 }

@@ -3,7 +3,7 @@ import { CONFIG_DIR } from "../../test/helpers/home";
 import { test, expect } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { getSessionName, loadNameCache, normalizeName, slugify, looksLikeCliError, looksLikeRefusal, salvageName, pruneNameCache, needsNaming, inNamingCooldown, shouldRebaseline, pickConsensusName, buildNamingPrompt, saveNameCache, acquireNamingLock, releaseNamingLock, BACKGROUND_NAMING_TIMEOUT_MS, type NameCache } from "./names";
+import { getSessionName, loadNameCache, normalizeName, slugify, looksLikeCliError, looksLikeRefusal, salvageName, pruneNameCache, needsNaming, inNamingCooldown, shouldRebaseline, inheritName, nameOrder, pickConsensusName, buildNamingPrompt, saveNameCache, acquireNamingLock, releaseNamingLock, BACKGROUND_NAMING_TIMEOUT_MS, type NameCache } from "./names";
 
 const CACHE_FILE = join(CONFIG_DIR, "names.json");
 function writeCache(obj: unknown) {
@@ -284,4 +284,45 @@ test("acquireNamingLock: a live holder still inside its draw budget keeps the lo
   writeFileSync(lock, JSON.stringify({ pid: 2 ** 22 + 1, ts: Date.now() }));
   expect(await acquireNamingLock()).toBe(true);
   await releaseNamingLock();
+});
+
+// --- fork name inheritance ------------------------------------------------------------
+
+test("nameOrder: ranks sessions by when they were first named; a rename keeps the rank", () => {
+  const cache: NameCache = { version: 6, names: {}, sources: {} };
+  cache.names["b-older"] = "One";
+  cache.names["a-newer"] = "Two";
+  cache.names["b-older"] = "Renamed";
+  const round = JSON.parse(JSON.stringify(cache)) as NameCache; // every surface reads it from disk
+  expect([...nameOrder(round)]).toEqual([["b-older", 0], ["a-newer", 1]]);
+});
+
+test("inheritName: the fork takes the parent's name, ranks after it, and drifts on its own first prompt", () => {
+  const cache: NameCache = { version: 6, names: { parent: "Fix Auth" }, sources: { parent: "old prompt" }, sizes: { parent: 5000 } };
+  expect(inheritName(cache, "parent", "fork", "latest prompt")).toBe(true);
+  expect(cache.names.fork).toBe("Fix Auth");
+  expect(nameOrder(cache).get("fork")).toBeGreaterThan(nameOrder(cache).get("parent")!);
+  expect(needsNaming(cache, "fork", "latest prompt")).toBe(false); // nothing new yet
+  expect(needsNaming(cache, "fork", "the fork's own prompt")).toBe(true);
+});
+
+test("inheritName: the inherited name is never the rename anchor (it would stick to the fork)", () => {
+  const cache: NameCache = { version: 6, names: { parent: "Fix Auth" }, sources: {} };
+  inheritName(cache, "parent", "fork", "p");
+  expect(shouldRebaseline(cache, "fork", 2_000_000)).toBe(true);
+});
+
+test("inheritName: no-op for an unnamed parent or an already-named fork", () => {
+  const cache: NameCache = { version: 6, names: { parent: "Fix Auth", fork: "Own Name" }, sources: {} };
+  expect(inheritName(cache, "unnamed", "x", "p")).toBe(false);
+  expect(inheritName(cache, "parent", "fork", "p")).toBe(false);
+  expect(cache.names.fork).toBe("Own Name");
+  expect(cache.names.x).toBeUndefined();
+});
+
+test("slugify: a disambiguation suffix survives the 24-char window cut", () => {
+  expect(slugify("Redis Session Eviction Policy")).toBe("redis-session-eviction-p");
+  expect(slugify("Redis Session Eviction Policy 2")).toBe("redis-session-eviction-2");
+  expect(slugify("Redis Session Eviction Policy 12")).toBe("redis-session-evictio-12");
+  expect(slugify("Short Name 2")).toBe("short-name-2");
 });

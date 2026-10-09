@@ -55,20 +55,18 @@ export function abbreviateRepo(repo: string): string {
 }
 
 /** Build the base window name: {repo}[/{ai-name}][+] */
-export function buildBaseName(repo: string, aiName?: string, isFork?: boolean): string {
+export function buildBaseName(repo: string, aiName?: string): string {
   let name = abbreviateRepo(repo);
   if (aiName) name += `${NAME_SEPARATOR}${aiName}`;
-  if (isFork) name += "+";
   return name;
 }
 
-/** Extract AI name from a window name like "{repo}/{ai-name}" or "{repo}/{ai-name}+" */
+/** Extract AI name from a window name like "{repo}/{ai-name}" */
 export function extractAIName(windowName: string): string | null {
   const stripped = stripAllPrefixes(windowName);
   const sepIdx = stripped.indexOf(NAME_SEPARATOR);
   if (sepIdx === -1) return null;
-  let aiName = stripped.slice(sepIdx + NAME_SEPARATOR.length);
-  if (aiName.endsWith("+")) aiName = aiName.slice(0, -1);
+  const aiName = stripped.slice(sepIdx + NAME_SEPARATOR.length);
   return aiName || null;
 }
 

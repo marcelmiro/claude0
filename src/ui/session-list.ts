@@ -13,7 +13,7 @@ export { extractTicketId, buildSessionLabel };
  * rendered with a label participate, so a collapsed/hidden archived session never
  * perturbs a visible name.
  */
-function disambiguationMap(rows: DisplayRow[]): Map<string, string> {
+function disambiguationMap(rows: DisplayRow[], order: Map<string, number>): Map<string, string> {
   const byRepo = new Map<string, Array<{ id: string; name: string }>>();
   for (const row of rows) {
     if (row.type !== "session") continue;
@@ -24,7 +24,7 @@ function disambiguationMap(rows: DisplayRow[]): Map<string, string> {
   }
   const out = new Map<string, string>();
   for (const items of byRepo.values()) {
-    for (const [id, name] of disambiguateNames(items)) out.set(id, name);
+    for (const [id, name] of disambiguateNames(items, order)) out.set(id, name);
   }
   return out;
 }
@@ -94,10 +94,11 @@ export function renderSessionList(
   box: Widgets.BoxElement,
   rows: DisplayRow[],
   selectedIndex: number,
-  attentionKeys?: Set<string>,
+  attentionKeys: Set<string> | undefined,
+  order: Map<string, number>,
 ): void {
   const lines: string[] = [];
-  const dnMap = disambiguationMap(rows);
+  const dnMap = disambiguationMap(rows, order);
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
