@@ -70,3 +70,14 @@ entry above defends is not weakened. Every id learned any other way still resets
 when its JSONL is missing. The other lazy-window suspects need nothing: forks keep the
 seed (it makes them *readable*, not just listed), and `/clear` writes the new session's
 JSONL eagerly (verified on 2.1.246).
+
+## Addendum: terminal-launched sessions keep their native id (2026-10-09)
+
+The same id-less window hit every `claude` started from a shell: no `--session-id` on
+argv, so an unprompted session resolved to `""` and appeared in neither the sidebar nor
+portkey (the bridge drops id-less panes) until its first message. The exception now
+matches against the id the live process *owns*: its `--session-id` argv, else Claude's
+per-pid native file (`~/.claude/sessions/<pid>.json`, written before the first turn —
+verified live on 2.1.295). That file belongs to the running pid, so a stale pane→session
+mapping (e.g. a long-lived process's cached id for a pane since reused by a new `claude`)
+still can't match it and still resets to `""`.
