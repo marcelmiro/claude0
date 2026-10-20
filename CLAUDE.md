@@ -2,7 +2,7 @@
 
 Terminal TUI (blessed) + phone web app ("portkey") for managing Claude Code sessions: live status detection, attention notifications, AI naming, an inbox lifecycle, and a mobile bridge. Runs on macOS (Ghostty + tmux) or a Linux VM host — per-machine roles: [ADR 22](docs/adr/0022-per-machine-roles.md).
 
-This file is the map. Vocabulary lives in [CONTEXT.md](CONTEXT.md); decisions **and feature mechanism** live in [docs/adr/](docs/adr/) — when you change how a feature works, update its ADR (add a dated addendum), not this file. New features get a new ADR, not a new section here.
+This file is the map. Vocabulary lives in [GLOSSARY.md](GLOSSARY.md); decisions **and feature mechanism** live in [docs/adr/](docs/adr/) — when you change how a feature works, update its ADR (add a dated addendum), not this file. New features get a new ADR, not a new section here.
 
 ## Commands
 
