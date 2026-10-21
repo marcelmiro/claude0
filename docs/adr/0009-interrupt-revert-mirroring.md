@@ -40,7 +40,7 @@ Portkey mirrors the TUI exactly, keyed off the JSONL signature:
 
 - **Bare leaf** (revert): the client (which alone knows the sent text — it exists
   nowhere readable after a revert) prefills the composer, hides the dangling leaf from
-  the thread (transient, index+text-guarded; it self-heals when the next send forks the
+  the thread (transient, guarded by index, text and record timestamp; it self-heals when the next send forks the
   branch), and POSTs `/sessions/:id/clear-input` so the pane copy is removed too. The
   composer is focused inside the Stop tap's gesture handler — iOS raises the keyboard
   only for a gesture-driven focus, and the revert confirmation resolves ~2s too late to
@@ -205,3 +205,13 @@ bindings below are present back to the oldest running build, 2.1.263):
 - Pinned by styled lab captures in `test/fixtures/viewport/`: `input-cursor-top`,
   `input-cursor-wrapped`, `footer-focused`, `footer-focused-draft`, `stash-marker`,
   `shell-details`.
+
+## Addendum (2026-10-22): the hidden leaf is matched by timestamp too
+
+- The revert hide was guarded by index and text only. Resending the reverted prompt
+  unchanged forks from the same parent, so the new prompt lands at the same index with
+  the same text and was hidden as well: the session showed as running with the user's
+  message missing, until a page reload dropped the in-memory entry.
+- Each entry now also records the reverted turn's `at` (the JSONL record timestamp) and
+  hides only a turn with that exact timestamp. Every send writes a new record with its own
+  timestamp, so a resend is never matched.

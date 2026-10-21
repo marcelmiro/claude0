@@ -221,16 +221,18 @@ const composerPrefill = signal(null);
 const lastSentText = new Map(); // sid → text; read only inside event handlers, not reactive
 const interruptRestore = signal(null); // {sessionId, text, until} | null
 // Interrupted prompts hidden from the thread once their text was restored to the composer:
-// [{sessionId, index, text}]. Claude Code never deletes the turn from the JSONL — the
+// [{sessionId, index, text, at}]. Claude Code never deletes the turn from the JSONL — the
 // revert only materializes as branch abandonment at the NEXT send, and sometimes not even
 // then — so without this the thread keeps showing the very message the user is re-editing.
-// Entries are index+text guarded at render: if the branch changed and that index no longer
-// holds the exact prompt, the entry is inert (never hides an unrelated turn). This covers
-// ONLY the reverted bare-leaf shape (prompt dangling at the tip, no interrupt marker) —
-// indistinguishable from a just-sent message by structure alone, so it needs this
-// moment-of-interrupt knowledge. It self-heals: the next send forks the branch and the
-// turn drops out server-side. Marker-shaped interrupts are never hidden — the Mac TUI
-// keeps those messages in the conversation, and portkey mirrors the TUI.
+// Entries are index+text+timestamp guarded at render: if that index no longer holds the
+// exact reverted record, the entry is inert (never hides an unrelated turn). The timestamp
+// is what separates an unchanged resend — same parent, so same index and text — from the
+// reverted prompt it replaces. This covers ONLY the reverted bare-leaf shape (prompt
+// dangling at the tip, no interrupt marker) — indistinguishable from a just-sent message
+// by structure alone, so it needs this moment-of-interrupt knowledge. It self-heals: the
+// next send forks the branch and the turn drops out server-side. Marker-shaped interrupts
+// are never hidden — the Mac TUI keeps those messages in the conversation, and portkey
+// mirrors the TUI.
 const hiddenInterrupts = signal([]);
 // Optimistic "Chat about this": holds the sessionId whose open question we just declined,
 // so the dock flips to the composer instantly (before the hook's deny resolves and the
@@ -553,7 +555,10 @@ function applyTranscript(id, data) {
       !(transcript.value.queuedPending || []).some((q) => q.trim() === txt);
     if (reverted || gone) {
       if (reverted) {
-        hiddenInterrupts.value = [...hiddenInterrupts.value, { sessionId: id, index: turns.length - 1, text: txt }];
+        hiddenInterrupts.value = [
+          ...hiddenInterrupts.value,
+          { sessionId: id, index: turns.length - 1, text: txt, at: last.at },
+        ];
         // The revert parked the same text in the Mac pane's input box. Clear it (the
         // text now lives in this composer): a lingering occupied input silently flips
         // every future pre-stream interrupt from revert to keep, and feeds the next
@@ -3821,8 +3826,8 @@ function Detail() {
           }
           const upByIndex = upCountByIndex(turns);
           // Reverted prompts (bare-leaf interrupt — see the restore-on-interrupt block):
-          // entries recorded at interrupt time, index+text guarded — inert once the
-          // branch moves past that index. Marker-shaped interrupts are NOT hidden: the
+          // entries recorded at interrupt time, index+text+timestamp guarded — inert once
+          // the branch moves past that record. Marker-shaped interrupts are NOT hidden: the
           // Mac TUI keeps those in the conversation, so portkey mirrors it.
           const hiddenIdx = new Set();
           for (const h of hiddenInterrupts.value) {
@@ -3830,6 +3835,7 @@ function Detail() {
             const ht = turns[h.index];
             const matches =
               ht &&
+              ht.at === h.at &&
               isPromptTurn(ht) &&
               (ht.content || []).some((b) => b.type === "text" && (b.text || "").trim() === h.text);
             if (matches) hiddenIdx.add(h.index);
