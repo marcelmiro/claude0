@@ -1542,7 +1542,10 @@ async function route(req: Request): Promise<Response> {
     if ((req.headers.get("content-type") || "").includes("multipart/form-data")) {
       const form = await req.formData().catch(() => null);
       if (!form) return json({ ok: false, reason: "bad-form" }, 400);
-      const text = typeof form.get("text") === "string" ? (form.get("text") as string) : "";
+      // multipart/form-data encoding rewrites every LF in a text field to CRLF (per spec,
+      // unlike the JSON path), so a multi-line caption would reach the pane — and Claude's
+      // transcript record — as CRLF, and the client's optimistic bubble (LF) never retires.
+      const text = typeof form.get("text") === "string" ? (form.get("text") as string).replace(/\r\n/g, "\n") : "";
       const files = form.getAll("image").filter((v): v is File => v instanceof File);
       if (!text.trim() && files.length === 0) return json({ ok: false, reason: "empty" }, 400);
       const saved = await saveUploadedImages(files);
