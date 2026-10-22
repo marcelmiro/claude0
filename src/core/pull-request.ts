@@ -4,12 +4,13 @@
  * in-app reviewer it links out to the PR, where highlighting, threads and suggestions already
  * exist and match what the operator will read at their desk.
  *
- * Shells out to `gh`; every failure mode (no gh, no remote, not a GitHub remote, network down)
- * collapses to `state: "none"`, which the UI renders as nothing at all.
+ * Shells out to `gh`. Detached HEAD, a missing or non-GitHub `origin`, and the default branch
+ * are `state: "none"`, which the UI renders as nothing at all. A failed `gh` (missing, network
+ * down) is indistinguishable from "no PR" and reads as `no-pr` / `local-only`.
  */
 
 export type PullRequestInfo =
-  /** Nothing to link: default branch, no/unsupported remote, gh missing, or gh failed. */
+  /** Nothing to link: detached HEAD, default branch, or no/unsupported remote. */
   | { state: "none" }
   /** Branch exists only locally — there is no remote ref to open a PR against yet. */
   | { state: "local-only"; branch: string }

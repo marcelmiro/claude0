@@ -3,7 +3,7 @@
 How portkey's `Model · Effort` picker reads and changes a session's model and reasoning
 effort. Decision: [ADR 4](adr/0004-model-effort-switcher-scope.md). Code:
 `core/session-api.ts` (`MODEL_ARGS`, `EFFORT_ARGS`, `parseStatusline`,
-`setSessionModelEffort`, `configLabel`). Mechanics are guarded by
+`setSessionModelEffort`, `commandConfirmation`), `bridge/public/app.js` (`configLabel`). Mechanics are guarded by
 `test/smoke/model-effort.sh`, opt-in because it drives real sessions (not part of
 `bun test`).
 
@@ -23,18 +23,13 @@ effort. Decision: [ADR 4](adr/0004-model-effort-switcher-scope.md). Code:
 
 - Current *effort* depends on the user's `~/.claude/statusline.sh` rendering
   `.effort.level` as the final word of some `•`-delimited segment, bare or parenthesized
-  (`• Opus 5.5 (high)`). Position doesn't matter: every segment is token-scanned for a
-  trailing `EFFORT_ARGS` member, last match winning, and for a model name. Without that
-  statusline edit the switcher still works; the sheet just can't pre-mark the active level.
-- The native `~/.claude/sessions/<pid>.json` carries only `kind`, `sessionId`, `status`,
-  `pid`, `updatedAt` — no structured per-session source for effort exists.
-- **Opus versions.** The current Opus (one constant) maps to `opus[1m]` with or without the
-  `(1M context)` suffix: on 2.1.288 bare `opus` also resolves to a 1M-window Opus 5.5 but
-  renders without the suffix, so both must mark the Opus row. Any other rendered version
-  derives its full id from the version number (`[1m]` only when suffixed), so a session on
-  an older Opus marks no row, and `configLabel` derives its readout from that id
-  (`claude-opus-5[1m]` → "Opus 5").
+  (`• Opus 5.5 (high)`). Without that statusline edit the switcher still works; the sheet
+  just can't pre-mark the active level. No structured source exists: the native
+  `~/.claude/sessions/<pid>.json` carries no model or effort field.
+- Token-scan rules and Opus version mapping (the current Opus marks the `opus[1m]` row; an
+  older Opus keeps its full id and marks none): `parseStatusline`'s docblock.
 - Family aliases are version-free, so a family's version bump is a sub-label edit.
+
 
 ## Applying a change (`setSessionModelEffort`)
 
@@ -57,12 +52,8 @@ effort. Decision: [ADR 4](adr/0004-model-effort-switcher-scope.md). Code:
 
 ## Reading the confirmation
 
-- At the prompt: the `Set model to …` / effort line counts only if it sits under the
-  command's own echo and that echo is the newest — an earlier switch's line on screen used
-  to be reported as this one's success.
-- Mid-turn the confirmation isn't echoed; it's a toast in the slot above the input box that
-  lingers ~7s, and it counts only if it wasn't already up when the command was typed.
-  Re-applying the value just applied, mid-turn within ~7s, reports `no-confirm` (identical
-  toast text) though Claude applied it.
-- A wrapped confirmation's continuation rows sit 5 columns in, under the `⎿`'s text; the
-  right-aligned effort indicator (`◐ medium · /effort`) below the line is not part of it.
+`commandConfirmation` and `extractConfirmation` hold the rules (the line must sit under
+this command's newest echo; mid-turn it's a ~7s toast above the box that must not already
+have been up; wrapped continuation rows). One user-visible consequence: re-applying the
+value just applied, mid-turn within ~7s, reports `no-confirm` (identical toast text)
+though Claude applied it.

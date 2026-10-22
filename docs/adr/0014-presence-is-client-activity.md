@@ -1,13 +1,16 @@
 # 14. Off-macOS presence is tmux client activity; the desk notification tier stays darwin-only
 
 Date: 2026-08-09
-Status: accepted; the "macOS keeps frontmost byte-for-byte" clause is superseded by ADR 19
+Status: accepted; macOS frontmost clause superseded by ADR 19 (2026-08-19); amended 2026-08-24 (monitor solely writes window names)
+
+The notification tier stack and how presence gates it are in
+[docs/notifications.md](../notifications.md).
 
 ## Context
 
 Five sites answer "is the user at the terminal?" and act on it: the monitor's
 active-pane attention/push suppression and takeover (`monitor.ts`), the question
-hold's release check (`atMacFocus` in `core/tmux.ts`), the question intercept's
+hold's release check (`atDeskFocus` in `core/tmux.ts`, then named `atMacFocus`), the question intercept's
 focus gate and the approval hook's desk-prompt gate (both generated bash in
 `cli.ts`). On macOS they ask the OS — osascript/lsappinfo "is Ghostty frontmost" —
 or use "a tmux client is attached" as a proxy. Each has a deliberate,
@@ -20,7 +23,7 @@ both mechanisms break *silently*:
 - There is no frontmost app. The osascript path's catch makes the monitor
   permanently believe the user is watching (kills ⚡ and phone pushes on the
   active pane); the hook's empty-`lsappinfo` case permanently disables the
-  question intercept; `atMacFocus` never releases a hold early.
+  question intercept; the hold release never releases a hold early.
 - "Client attached" inverts its meaning: a persistent Mosh/SSH attach is the VM's
   steady state even when the user is out with their phone, so the approval hook
   would *always* route to the (unwatched) desk prompt.
@@ -41,6 +44,12 @@ The macOS-native notification tier (terminal-notifier/osascript, tier 3) is
 `claude0 next` cover the desk) or away (tier-4 web push covers the phone). The tier
 is gated behind `process.platform === "darwin"` instead.
 
+The monitor is the **sole writer of tmux window names**: it re-syncs base names, AI
+names and prefixes every tick, so a rename made anywhere else survives at most one
+cycle. Attention state crosses processes via `state.json`, never via window names.
+Name *generation* is shared with the bridge ([ADR 28](0028-ai-only-session-naming.md)),
+which writes only the shared name cache.
+
 ## Consequences
 
 - Reading-without-typing counts as absent after 60 s: an occasional redundant
@@ -58,29 +67,3 @@ is gated behind `process.platform === "darwin"` instead.
   from tmux on every read.
 - **Porting tier 3 to a Linux notifier** (notify-send/ntfy): notifies the VM,
   not the human; the desk surfaces that matter are tmux-side already.
-
-## Addendum (2026-08-24): the tier stack, and who owns window names
-
-The tiers presence gates, for the record. All four fire on status transitions
-(`running→waiting` = blocked, `running→ready` = turnComplete; `detectTransitions`
-in `core/notifications.ts`):
-
-1. status-right counts (`⚡3 🔄2`), 2. the window ⚡ prefix, 3. the darwin-only
-native banner (above), 4. per-device web push
-([ADR 24](0024-web-push-replaces-ntfy.md)). Presence feeds tiers 2–4's
-suppression alongside the takeover/hold/hook sites listed in Context.
-
-Prefix priority is ⚡ > 🔄 > ⏳ > none, centralized in `stripAllPrefixes()` /
-`desiredPrefix()` (`core/notifications.ts`) — build window names through them,
-never by string surgery on a name that may carry a prefix. ⏳ is
-visibility-only ([ADR 26](0026-background-work-is-visibility-only.md)).
-
-The monitor is the **sole window-naming authority** — it re-syncs base names, AI
-names and prefixes every tick, so a rename made anywhere else survives at most
-one cycle. Attention state crosses processes via `state.json`, not window names:
-the TUI and `claude0 next` clear flags there and the monitor's next tick repaints.
-
-**Addendum (2026-08-31):** "sole window-naming authority" means sole *writer of
-tmux window names*. Name *generation* is shared: the bridge names and
-drift-refreshes sessions symmetrically with the monitor ([ADR 28](0028-ai-only-session-naming.md)),
-writing only the shared cache — the monitor still owns every window rename.

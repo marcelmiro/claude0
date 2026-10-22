@@ -1,7 +1,7 @@
 # 13. Inbox: sessions carry a lifecycle, panes exist only for active work
 
 Date: 2026-08-06
-Status: accepted; amended 2026-08-08 → 2026-09-08 by lived-with revisions folded into the Decision and Rejected lists below (a snooze wake reopens the pane, Parked always expanded, every prompt-sitter is Needs You, a daemon owns wakes, portkey's Home is the inbox, Needs You is one band); systemd unit ownership (once provision.sh) superseded by ADR 22 (2026-08-23: `claude0 setup --role host` installs the units)
+Status: accepted; amended 2026-09-08 (lived-with revisions, see Rejected); unit ownership amended by ADR 22 (2026-08-23)
 
 How the inbox works — store, daemon, sidebar grammar, glyphs, the snooze form, freshness,
 process shape (formerly this ADR's addenda) — is in [docs/inbox.md](../inbox.md).

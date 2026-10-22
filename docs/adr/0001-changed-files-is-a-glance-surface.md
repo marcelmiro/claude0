@@ -1,7 +1,9 @@
 # 1. Portkey's changed-files view is a glance surface, not a review surface
 
 Date: 2026-07-20
-Status: accepted
+Status: accepted; amended 2026-08-24 (no thread file preview, chips open no diff)
+
+How the change set is computed, served and rendered: [docs/changed-files.md](../changed-files.md).
 
 ## Context
 
@@ -33,6 +35,11 @@ Explicitly out:
   original plan and cut during implementation. This ratifies that cut.
 - **Line numbers, syntax highlighting, search, filtering, per-file viewed state, split view,
   word-level intra-line diff, comment threads.** All serve review depth.
+- **A file preview in the thread strip.** The list is ordered latest-modified, so its first
+  rows are an arbitrary sample — and a sample at the end of a conversation reads as a summary.
+- **Per-edit diffs from Edit/Write chips.** A chip's path often can't resolve inside the
+  session's repo, and branch-vs-base is time-skewed for old chips. The changed-files page is
+  the one diff surface.
 
 Because a glance is exactly the mode where nobody double-checks, any surface that can show a
 **wrong or empty picture with no signal that it is wrong** is a defect of the highest class
@@ -40,55 +47,10 @@ here — higher than any missing capability.
 
 ## Consequences
 
-- Correctness and honesty work gets prioritised over capability work. Concretely: literal git
-  pathspecs (`literal()` in `core/repo-files.ts` wraps every one as `:(literal)…`) so a
-  filename containing glob metacharacters — `app/[slug]/page.tsx` is a real name — can't
-  render another file's patch; a hunk-aware patch parser (`shared/diff-lines.js`) so a
-  deleted `-- ` line can't be eaten by a file-header pattern — matching git's header
-  patterns against every line eats real content; a verified `origin/HEAD` so a dangling
-  symref can't silently collapse the view; fetch failures that hold the last known list
-  instead of asserting "nothing changed"; and both endpoints (`/changes`, `/diff`)
-  containment-guarded to the session's repo root (`safeRepoPath`), so a crafted path can't
-  read outside it.
+- Correctness and honesty work gets prioritised over capability work: literal pathspecs,
+  a hunk-aware patch parser, a verified `origin/HEAD`, fetch failures that hold the last known
+  list instead of asserting "nothing changed", and both endpoints containment-guarded to the
+  session's repo root (`safeRepoPath`).
 - The phone will keep saying less than a real review tool. That is the intended trade.
 - If the operator's working model changes — reviewing from the phone, or approving
   selectively — this decision should be revisited before any of the "out" list is built.
-
-## Addendum (2026-08-24): the glance posture in the rendering
-
-Decisions that keep the surface a glance, recorded because each has a tempting wrong
-alternative:
-
-- **The thread strip carries no file preview.** It shows totals, PR state and the baseline
-  only. The file list is ordered latest-modified, so the first N of a 144-file branch are an
-  arbitrary sample — and a sample at the end of a conversation reads as a summary. It is
-  styled as thread furniture (full-bleed, unfilled, hairline-ruled) rather than a filled
-  rounded box, because a filled box on `--surface` is exactly an assistant bubble.
-- **Edit/Write chips in the thread are informational only** — filename bright, directory
-  dimmed. They deliberately don't open a per-edit diff: a chip's path often can't resolve
-  inside the session's repo (removed worktree, scratchpad or `~/.claude` edits), and the
-  branch-vs-base answer is time-skewed for old chips. The changed-files page is the one
-  diff surface.
-- **Diffs are re-indented for phone width** (`narrowIndent` in `shared/diff-lines.js`):
-  leading whitespace becomes 2 spaces per level, levels preserved, interior spacing
-  untouched — a tab-indented repo stops spending 8 columns per level of a ~45-column
-  viewport. Display transform only; the patch and the file are unchanged.
-- **`/changes` has a 1s stale-while-revalidate cache, and `/diff` reuses it** to resolve a
-  rename's old path — a file-list row shows the true rename without carrying the old path
-  itself, and without trusting the caller to supply it.
-
-## Addendum (2026-09-28): untracked numstat is computed in-process
-
-`changedFiles` used to run `git diff --no-index --numstat` once per untracked file, all
-in parallel. A worktree full of generated output (9,222 untracked eval files) turned one
-`/changes` request into 9,222 concurrent shells, and on Bun 1.4.0 each `Bun.$` call
-retained ~160 KB of native memory for the life of the process — ~1.5 GB per request,
-which is what grew the bridge to 24 GB and got it earlyoom-killed on a 1–2 day cycle.
-Untracked files now get their line count (a last line without a newline still counts) and
-binary verdict (a NUL in the first 8000 bytes, git's rule) from a streamed read, one file
-at a time, no subprocess. A `.gitattributes` `-diff` rule is no longer honored for
-untracked files — they read as text.
-
-## See also
-
-- [0002 — the changed-files baseline is the merge-base](0002-changed-files-baseline.md)

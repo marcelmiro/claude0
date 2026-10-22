@@ -1,7 +1,7 @@
 # 9. Interrupts mirror the TUI: revert restores to the composer, keeps stay in the thread
 
 Date: 2026-07-24
-Status: accepted; the draft-around-a-send mechanism amended 2026-09-30 (Claude's own Ctrl+S stash replaced the kill-ring cut and `C-y` restore)
+Status: accepted; amended 2026-09-30 (drafts ride Claude's Ctrl+S stash)
 
 How the bridge drives the input box — the interrupt table, pre-flight, stash, the
 `killInput` walk, and the widgets that steal keystrokes — is in

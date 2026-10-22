@@ -1,7 +1,10 @@
 # 8. Questions stay hook-held; the send-keys redesign is rejected
 
 Date: 2026-07-22
-Status: accepted; amended by ADR 19 (2026-08-19: presence replaces the frontmost-app probe in focus-release)
+Status: accepted; amended by ADR 19 (2026-08-19)
+
+How questions are held, released and carded, including the subagent filter on the hook
+event log: [docs/questions-and-dialogs.md](../questions-and-dialogs.md).
 
 ## Context
 
@@ -75,17 +78,3 @@ review screen from the live pane).
   changes, `chatRowKey` degrades to Escape.
 - A held question is one idle `claude0 question-hook` process for up to 4h; dead-pid
   reaping (existing) cleans markers if it's killed.
-
-## Addendum (2026-10-05): subagent tool events stay out of the session's event log
-
-Subagents fire hooks under their parent's `session_id`, tagged `agent_id`. With six
-background agents running, a held main-thread AskUserQuestion went missing on the
-phone twice over. First, `pendingToolCall` returned the newest open PreToolUse, which
-was a subagent's Bash, so the bridge reported `pending: null` and drew no card. Then
-about 400 subagent events within minutes rotated the question out of the 200-line log
-entirely, so the hold sat unanswerable until the user came back to the pane. The event
-logger now skips subagent tool events, and `pendingToolCall` ignores any already
-logged. AskUserQuestion is the exception in both places, because the question hook
-doesn't filter subagents and can hold theirs too. Side effect: portkey's running-tool
-chip shows the main thread's open call (e.g. the Agent call) rather than a subagent's
-latest tool.

@@ -1,5 +1,5 @@
 /**
- * Single sidebar renderer (M2 chassis — ADR 0013 addendum 2). ONE process
+ * Single sidebar renderer (docs/inbox.md, "Chassis"). ONE process
  * (inside `claude0 daemon`) paints every window's sidebar pane by writing ANSI
  * to the pane's tty; the panes themselves are dumb `claude0 sidebar-pane` stubs
  * that raw-mode their tty and relay stdin bytes back over a unix socket.
@@ -9,7 +9,7 @@
  * state here: every window's sidebar is always current, so a window switch
  * lands on painted content by construction.
  *
- * Spike-proven mechanics (see .plans + prototype/renderer-spike): writing a
+ * Spike-proven mechanics (the spike itself wasn't kept): writing a
  * pane's pty slave IS pane output; DECSET 1004/1006 written to the tty give
  * focus + SGR mouse through the same relay; a respawned pane gets a NEW tty
  * (EPERM/ENOENT on the old one ⇒ re-resolve and repaint).

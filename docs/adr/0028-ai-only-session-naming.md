@@ -1,10 +1,10 @@
 # 28. Session names are AI-only, resolved from one cache on every surface
 
 Date: 2026-08-31
-Status: accepted; amended 2026-09-10 (drift renames keep the current name as an anchor, re-baselined when the transcript doubles; best-of-three draws) and 2026-10-09 (forks inherit the parent's name)
+Status: accepted; amended 2026-09-10 (name anchor, re-baseline, consensus draws), 2026-10-09 (forks inherit the name)
 
 How names are generated, refreshed and resolved — the prompt inputs, filters, cooldowns,
-failure log, and the evaluation harness and its scores — is in [docs/naming.md](../naming.md).
+failure log, and how to evaluate a naming change — is in [docs/naming.md](../naming.md).
 
 ## Context
 
@@ -21,7 +21,7 @@ Two classes of problems had accumulated:
 
 **Generation names the subject.** The namer sees assistant replies, mid-session messages and the session's own branch, not just the first and last prompt — long sessions often open and close with meta text while the subject appears only in the middle. Refusal-shaped output is salvaged before rejection.
 
-**Monitor and bridge are symmetric namers.** Both apply the same drift rule, share the cooldown markers, and write `sources` on success. The monitor stays the sole *window-writing* authority (ADR 14 addendum).
+**Monitor and bridge are symmetric namers.** Both apply the same drift rule, share the cooldown markers, and write `sources` on success. The monitor stays the sole *window-writing* authority (ADR 14).
 
 **Drift renames keep the current name unless the session outgrew it.** The current name is passed as an anchor, so a well-named session isn't renamed after its PR-review tail; a session whose transcript has doubled since naming is renamed without it, because an anchor strong enough to stop churn also stops a wrong name from ever self-correcting.
 

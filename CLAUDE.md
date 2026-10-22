@@ -6,6 +6,8 @@ This file is the map. Vocabulary lives in [GLOSSARY.md](GLOSSARY.md).
 
 **Decisions (`docs/adr/`).** Record one as `docs/adr/NNNN-slug.md` only when it's hard to reverse, surprising without context, and the result of a real trade-off. Sections: Context, Decision, Consequences, plus a `Status:` line (accepted / amended by ADR N / superseded by ADR N, dated). ADRs hold the decision; how a feature works goes in `docs/<area>.md`. When a later change reverses part of an ADR, update its Status line instead of appending a changelog. Before changing an area, read its ADRs; if your change contradicts one, say so and ask.
 
+**Mechanism (`docs/<area>.md`).** The table at the end maps each area to its ADRs and doc. A change to how a feature works updates that doc in the same commit. Docs hold what no single file shows — cross-file order, Claude Code/tmux/platform facts, traps — and name the function whose docblock carries the detail rather than restating it. Code comments cite docs and ADRs by file and section.
+
 ## Commands
 
 ```sh
@@ -44,8 +46,9 @@ These are routine, durably-authorized actions — **do them yourself, don't just
 - **Vibe mode**: single-dev repo — work directly in this base checkout on `main`, commit and push to `main` when asked, no Linear, no plan docs. Exception: if `git status` shows uncommitted changes in files your task will touch, create a worktree per the global rule.
 - All shell/IO in try/catch returning empty defaults — never crash the TUI.
 - Stream transcript IO in long-lived processes (`jsonlLines()` or windowed byte reads) — one `.text()` of a multi-MB JSONL permanently ratchets RSS (freed malloc pages don't return to the OS; the bridge hit a ~1GB plateau on a 3MB heap).
+- Dates and times render through hard-coded English formats (`shared/wake-abs.js`), never locale-sensitive `Intl` — Bun ignores `LANG` for its default locale and ICU builds disagree on locale data.
 - Vesper palette: `bg=#101010 fg=#FFFFFF muted=#A0A0A0 dim=#505050 surface=#1C1C1C peach=#FFC799 mint=#99FFE4 red=#FF8080`. Status colors: waiting/ready=peach, running=mint, idle=dim.
-- Window names are `[⚡|🔄|⏳]{repo}[/{ai-name}]`; the monitor is the sole window-*writing* authority ([ADR 14](docs/adr/0014-presence-is-client-activity.md) addendum) — name *generation* is shared with the bridge ([ADR 28](docs/adr/0028-ai-only-session-naming.md)).
+- Window names are `[⚡|🔄|⏳]{repo}[/{ai-name}]`; the monitor is the sole window-*writing* authority ([ADR 14](docs/adr/0014-presence-is-client-activity.md)) — name *generation* is shared with the bridge ([ADR 28](docs/adr/0028-ai-only-session-naming.md)).
 
 ## Gotchas (paid for in blood)
 
@@ -80,16 +83,16 @@ Processes & caches:
 |---|---|---|---|
 | Wrapping Claude Code (structured channels vs guarded keystrokes) | [6](docs/adr/0006-wrapping-claude-code.md) | [pane-input](docs/pane-input.md) | `core/tmux.ts`, `core/session-api.ts` |
 | Inbox lifecycle, sidebar, daemon, snooze/wake, portkey Home | [13](docs/adr/0013-inbox-lifecycle-model.md) | [inbox](docs/inbox.md), [portkey](docs/portkey.md) | `core/inbox-*.ts`, `src/sidebar/` |
-| Presence, notification tiers, window prefixes | [14](docs/adr/0014-presence-is-client-activity.md), [19](docs/adr/0019-presence-is-client-activity-everywhere.md) |  | `core/presence.ts`, `core/notifications.ts` |
+| Presence, notification tiers, window prefixes | [14](docs/adr/0014-presence-is-client-activity.md), [19](docs/adr/0019-presence-is-client-activity-everywhere.md) | [notifications](docs/notifications.md) | `core/presence.ts`, `core/notifications.ts` |
 | AI session naming (generation, cache, label resolution) | [28](docs/adr/0028-ai-only-session-naming.md) | [naming](docs/naming.md) | `core/names.ts`, `src/monitor.ts` |
-| Web Push, per-device routing, tap attribution | [24](docs/adr/0024-web-push-replaces-ntfy.md), [10](docs/adr/0010-notification-taps-attributed-server-side.md) |  | `core/web-push.ts`, `shared/tap-target.js` |
-| SSE sync — versioned state push, not doorbells; status overlays | [18](docs/adr/0018-versioned-state-push.md) |  | `bridge/stream.ts`, `shared/sync.js` |
-| Changed-files viewer, baseline, pushed-vs-unpushed tiers, PR link | [1](docs/adr/0001-changed-files-is-a-glance-surface.md), [2](docs/adr/0002-changed-files-baseline.md), [11](docs/adr/0011-pushed-vs-unpushed-is-a-tier-chain.md), [5](docs/adr/0005-link-out-to-the-pull-request.md) |  | `core/repo-files.ts`, `shared/diff-lines.js`, `core/pull-request.ts` |
+| Web Push, per-device routing, tap attribution | [24](docs/adr/0024-web-push-replaces-ntfy.md), [10](docs/adr/0010-notification-taps-attributed-server-side.md) | [notifications](docs/notifications.md) | `core/web-push.ts`, `shared/tap-target.js` |
+| SSE sync — versioned state push, not doorbells; status overlays | [18](docs/adr/0018-versioned-state-push.md) | [sync](docs/sync.md) | `bridge/stream.ts`, `shared/sync.js` |
+| Changed-files viewer, baseline, pushed-vs-unpushed tiers, PR link | [1](docs/adr/0001-changed-files-is-a-glance-surface.md), [2](docs/adr/0002-changed-files-baseline.md), [11](docs/adr/0011-pushed-vs-unpushed-is-a-tier-chain.md), [5](docs/adr/0005-link-out-to-the-pull-request.md) | [changed-files](docs/changed-files.md) | `core/repo-files.ts`, `shared/diff-lines.js`, `core/pull-request.ts`, `core/edit-dir.ts` |
 | Stop/interrupt revert mirroring, draft stash/discard, input pre-flight | [9](docs/adr/0009-interrupt-revert-mirroring.md) | [pane-input](docs/pane-input.md) | `core/session-api.ts`, `bridge/public/app.js` |
-| Bash `!` commands, composer bash mode, shell-mode guard | [12](docs/adr/0012-bang-commands.md) |  | `core/transcript.ts`, `core/session-api.ts` |
-| AskUserQuestion hold, "Chat about this" | [8](docs/adr/0008-question-hold-not-send-keys.md) |  | `core/tmux.ts` |
-| Dialogs covering the input box (model-switch confirm, pickers): detection, card, answering | [31](docs/adr/0031-dialogs-covering-the-input-box.md) |  | `core/session-api.ts`, `bridge/server.ts` |
-| Background scripts/agents surface (⏳, 🤖 pill), runner liveness | [26](docs/adr/0026-background-work-is-visibility-only.md) |  | `core/script-wait.ts`, `core/background-tasks.ts`, `core/runner-verdicts.ts` |
+| Bash `!` commands, composer bash mode, shell-mode guard | [12](docs/adr/0012-bang-commands.md) | [bang-commands](docs/bang-commands.md) | `core/transcript.ts`, `core/session-api.ts` |
+| AskUserQuestion hold, "Chat about this" | [8](docs/adr/0008-question-hold-not-send-keys.md) | [questions-and-dialogs](docs/questions-and-dialogs.md) | `core/tmux.ts` |
+| Dialogs covering the input box (model-switch confirm, pickers): detection, card, answering | [31](docs/adr/0031-dialogs-covering-the-input-box.md) | [questions-and-dialogs](docs/questions-and-dialogs.md) | `core/session-api.ts`, `bridge/server.ts` |
+| Background scripts/agents surface (⏳, 🤖 pill), runner liveness | [26](docs/adr/0026-background-work-is-visibility-only.md) | [background-work](docs/background-work.md) | `core/script-wait.ts`, `core/background-tasks.ts`, `core/runner-verdicts.ts` |
 | Fork sessions, transcript seeding | [25](docs/adr/0025-fork-transcript-seeding.md) |  | `core/session-api.ts` |
 | Image paste from a client Mac (Service hotkey → ssh → path paste) | [27](docs/adr/0027-image-paste-is-a-service-hotkey-plus-path-paste.md) |  | `core/image-paste.ts`, `src/paste-image.ts`, `config/service/` |
 | Model/effort switcher | [4](docs/adr/0004-model-effort-switcher-scope.md) | [model-effort-switcher](docs/model-effort-switcher.md) | `core/session-api.ts` |

@@ -1,7 +1,7 @@
 # 4. The phone's model/effort switcher inherits Claude's own scoping
 
 Date: 2026-07-20 (documenting an earlier decision)
-Status: accepted; amended 2026-09-29 (the switch confirm is accepted for the user) and 2026-10-01 (the picker offers aliases only)
+Status: accepted; amended 2026-09-29 (switch confirm accepted for the user), 2026-10-01 (aliases only)
 
 How the picker reads and applies values — statusline parsing, Opus version tracking, the
 switch confirm, mid-turn toasts — is in [docs/model-effort-switcher.md](../model-effort-switcher.md).

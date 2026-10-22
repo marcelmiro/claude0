@@ -941,8 +941,8 @@ function clearMarker(path: string): void {
 }
 
 // Per-device liveness markers (consumers/<deviceId>) — the push-suppression signal.
-// Additive to the aggregate BRIDGE_CONSUMER above, which the question-intercept
-// hook reads and which must keep its exact semantics.
+// Additive to the aggregate BRIDGE_CONSUMER above, which both PreToolUse holds
+// (approval and question) read and which must keep its exact semantics.
 function touchDeviceConsumer(deviceId: string): void {
   try {
     mkdirSync(CONSUMERS_DIR, { recursive: true });

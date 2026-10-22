@@ -2453,7 +2453,7 @@ const isToolOnlyTurn = (turn) =>
 
 // Time-gap label between turns: the clock alone today, "Yesterday 13:06", else "24/08 13:06".
 // Hard-coded 24h + dd/MM like shared/wake-abs.js — locale-sensitive Intl formatting is
-// deliberately not relied on in this repo (ADR 13, addendum 9).
+// deliberately not relied on in this repo (CLAUDE.md, Conventions).
 function fmtGap(ms) {
   const d = new Date(ms);
   const now = new Date();

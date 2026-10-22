@@ -1,7 +1,7 @@
 # 6. Wrapping Claude Code: structured channels where they exist, guarded keystrokes where they don't
 
 Date: 2026-07-16 (survey) · re-verified against the code 2026-07-21
-Status: accepted; amended by ADR 8 (2026-07-22: the picker no longer times out) and ADR 19 (2026-08-19: no frontmost-app check)
+Status: accepted; amended by ADR 8 (2026-07-22) and ADR 19 (2026-08-19)
 
 ## Context
 

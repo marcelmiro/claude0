@@ -275,8 +275,8 @@ export async function dispatchNotifications(
  * This used to ride `dispatchNotifications` above, inline with the transition, which made
  * delivery ONE-SHOT: a push suppressed because the device still looked connected was lost
  * for good, since `detectTransitions` never fires that edge again. Backgrounding does not
- * reliably clear a device's consumer marker — an iPad app-switch sends no goodbye beacon,
- * so the marker only ages out via the staleness window — and that window is exactly when
+ * reliably clear a device's consumer marker — the goodbye beacon is intermittently lost
+ * (docs/notifications.md), and then the marker only ages out via the staleness window — and that window is exactly when
  * the user walks away, i.e. the case a phone notification exists for.
  *
  * Returns the pane keys pushed this tick. The monitor persists them as `phonePushed` so one

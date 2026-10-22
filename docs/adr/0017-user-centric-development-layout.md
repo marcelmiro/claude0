@@ -1,7 +1,7 @@
 # 17. User-centric development layout and one Claude0 config
 
 Date: 2026-08-16
-Status: accepted; the matching-home clause retired 2026-08-23 (ADR 15 note), the one-time legacy-config migration removed 2026-08-20 (d0ce16a)
+Status: accepted; amended 2026-08-23 (any `$HOME` works), 2026-08-20 (legacy-config migration removed)
 
 ## Context
 

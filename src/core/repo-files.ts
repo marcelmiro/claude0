@@ -404,7 +404,7 @@ export async function changedFiles(root: string, ref: string, to?: string): Prom
     .split("\0")
     .filter(Boolean);
   // In-process and one at a time on purpose: a subprocess per untracked file fans out to
-  // thousands of concurrent shells in a worktree full of generated output (ADR 1 addendum).
+  // thousands of concurrent shells in a worktree full of generated output (docs/changed-files.md).
   for (const path of untracked) {
     if (map.has(path)) continue;
     // A nested git repo (vendored clone, a package with its own .git) is reported as a

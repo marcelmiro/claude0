@@ -1,7 +1,7 @@
 # 20. Config defaults live in code; setup materializes and back-fills the user's file
 
 Date: 2026-08-19
-Status: accepted
+Status: accepted; amended 2026-08-24 (config.json holds user-taste knobs only)
 
 ## Context
 
@@ -28,6 +28,11 @@ point-of-use fallback into the same object, so a not-yet-merged file still loads
 between an upgrade and the next `claude0 setup` (no crash window for the headless
 daemon/bridge/monitor units).
 
+**What qualifies for `config.json`: user-taste knobs only** — abbreviations, keys,
+repository roots, notification preferences, snooze presets. Internal timings, TTLs, and
+detection heuristics stay hardcoded: being tunable is not qualification. A ranking of ~50
+hardcoded values against this bar found none worth exposing.
+
 ## Consequences
 
 - A changed default for an *existing* key does not propagate to already-written
@@ -45,10 +50,3 @@ daemon/bridge/monitor units).
   would hard-fail every process between deploy and setup — crash-looping systemd
   units on the VM host.
 - **Generating the JSON schema from the TS type**: over-engineering at ~10 keys.
-
-## Addendum (2026-08-24): what qualifies for config.json
-
-User-taste knobs only — abbreviations, keys, repository roots, notification
-preferences, snooze presets. Internal timings, TTLs, and detection heuristics
-stay hardcoded: being tunable is not qualification. A full ranking of ~50
-hardcoded values against this bar yielded no internal value worth exposing.

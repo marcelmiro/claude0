@@ -75,6 +75,13 @@ Healthy looks like:
   start, and its post-restore hook runs `claude0 restore-sessions` so Claude
   sessions resume in their panes
 
+**Before a planned reboot, run `claude0 resurrect save`.** The pane→session map
+is written only with resurrect's periodic layout snapshot (every ~5 min), so a
+session started since the last one isn't resumed otherwise. `restore-sessions`
+skips panes already running a foreground process and resumes each session id at
+most once; which directory it resumes in is `resolveRestoreTarget`
+(`core/resurrect.ts`).
+
 ## The user units
 
 Installed and enabled by `c0 setup --role host` from `../config/units/`:
