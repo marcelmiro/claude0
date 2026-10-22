@@ -1,6 +1,6 @@
 /**
- * Inbox activity discovery — the single snapshot producer (ADR 0013
- * addendum 2). One pass discovers real sessions, stamps observed
+ * Inbox activity discovery — the single snapshot producer (ADR 13;
+ * docs/inbox.md). One pass discovers real sessions, stamps observed
  * transitions, and replaces the store's activity snapshot (saveSnapshot
  * keeps fact-holding rows the new set doesn't cover, so a bridge verb
  * landing mid-tick survives the replace); authored facts (dispositions,

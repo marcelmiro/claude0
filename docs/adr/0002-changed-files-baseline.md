@@ -3,6 +3,8 @@
 Date: 2026-07-20
 Status: accepted
 
+How the baseline and change set are computed: [docs/changed-files.md](../changed-files.md).
+
 ## Context
 
 "Changed files" has to be measured against something, and the phone shows the totals next to
@@ -42,7 +44,3 @@ main."). Fixing the label was chosen over narrowing the data.
 - When no base branch can be discovered the code falls back to `HEAD` and labels it `HEAD`,
   rather than implying a full branch diff.
 - The label is load-bearing, not decoration: changing the baseline means changing the copy.
-
-## See also
-
-- [0001 — changed-files is a glance surface](0001-changed-files-is-a-glance-surface.md)

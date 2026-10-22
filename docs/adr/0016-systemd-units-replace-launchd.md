@@ -1,7 +1,9 @@
 # 16. systemd user units run tmux and the bridge; resurrect never spawns claude
 
 Date: 2026-08-09
-Status: accepted
+Status: accepted; amended 2026-10-03 (session map saved only with the layout)
+
+Units, reboot checks and restore behavior: [deploy/README.md](../../deploy/README.md).
 
 ## Context
 
@@ -25,14 +27,24 @@ nobody watching.
   spelunking. Bridge restarts are `Restart=always` with `RestartSec=5s` and
   `StartLimitIntervalSec=300`: the systemd defaults (100ms × 5-in-10s) give up
   permanently after five fast crashes, e.g. a port-in-use loop.
-- **Restore pairing**: `tmux.service` `ExecStop` runs `claude0 save-sessions` before
-  `kill-server`; `ExecStartPost` runs resurrect's restore script (NOT continuum's
+- **Restore pairing**: the pane→session map is coordinates, so it is saved only by
+  resurrect's `post-save-all` hook, together with the layout snapshot it is restored onto.
+  `ExecStop` is just `kill-server`: at shutdown systemd stops every pane's
+  `tmux-spawn-*.scope` in parallel with `tmux.service` (~50ms before `ExecStop` began on
+  the 2026-10-03 reboot), so a save at stop recorded half-dead, renumbered coordinates and
+  clobbered the good map — Claude resumed into the old sidebar slot, sessions landed one
+  window early. `ExecStartPost` runs resurrect's restore script (NOT continuum's
   restore-on-server-start, which races the forking handshake under systemd —
   tmux-continuum #110 — and killed the server), whose post-restore hook then runs
   `claude0 restore-sessions` to resume each pane's Claude session by id.
   `@resurrect-processes` must NOT include claude — resurrect's `ps`-derived
   restore spawns a *fresh* claude while claude0's `--resume` starts the real one: two
   processes fighting over one transcript.
+- **Restore never makes a pane's directory worse.** A restored pane often starts in
+  `$HOME`; resuming there misfiles the session under `~`, and the next save would record
+  `$HOME` for good. So the save side is one-way (`pickSavedCwd`) and the restore side
+  repairs, falls back to the base repo for a deleted worktree, or leaves the pane where it
+  is (`resolveRestoreTarget`, `core/resurrect.ts`).
 
 ## Consequences
 
@@ -44,6 +56,9 @@ nobody watching.
   (hit live: the bridge crash-looped on `env: 'bun': No such file`). The units
   carry `Environment=PATH=%h/.bun/bin:…` themselves, so install order can't
   break them.
+- A session started in the last ~5 min before a reboot isn't resumed — the same window in
+  which resurrect already loses layout changes.
+- A session deliberately moved to `$HOME` keeps its stale saved directory.
 
 ## Rejected
 
@@ -54,52 +69,5 @@ nobody watching.
   nothing here.
 - **Letting resurrect restore claude processes** — see Decision; guaranteed
   double-process fight.
-
-## Addendum: restore-path directory decisions (2026-08-24)
-
-Which directory `claude0 restore-sessions` resumes each session in is decided
-by `resolveRestoreTarget` (`core/resurrect.ts`), and the branch *order* is the
-decision:
-
-1. Saved cwd is `$HOME` → a poisoned entry (a restored pane that never got its
-   directory back before the next save ran); recover Claude's own
-   last-recorded cwd from the transcript. This case must come **first**:
-   `$HOME` always exists, so a generic exists-check would shadow exactly the
-   entries this branch repairs.
-2. Saved cwd still on disk → itself.
-3. Gone (usually a deleted worktree) → its base repo, consolidating the
-   transcript into the base project folder first
-   (`recoverWorktreeTranscript`) so the resumed session isn't tailing a
-   frozen copy.
-4. Unresolvable → no `cd` at all, resuming where the pane already is (never
-   regress the pre-existing behavior).
-
-The resume line joins with `;`, not `&&` — a failed `cd` must still leave the
-session resumed. On the save side, `pickSavedCwd` is one-way: a real repo path
-on record is never overwritten by `$HOME`, because the poisoning is otherwise
-self-perpetuating (the next save snapshots the bad cwd). The accepted cost is
-that a session deliberately moved to `$HOME` keeps its stale entry.
-
-Restore also skips panes already running a foreground process, and skips a
-coordinate whose session id was already resumed this pass — one id can sit at
-two coordinates, and resuming it twice is the same two-processes-one-transcript
-fight the `@resurrect-processes` exclusion prevents.
-
-## Addendum: no session-map save at stop (2026-10-03)
-
-`tmux.service` `ExecStop` no longer runs `claude0 save-sessions`. Ubuntu's tmux
-puts each pane in its own `tmux-spawn-*.scope`, and at shutdown systemd stops
-those scopes in parallel with `tmux.service` — the 2026-10-03 reboot logged the
-scopes stopping ~50ms before `ExecStop` began. The save then ran against a
-dying server: sidebar panes already gone shifted every Claude pane from `.2` to
-`.1`, and a window whose panes had all died renumbered the windows after it. That
-map overwrote the good one, and resurrect (restoring the last periodic layout)
-paired it with panes it no longer described: Claude resumed into the old sidebar
-slot, sessions landed one window early, one window got none.
-
-The pane→session map is coordinates, so it is only meaningful next to the layout
-snapshot it is restored onto. It is now written only by resurrect's
-`post-save-all` hook, i.e. together with that snapshot (every ~5 min from the
-monitor). The accepted cost: a session started in the last ~5 min before a
-reboot isn't resumed — the same window resurrect already loses layout changes
-in. Before a planned reboot, run `claude0 resurrect save`.
+- **Saving the session map at `ExecStop`** — races systemd's parallel scope teardown
+  (see Decision).

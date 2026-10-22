@@ -13,7 +13,7 @@
 # confirm the mechanics still hold: `bash test/smoke/model-effort.sh`. Exit 0 = all held.
 #
 # Requires: tmux, a working `claude` on PATH, and the effort-in-statusline change to
-# ~/.claude/statusline.sh (see CLAUDE.md "Portkey model/effort" — the effort assertion needs it).
+# ~/.claude/statusline.sh (see docs/model-effort-switcher.md — the effort assertion needs it).
 set -u
 
 BASE="$(cd "$(dirname "$0")" && pwd)/.work"

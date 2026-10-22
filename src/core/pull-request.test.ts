@@ -56,18 +56,37 @@ test("the default branch yields no PR surface — compare/main would target itse
   }
 });
 
-test("an unpushed feature branch reports local-only, not a bogus compare link", async () => {
+// A fake `gh` first on PATH: `answer` is what it prints to stderr before exiting 1.
+async function withFakeGh(answer: string, run: (dir: string) => Promise<void>): Promise<void> {
   const dir = mkdtempSync(`${tmpdir()}/c0-pr-`);
+  const bin = `${dir}/bin`;
+  const path = process.env.PATH;
   try {
-    await Bun.$`git init -q -b main ${dir}`.nothrow().quiet();
-    await Bun.write(`${dir}/a.txt`, "a");
-    await Bun.$`git -C ${dir} add -A`.nothrow().quiet();
-    await Bun.$`git -C ${dir} -c user.email=t@t -c user.name=t commit -qm init`.nothrow().quiet();
-    await Bun.$`git -C ${dir} remote add origin git@github.com:owner/repo.git`.nothrow().quiet();
-    await Bun.$`git -C ${dir} checkout -q -b feature/x`.nothrow().quiet();
-    // `gh pr view` can't reach a fake repo, so it fails and we fall through to the push check.
-    expect(await branchPullRequest(dir)).toEqual({ state: "local-only", branch: "feature/x" });
+    await Bun.write(`${bin}/gh`, `#!/bin/sh\necho '${answer}' >&2\nexit 1\n`);
+    await Bun.$`chmod +x ${bin}/gh`.quiet();
+    process.env.PATH = `${bin}:${path}`;
+    const repo = `${dir}/repo`;
+    await Bun.$`git init -q -b main ${repo}`.nothrow().quiet();
+    await Bun.write(`${repo}/a.txt`, "a");
+    await Bun.$`git -C ${repo} add -A`.nothrow().quiet();
+    await Bun.$`git -C ${repo} -c user.email=t@t -c user.name=t commit -qm init`.nothrow().quiet();
+    await Bun.$`git -C ${repo} remote add origin git@github.com:owner/repo.git`.nothrow().quiet();
+    await Bun.$`git -C ${repo} checkout -q -b feature/x`.nothrow().quiet();
+    await run(repo);
   } finally {
+    process.env.PATH = path;
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+test("an unpushed feature branch with no PR reports local-only, not a bogus compare link", async () => {
+  await withFakeGh('no pull requests found for branch "feature/x"', async (repo) => {
+    expect(await branchPullRequest(repo)).toEqual({ state: "local-only", branch: "feature/x" });
+  });
+});
+
+test("a failed gh lookup renders nothing rather than a guessed 'no PR' (missing, never wrong)", async () => {
+  await withFakeGh("error connecting to api.github.com", async (repo) => {
+    expect(await branchPullRequest(repo)).toEqual({ state: "none" });
+  });
 });

@@ -1,6 +1,5 @@
 /**
- * Sidebar view builder — pure. Ports the prototype sidebar's render()
- * verbatim (ADR 0013 addendum 2 is the spec): sections, glyph language,
+ * Sidebar view builder — pure (spec: docs/inbox.md, "Sidebar"): sections, glyph language,
  * color tiers, chrome (hints / detail / snooze menu / block note / help),
  * pin vs selector, scroll. The renderer diffs the returned rows against
  * what each pane last showed.

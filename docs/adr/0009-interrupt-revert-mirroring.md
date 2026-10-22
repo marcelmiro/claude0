@@ -1,7 +1,11 @@
 # 9. Interrupts mirror the TUI: revert restores to the composer, keeps stay in the thread
 
 Date: 2026-07-24
-Status: accepted
+Status: accepted; amended 2026-09-30 (drafts ride Claude's Ctrl+S stash)
+
+How the bridge drives the input box — the interrupt table, pre-flight, stash, the
+`killInput` walk, and the widgets that steal keystrokes — is in
+[docs/pane-input.md](../pane-input.md).
 
 ## Context
 
@@ -12,27 +16,12 @@ Claude Code does on interrupt and hid/restored the wrong cases. The behavior was
 pinned down by driving live claude panes through timed interrupts (haiku / sonnet /
 fable, ~20 runs), capturing the pane and diffing the JSONL after each.
 
-## Verified interrupt behavior (Claude Code ~2.1.x)
-
-What Escape does to a running turn depends on two things only: whether any API bytes had
-arrived, and whether the input box was occupied.
-
-| Condition at Escape | TUI shows | JSONL signature | Branch fate |
-|---|---|---|---|
-| Pre-stream + empty input | **revert** — text moves back into the input box, nothing drawn | prompt record left as a childless **bare leaf, no marker** | next send forks past it |
-| Pre-stream + occupied input | **keep** — message + `⎿ Interrupted` line; draft untouched | prompt + `[Request interrupted by user]` marker, `interruptedMessageId: null` | stays; next send chains after the marker |
-| Stream started (thinking deltas count — display not required) | **keep** — plus any partial text | marker with `interruptedMessageId` set; a thinking-only partial persists **no assistant record** (→ `prompt + marker, no output`) | stays |
-
-Also verified: Escape with queued mid-turn messages interrupts the turn and the queue
-**auto-submits** as the next prompt (not popped into the input); a second Escape (mid-arm
-or later at idle) changes nothing; interrupted partial text persists with
-`isAbortedMidStream: true`. One 1-of-16 anomaly (a msgid-less kept pair later abandoned
-at the next send) never reproduced and is treated as a CC-internal race.
-
-The revert is why phone stops "lose" the message: the text is parked in the **Mac's**
-input box, invisible from the phone. And it is self-defeating across tests: the parked
-text occupies the input, so every subsequent stop hits the occupied-input row and
-becomes a keep — which also explains why the same gesture seemed to behave randomly.
+Escape **reverts** a turn (text back into the input box, the prompt left as a childless
+bare leaf in the JSONL) only when no API bytes had arrived and the input was empty;
+otherwise it **keeps** it (message plus an interrupt marker). The revert is why phone
+stops "lost" the message: the text was parked in the **Mac's** input box, invisible from
+the phone. And it is self-defeating: the parked text occupies the input, so every later
+stop becomes a keep — which is why the same gesture seemed to behave randomly.
 
 ## Decision
 
@@ -48,25 +37,14 @@ Portkey mirrors the TUI exactly, keyed off the JSONL signature:
 - **Any marker shape** (keep): the message stays in the thread with the interrupt line,
   exactly like the Mac. No restore, no hide.
 
-Two send-path fixes fall out of the lab findings:
+Two send-path rules fall out of the lab findings:
 
-- **Draft stash killed row-by-row.** Claude's input editor is display-row scoped: one
-  `C-u` kills only from the cursor to its row start, so wrapped rows and rows below the
-  cursor survived — phone sends spliced into leftover draft text (reproduced as
-  concatenated submissions). `killInput` now walks to the bottom (`Down` ×12 — Down is
-  history-next, a no-op at the newest entry; **Up recalls history and must never be
-  sent**), `C-e`, then `C-u` until the input reads empty. Consecutive kills accumulate
-  into one kill-ring chain, so the existing single `C-y` restore yanks the whole draft
-  back, newlines included — but any motion or typing between kills RESETS the chain
-  (verified: the earlier chunk drops out of the yank), so the sequence is strictly
-  motions-first-then-kills and never retries with a second walk. The `Down`s are gapped
-  (100ms; the input editor registered arrows reliably at 60–80ms in the lab) so a
-  dropped key can't strand rows below the cursor, and if the input still isn't empty
-  afterward the send ABORTS (`draft-stash-failed`) rather than typing into the remnant.
-- **Clear-on-revert.** After a confirmed revert-restore the pane input is cleared via
-  the same kill sequence (recoverable at the Mac with `C-y`). Without this, the parked
-  text flips every future pre-stream interrupt to a keep and feeds the draft guard a
-  phantom draft forever.
+- **A send never types over a draft.** A draft in the input is set aside before the send
+  and comes back after it; if it can't be set aside cleanly, the send aborts
+  (`draft-stash-failed`) rather than splicing the message into the remnant.
+- **Clear-on-revert.** After a confirmed revert-restore the pane input is cleared.
+  Without this, the parked text flips every future pre-stream interrupt to a keep and
+  feeds the draft guard a phantom draft forever.
 
 ## Rejected alternatives
 
@@ -80,138 +58,3 @@ Two send-path fixes fall out of the lab findings:
 - **Server-side revert detection** — the server can see the bare leaf but not the sent
   text after a revert (it exists only in the pane input and the phone's memory), and
   only the client knows which device drove the send. Detection stays client-side.
-
-## Addendum (2026-08-25): notification rows eat the draft choreography
-
-Claude Code renders background-task notification rows below the statusline —
-`❯ ⧉  <task-name> · Enter to open · x to dismiss` — with two consequences for the
-send path (both lab-verified against a live pane):
-
-- **The row is the one `❯` line that sits BELOW the live input**, breaking the
-  "live input is the last `❯` line" assumption. It's colored, not dim, so the
-  ghost-text drop keeps it; `inputPending`/`shellModeInput` read it as an
-  unclearable draft (or mask a live shell prompt) and every send aborts with
-  `draft-stash-failed`. Both scans now skip `❯ ⧉`-prefixed rows.
-- **While a row is visible it captures plain keystrokes** — `x` dismissed the row
-  without touching a draft sitting in the input box, and repeated `C-u` kills left
-  that draft intact. Detection fixes alone don't help: the stash kills (and the
-  message itself) never reach the input. `sendMessage`/`setSessionModelEffort` now
-  dismiss visible rows with `x` (gated on detection, re-captured per round) before
-  any input choreography, failing loud (`notification-clear-failed`) if rows won't
-  clear rather than typing into a key-eating widget.
-
-## Addendum (2026-09-23): the background-agent list takes focus on `Down`
-
-Lab-verified on Claude Code v2.1.280 with two background agents running and a 3-row draft:
-
-- **`Down` past the input's last row moves focus into the agent list** under the
-  statusline (Claude's own hint: `↓ to manage`). `killInput`'s Down walk ended on
-  a list row, so C-e and the C-u kills never reached the input, the draft stayed,
-  and every send with a draft aborted with `draft-stash-failed`. With focus in the
-  list, `x` stops the selected agent and Enter opens it.
-- **`Up` hands focus back; `Escape` must not be used.** From the list, Escape
-  interrupts a running turn ("Interrupted · What should Claude do instead?") and
-  leaves focus in the list. `Up` walks the selection up a row; from the top row
-  (`main`) it returns to the input with the cursor on the last row, the turn keeps
-  streaming, and the C-e/C-u walk then clears the whole draft for one C-y to
-  restore. `killInput` releases the list after its Down walk, one `Up` per
-  re-capture (a surplus Up in the input would recall history);
-  `sendMessage`/`setSessionModelEffort` also release it before anything else
-  (before the notification-row `x`), failing loud with `agent-list-focused` if
-  focus won't leave.
-- **Detection is the selection glyph on a `●`/`◯` agent row (`❯ ◯ name…`), read
-  only below the input box's bottom rule.** The key hint isn't stable — `Enter to
-  view · x to stop` on an agent row, `↑/↓ to select · Enter to view` on `main` —
-  and transcript text above the input may contain the same shapes.
-
-## Addendum (2026-09-25): submitted-prompt leftovers are discarded, and rewind pre-flights too
-
-Claude Code itself puts already-submitted text back into the input: `/rewind` restores
-the rewound prompt there, and a pre-stream interrupt reverts the prompt into it. The
-stash/restore guard can't tell that from a Mac draft, so it carried such a leftover
-across every later send. In one session, a prompt rewound away at 18:58 was still in the
-input the next morning, cut down by partial kills to its first 510 chars. A phone
-rewind then cleared it with a single `C-u` (one display row only), typed `/rewind` onto
-the rest, and submitted `<leftover>/rewind` as a message. The picker never opened, the
-driver's Escape reverted the send back into the input, and each retry did the same.
-
-- **Leftover rule (`isSubmittedText`).** Input text that equals, or is a prefix of, any
-  prompt in the session's JSONL (every branch, so rewound-away prompts count; compared
-  with all whitespace removed) is a leftover. It gets `discard` (killInput, no C-y), not
-  `stash`. Nothing is lost, because the prompt is still in the transcript. Drafts under
-  15 non-space chars never count as leftovers, so a freshly typed `yes` or `1. a` that
-  happens to start an old prompt stays a draft.
-- **One pre-flight for every path that types into the prompt (`prepareInput`).**
-  `sendMessage`, `setSessionModelEffort` and `rewindSession` all release the agent
-  list, dismiss notification rows, leave an empty shell mode, and classify the input.
-  Rewind discards a leftover but refuses a real draft with `draft-present`: the rewind
-  puts the rewound prompt into the input, so a stashed draft has nowhere to be restored.
-- Lab-verified live (Claude Code v2.1.281): a genuine draft → rewind `draft-present` with
-  the draft untouched. A leftover → rewind ok, and the input then holds the rewound
-  prompt. A send over that → the prompt is discarded and the input ends empty. A
-  genuine draft → a send still restores it. The transcript held only the four clean
-  prompts.
-
-## Addendum (2026-09-29): the input is the framed row, and the cursor cell over a ghost is ghost
-
-- **Framed row, not last row.** Draft detection read "the last `❯` row" as the input. When
-  a dialog replaces the box, that row is an echoed prompt or a dialog option, so the kill
-  walk ran into the dialog and every send aborted with `draft-stash-failed`. The input is
-  now the column-0 prompt row with a rule directly above and a closing rule below
-  (`inputBoxRow`), and `prepareInput` refuses `no-input-box` before any key when there is
-  none ([ADR 31](0031-dialogs-covering-the-input-box.md)).
-- **Cursor cell.** Claude draws its cursor as a reverse-video cell. In an empty box with a
-  queued message, it sits on the dim placeholder's first letter and is not dim itself,
-  so the ghost drop left the draft "P". Lab-verified on 2.1.284: a phone send during a
-  queued message stashed that phantom, and the restore `C-y` pasted whatever the kill ring
-  last held into the prompt, where the next message got glued onto it. `flattenStyled`
-  now drops a reverse cell followed directly by dim text; a cursor at the end of, or
-  inside, real typed text is kept.
-
-## Addendum (2026-09-30): drafts ride Claude's own stash; the kill walk never leaves the input
-
-A real session got stuck: after a Stop reverted the prompt, `clear-input`'s blind
-`Down` ×12 walked past the input's last row. With a background shell running, the first
-Down selects the footer's task item and the second opens the task manager ("Shell
-details") over the input box; `killInput` then read "no box" as "empty" and reported
-success, and every later send refused `no-input-box`. Lab-verified on 2.1.285 (the
-bindings below are present back to the oldest running build, 2.1.263):
-
-- **A draft around a send is stashed with Claude's Ctrl+S (`chat:stash`)**, not cut into
-  the kill ring. It takes the whole input from any cursor position, shows `› stashed` in
-  the slot above the box, and Claude puts the draft back after the next submit: a message,
-  a slash command (after a `/model` confirm is accepted), a send queued mid-turn. Pasted
-  images survive it; the kill-ring `C-u`/`C-y` restore silently dropped them (the draft
-  resubmitted as text only). The `restore` step is gone.
-- **The stash has one slot.** A second Ctrl+S pushes the first out to the kill ring, and
-  cutting a draft while a stash exists merged it into the stash Claude pops after the
-  submit (`USER STASH` + `MAC DRAFT` glued into one line). With a stash present, a send
-  with a draft refuses `stash-occupied`; without a draft it goes through, and Claude pops
-  the user's stash into the input as it does at the Mac. A completed `/rewind` overwrites
-  the input and the stash is lost, so rewind refuses `stash-occupied` too.
-- **Discards still use `killInput`**, whose walk now never leaves the input: it stops on
-  the last row when the cursor cell shows, and otherwise stops when focus has left the
-  input (`footerFocused`: the selected task item is drawn in reverse video below the box)
-  and hands it back with one `Up`, which lands on the last row with the draft intact.
-  Claude hides its cursor cell while its terminal is unfocused (a focus-out event, with
-  tmux `focus-events on`), which is the usual state while the user is on the phone, so
-  the cell alone can't steer the walk. "Cleared" now requires an empty box on screen.
-- **Footer focus is released before any send.** A Mac-side `Down` leaves focus on the
-  task item, where `x` stops the task and Enter opens it; `agentListFocused` didn't see it.
-  `releaseAgentList` now also checks `footerFocused`.
-- Ctrl+End, Meta+>, Ctrl+Down, PageDown and Meta+Down don't move the input's cursor
-  (Ctrl+End scrolls the transcript, Ctrl+Down steps the diff file list); End only reaches
-  the end of the row, and Ctrl+L didn't clear the input.
-- Pinned by styled lab captures in `test/fixtures/viewport/`: `input-cursor-top`,
-  `input-cursor-wrapped`, `footer-focused`, `footer-focused-draft`, `stash-marker`,
-  `shell-details`.
-
-## Addendum (2026-10-22): the hidden leaf is matched by timestamp too
-
-- The revert hide was guarded by index and text only. Resending the reverted prompt
-  unchanged forks from the same parent, so the new prompt lands at the same index with
-  the same text and was hidden as well: the session showed as running with the user's
-  message missing, until a page reload dropped the in-memory entry.
-- Each entry now also records the reverted turn's `at` (the JSONL record timestamp) and
-  hides only a turn with that exact timestamp. Every send writes a new record with its own
-  timestamp, so a resend is never matched.

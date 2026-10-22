@@ -10,8 +10,9 @@
  *
  * The one signal that survives is the notification shade. iOS removes a notification
  * when it is tapped and leaves it sitting there when the app is opened any other way
- * (home-screen icon, app switcher) — also verified on-device. So the worker records
- * every push it shows, and on foreground the page diffs that record against the
+ * (home-screen icon, app switcher) — also verified on-device. So the sender records
+ * every push it sends (`recordSentPush`, core/web-push.ts), and on foreground the page
+ * diffs that ledger against the
  * notifications still in the shade: a push whose notification has since vanished is
  * the one that was tapped.
  *

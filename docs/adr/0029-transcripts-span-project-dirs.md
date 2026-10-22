@@ -1,4 +1,7 @@
-# A session's transcript spans project dirs — readers stitch, never pick one file
+# 29. A session's transcript spans project dirs — readers stitch, never pick one file
+
+Date: 2026-09-01
+Status: accepted
 
 ## Context
 

@@ -4,12 +4,13 @@
  * in-app reviewer it links out to the PR, where highlighting, threads and suggestions already
  * exist and match what the operator will read at their desk.
  *
- * Shells out to `gh`; every failure mode (no gh, no remote, not a GitHub remote, network down)
- * collapses to `state: "none"`, which the UI renders as nothing at all.
+ * Shells out to `gh`. Detached HEAD, a missing or non-GitHub `origin`, the default branch, and
+ * a failed `gh` lookup (missing, network down, auth) are `state: "none"`, which the UI renders
+ * as nothing at all: the chip may be missing, never wrong.
  */
 
 export type PullRequestInfo =
-  /** Nothing to link: default branch, no/unsupported remote, gh missing, or gh failed. */
+  /** Nothing to link, or nothing known: detached HEAD, default branch, no/unsupported remote, gh failed. */
   | { state: "none" }
   /** Branch exists only locally — there is no remote ref to open a PR against yet. */
   | { state: "local-only"; branch: string }
@@ -53,15 +54,19 @@ async function git(root: string, args: string[]): Promise<string> {
 /** `owner/repo` of the checkout's origin, "" when it has none or it isn't GitHub. */
 export const repoSlug = async (root: string) => githubSlug(await git(root, ["remote", "get-url", "origin"]));
 
-/** `gh pr view` for a branch name or PR number; "" when gh is missing or finds nothing. */
-async function ghView(slug: string, ref: string): Promise<string> {
+/**
+ * `gh pr view` for a branch name or PR number: its JSON, "" when gh looked and found no PR,
+ * null when the lookup failed (gh missing, network down, auth) and the answer is unknown.
+ */
+async function ghView(slug: string, ref: string): Promise<string | null> {
   try {
     const r = await Bun.$`gh pr view ${ref} -R ${slug} --json number,state,isDraft,title,url,reviewDecision,additions,deletions,headRefName`
       .nothrow()
       .quiet();
-    return r.exitCode === 0 ? r.stdout.toString().trim() : "";
+    if (r.exitCode === 0) return r.stdout.toString().trim();
+    return r.stderr.toString().includes("no pull requests found") ? "" : null;
   } catch {
-    return ""; // gh not installed
+    return null; // gh not installed
   }
 }
 
@@ -101,7 +106,7 @@ function parsePr(raw: string): Extract<PullRequestInfo, { number: number }> | nu
 export async function pullRequestByNumber(root: string, number: number): Promise<PullRequestInfo> {
   const slug = await repoSlug(root);
   if (!slug) return { state: "none" };
-  return parsePr(await ghView(slug, String(number))) ?? { state: "none" };
+  return parsePr((await ghView(slug, String(number))) ?? "") ?? { state: "none" };
 }
 
 export async function branchPullRequest(root: string): Promise<PullRequestInfo> {
@@ -116,7 +121,9 @@ export async function branchPullRequest(root: string): Promise<PullRequestInfo> 
   if (branch === (def || "main")) return { state: "none" };
 
   const repoUrl = `https://github.com/${slug}`;
-  const pr = parsePr(await ghView(slug, branch));
+  const raw = await ghView(slug, branch);
+  if (raw === null) return { state: "none" }; // unknown: a guessed "no PR" could be wrong
+  const pr = parsePr(raw);
   if (pr) return { ...pr, branch };
 
   const pushed = (await git(root, ["rev-parse", "--verify", "--quiet", `origin/${branch}`])) !== "";

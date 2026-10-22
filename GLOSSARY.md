@@ -1,6 +1,8 @@
 # Claude0
 
-Terminal TUI + mobile bridge ("portkey") for managing Claude Code sessions. This glossary pins the canonical terms; `CLAUDE.md` is the map (commands, conventions, gotchas) and `docs/adr/` covers decisions and feature mechanism.
+Terminal TUI + mobile bridge ("portkey") for managing Claude Code sessions. This glossary pins the canonical terms; `CLAUDE.md` is the map (commands, conventions, gotchas).
+
+**Decisions (`docs/adr/`).** Record one as `docs/adr/NNNN-slug.md` only when it's hard to reverse, surprising without context, and the result of a real trade-off. Sections: Context, Decision, Consequences, plus a `Status:` line (accepted / amended by ADR N / superseded by ADR N, dated). ADRs hold the decision; how a feature works goes in `docs/<area>.md`. When a later change reverses part of an ADR, update its Status line instead of appending a changelog. Before changing an area, read its ADRs; if your change contradicts one, say so and ask.
 
 ## Language
 

@@ -1,7 +1,7 @@
 # 17. User-centric development layout and one Claude0 config
 
 Date: 2026-08-16
-Status: accepted
+Status: accepted; amended 2026-08-23 (any `$HOME` works), 2026-08-20 (legacy-config migration removed)
 
 ## Context
 
@@ -25,10 +25,10 @@ account rename cannot be treated as a plain `mv`.
   `~/.config/claude0/config.json`. `claude0 config` creates the default when needed and
   prints its absolute path; CLI invocations may override behavior for one run but do
   not mutate settings. New installs discover `~/dev` and use no priority pins.
-- The human account is `marcel` with home `/Users/marcel` on both Mac and VM.
-  Matching absolute homes preserves portability between the two hosts. The name is a
-  user/system concern, not a Claude0 constant; provisioning remains `$USER`/`$HOME`
-  driven.
+- The human account is `marcel` (`/Users/marcel` on the Mac, `/home/marcel` on the VM).
+  Claude0 works under any `$HOME`; moving state between different homes takes the one-time
+  rename pass ([ADR 15](0015-vm-home-is-users-throxy.md) note). The name is a user/system
+  concern, not a Claude0 constant; provisioning remains `$USER`/`$HOME` driven.
 - Existing machines migrate from a generated preflight manifest. The apply phase
   refuses collisions and dirty submodules, repairs Git worktree links before and
   after moves, reinitializes clean submodules, renames Claude project directories,
@@ -48,9 +48,6 @@ account rename cannot be treated as a plain `mv`.
   submodules before a filesystem rename and restores them afterward.
 - Editor settings can validate the user file through its adjacent schema. Invalid or
   unknown settings fail with the config path instead of silently falling back.
-- Old pre-v1 config is migrated once. Its implicit `~/Documents` discovery root is
-  retained until the explicit filesystem migration rewrites it, so upgrading Claude0 by
-  itself never makes existing repositories disappear.
 
 ## Rejected
 

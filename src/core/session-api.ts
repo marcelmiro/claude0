@@ -807,10 +807,9 @@ const TOOL_ARG_FIELDS = [
   "skill",
   "args",
 ] as const;
-// A path is the chip's tap TARGET, not just its label — the client sends it straight back to
-// `/diff`. A truncated one resolves to nothing and the diff view reports "no changes", which
-// reads exactly like a reverted edit. Absolute worktree paths in a monorepo do reach the cap.
-// Paths are tens of bytes; the cap exists to stop Write contents and long Bash command lines.
+// The chip renders a path whole (dim dir, bright filename), and a capped one would cut the
+// filename off. Absolute worktree paths in a monorepo do reach the cap. Paths are tens of
+// bytes; the cap exists to stop Write contents and long Bash command lines.
 const UNCAPPED_FIELDS: ReadonlySet<string> = new Set(["file_path", "notebook_path"]);
 const RESULT_HEAD_CAP = 120;
 
