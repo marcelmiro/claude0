@@ -57,8 +57,8 @@ cut), used only on tmux windows, where `reverseNameMap` resolves panes back to s
 
 ## Forks
 
-Portkey's `forkSession` and the TUI's fork key copy the parent's name onto the fork before
-launching it (`inheritName`); the sidebar's `f` doesn't, so a sidebar fork starts unnamed.
+Every fork path — portkey's `forkSession`, the TUI's fork key, the sidebar's `f` — copies
+the parent's name onto the fork before launching it (`seedForkName` → `inheritName`).
 Collisions resolve by naming order (`disambiguateNames`): a newcomer takes " 2", an
 existing session is never renamed under you. The monitor, sidebar, TUI and bridge all run it.
 

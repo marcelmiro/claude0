@@ -33,9 +33,9 @@ A `git diff --no-index` per file once turned a 9,222-file generated-output workt
 the life of the process — that grew the bridge to 24 GB. Keep it subprocess-free.
 Consequence: a `.gitattributes` `-diff` rule is not honored for untracked files.
 
-**What renders nothing.** `none` means detached HEAD, no or non-GitHub `origin`, or the
-default branch. A missing `gh` or a network failure is not `none`: `gh pr view` yields
-nothing and the answer falls through to `no-pr` (pushed) or `local-only` (never pushed).
+**What renders nothing.** `none` means detached HEAD, no or non-GitHub `origin`, the
+default branch, or a failed `gh` lookup (missing, network down, auth). Only `gh`'s own "no
+pull requests found" falls through to `no-pr` (pushed) or `local-only` (never pushed).
 
 ## Rendering
 

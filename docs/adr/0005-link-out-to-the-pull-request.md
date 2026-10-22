@@ -56,7 +56,7 @@ edited) stands in, because landed-and-cleaned-up is exactly when the merged chip
   worked directly on main, which is most of the operator's own.
 - **`local-only` states it.** Absence would read as "no PR exists" when the truth is "this work has
   never left your Mac".
-- No GitHub remote collapses to `none`, which renders nothing. A failed `gh` lookup (not
-  installed, network down) is indistinguishable from "no PR", so it reads as `no-pr` or
-  `local-only`.
+- No GitHub remote, and a failed `gh` lookup (not installed, network down, auth), collapse
+  to `none`, which renders nothing: the exit may be missing, never wrong. Only `gh`'s own
+  "no pull requests found" yields `no-pr` / `local-only`.
 - The lookup is network-bound, so it gets a 60s TTL rather than `/changes`'s 1s.

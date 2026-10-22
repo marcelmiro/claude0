@@ -23,6 +23,7 @@ import { composeSessions, overlayAttention, peekEngaged, peekVerdict, sectionOf,
 import { loadState } from "../core/state";
 import { readLastPromptAt, resolveTranscriptPath } from "../core/last-turn";
 import { resolveRestoreTarget } from "../core/resurrect";
+import { seedForkName } from "../core/session-api";
 import { PATHS, configCache, parseTmuxKey, tmuxKeys } from "../core/config";
 import { SHELL_NAMES } from "../core/tmux";
 import { USER_SHELL } from "../core/launch-command";
@@ -757,7 +758,9 @@ export function runSidebarRenderer(): void {
             // -d and the single-string command for the same reasons as
             // resumeSession: non-detached new-window hangs the tty-less
             // daemon, and a word-split command skips the shell (no PATH)
-            const cmd = `claude -r ${s.id} --fork-session; exec ${USER_SHELL} -l`;
+            const forkId = crypto.randomUUID();
+            await seedForkName(s.id, s.id, forkId); // before launch: never listed unnamed
+            const cmd = `claude --session-id ${forkId} -r ${s.id} --fork-session; exec ${USER_SHELL} -l`;
             const spawned = (
               parentWin
                 ? await Bun.$`tmux new-window -d -a -P -F ${"#{window_id}"} -t ${parentWin} -c ${dir} ${cmd}`.quiet().text()

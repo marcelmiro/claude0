@@ -34,8 +34,8 @@ already in use", 2.1.246). Only `--fork-session` skips that check.
   it as the session history, and **appends** the first turn (verified live: no duplication).
   That is exactly fork semantics: shared history up to the fork point, clean divergence from
   the first message. The fork is readable and discoverable the moment `forkSession` returns.
-- **The launcher owns the fork's id.** Both fork paths (portkey's `forkSession`, the TUI's
-  fork key) mint the fork id and pass it via `--session-id`, and `forkSession` writes the
+- **The launcher owns the fork's id.** Every fork path (portkey's `forkSession`, the TUI's
+  fork key, the sidebar's `f`) mints the fork id and pass it via `--session-id`, and `forkSession` writes the
   pane→session map entry itself. The SessionStart hook
   records the *parent's* id for a `--fork-session` pane (CLAUDE.md gotcha), so waiting on the
   hook would mis-map the pane.
