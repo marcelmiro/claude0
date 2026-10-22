@@ -16,7 +16,7 @@ would.
 
 The open question was whether a PR usually exists, and where the exit should live. Both were
 settled by a throwaway prototype (three variants switchable via `?variant=`, judged on-device
-against live sessions) — kept as primary source on the `prototype/portkey-pr-link` branch.
+against live sessions); the prototype branch was not kept.
 
 Across 20 live sessions: 10 on a branch with an open PR, 1 merged, 1 pushed with no PR,
 5 on a default branch, the rest with no live repo.

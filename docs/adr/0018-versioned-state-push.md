@@ -1,10 +1,7 @@
 # 18. The bridge pushes versioned state, not doorbells
 
 Date: 2026-08-19
-
-## Status
-
-Accepted
+Status: accepted
 
 ## Context
 

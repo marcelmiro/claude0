@@ -72,11 +72,8 @@ suppression alongside the takeover/hold/hook sites listed in Context.
 
 Prefix priority is ⚡ > 🔄 > ⏳ > none, centralized in `stripAllPrefixes()` /
 `desiredPrefix()` (`core/notifications.ts`) — build window names through them,
-never by string surgery on a name that may carry a prefix. ⏳ (turn over, but a
-live `run_in_background` script still pending) is deliberately visibility-only:
-it never feeds notifications, attention, `claude0 next`, sort order, or the
-status-right counts, because dead/infinite scripts make "pending" unreliable as
-a signal.
+never by string surgery on a name that may carry a prefix. ⏳ is
+visibility-only ([ADR 26](0026-background-work-is-visibility-only.md)).
 
 The monitor is the **sole window-naming authority** — it re-syncs base names, AI
 names and prefixes every tick, so a rename made anywhere else survives at most

@@ -1,7 +1,7 @@
 # 24. Web Push replaces ntfy — pushes route to the device that drove the turn
 
 Date: 2026-07-22
-Status: accepted
+Status: accepted; amended 2026-08-20 (d0ce16a: retired ntfy keys are no longer stripped from config.json, per the no-shims convention)
 
 ## Context
 
@@ -55,9 +55,6 @@ notifications):
   services: `notifications.pushContact` when set, else the user's git email (`mailto:` prepended
   to a bare address). RFC 8292 makes `sub` a SHOULD, so when neither exists it is omitted
   entirely rather than filled with a placeholder.
-
-`ntfyTopic` and `bridgeUrl` are gone from the config schema and are auto-stripped from
-`config.json` on load (raw-JSON rewrite, unknown keys preserved).
 
 ## Rejected
 

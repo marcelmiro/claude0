@@ -56,7 +56,7 @@ Each rule was checked against the full transcript history on disk:
   (session mid-turn). Paired by task-id or tool-use-id; unmatched notifications are
   ignored.
 
-Prototype that validated the rules: branch `proto/bg-task-detection`.
+A prototype validated these rules; its branch was not kept.
 
 Transcript-pending is computed for live-process sessions only (`pendingScriptsAt`):
 without a Claude process the notification can never arrive, so a dead session would

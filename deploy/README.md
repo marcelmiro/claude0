@@ -81,10 +81,39 @@ Installed and enabled by `c0 setup --role host` from `../config/units/`:
 
 | Unit | Purpose |
 |---|---|
-| `tmux.service` | tmux server at boot; `claude0 save-sessions` on stop. |
+| `tmux.service` | tmux server at boot; resurrect restore on start, `kill-server` on stop (no session-map save at stop, [ADR 16](../docs/adr/0016-systemd-units-replace-launchd.md)). |
 | `claude0-bridge.service` | The portkey bridge, `Restart=always`, token via 0600 `EnvironmentFile`. |
 | `claude0-monitor.service` | Monitor tick while no tmux client is attached, plus the unconditional 5-min resurrect autosave (the host's only periodic saver). |
 | `claude0-daemon.service` | The inbox daemon: snooze wakes, discovery snapshots, sidebar renderer. Wake alerts are Web Push (a headless host has no banner tier). |
+
+## Tailscale: relay-only on the VM (not part of setup)
+
+Phone requests (GET, POST, SSE pushes) used to stall 3–15s mid-session while the
+bridge answered in milliseconds. A recorder on the VM (`tailscale status` every
+250ms) tied every stall to a mobile peer flipping from direct to relay: on a 4G
+SIM router the direct UDP path died every 7–60s. magicsock sends UDP-only while
+a path is trusted (a pong extends trust 6.5s; heartbeats every 3s), so a dead
+path black-holes traffic for 3.5–6.5s before DERP takes over, plus TCP
+retransmit backoff. The `CurAddr` flip in `tailscale status` marks the END of
+that window. None of those timers is tunable, and the EC2 security group
+already allowed inbound UDP 41641.
+
+So the VM's tailscaled runs with `TS_DEBUG_NEVER_DIRECT_UDP=1` in
+`/etc/default/tailscaled` (the unit's `EnvironmentFile`): no direct paths to
+any peer, everything via DERP over TCP 443. The London DERP is 1.3ms from the
+VM; throughput is DERP's unpublished QoS (~15 Mbit/s observed) — fine for
+portkey and mosh, slower for bulk transfers.
+
+The knob is an unsupported debug interface. After a tailscale upgrade, confirm
+`envknob: TS_DEBUG_NEVER_DIRECT_UDP="1"` in `journalctl -u tailscaled` and that
+`tailscale ping <peer>` says "via DERP". A per-device alternative is an
+`only-tcp-443` nodeAttr on a tagged device; it is undocumented, and untried
+because tagging a device detaches it from its user.
+
+Stalls also explain stale portkey code after a deploy: the shell cache serves
+the cached shell whenever the network is slower than `NET_TIMEOUT_MS`
+([ADR 21](../docs/adr/0021-offline-app-shell.md)); the fresh copy only lands
+for the next launch.
 
 ## Personal AWS ops (not part of setup)
 

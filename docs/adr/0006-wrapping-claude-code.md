@@ -1,7 +1,7 @@
 # 6. Wrapping Claude Code: structured channels where they exist, guarded keystrokes where they don't
 
 Date: 2026-07-16 (survey) · re-verified against the code 2026-07-21
-Status: accepted
+Status: accepted; amended by ADR 8 (2026-07-22: the picker no longer times out) and ADR 19 (2026-08-19: no frontmost-app check)
 
 ## Context
 
@@ -46,11 +46,12 @@ gives up the interactive session, and that trade is refused.
   remains load-bearing for externally-created forks; `dictatedSessionId` is tried first
   (`core/process.ts`).
 - **Answering `AskUserQuestion` through the blocking `PreToolUse` hook**, via
-  `hookSpecificOutput.updatedInput.answers`. This is a correctness fix, not a tidiness one:
-  the tool has an undocumented ~60s Claude-owned timeout, so a question could expire before a
-  phone could answer it. A hook that blocks *before* the tool runs means the clock never
-  starts. Intercepting is gated (see Consequences) so the Mac's native widget still appears
-  when you're looking at it.
+  `hookSpecificOutput.updatedInput.answers`. A hook that blocks *before* the tool runs holds
+  the question for as long as the phone needs, and the answer can't race a keystroke. (The
+  native widget's ~60s timeout that first motivated this is gone since 2.1.217;
+  [ADR 8](0008-question-hold-not-send-keys.md) keeps the hold on those grounds.) Intercepting
+  is gated (see Consequences) so the Mac's native widget still appears when you're looking
+  at it.
 
 ### Rejected, with reasons that should not be re-litigated
 
@@ -104,7 +105,8 @@ is a supply-chain risk that breaks every release.
   send-keys call" is not a goal — some of them are the failure-mode safety net.
 - Question interception is gated three ways before the hook answers: the pane must be
   Claude0-tracked, a phone must be connected (a `bridge-consumer` marker within 40s), and the
-  window must not be focused — including a macOS frontmost-app check. Any ambiguity falls
+  user must not be present at the window (client keyboard activity,
+  [ADR 19](0019-presence-is-client-activity-everywhere.md)). Any ambiguity falls
   through to the native widget, so the desk experience is never degraded by a failed probe.
   This is the interaction model whose absence caused an earlier always-intercept version to be
   reverted.

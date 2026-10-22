@@ -1,4 +1,4 @@
-# Portkey's shell is a one-shot command runner, not a terminal
+# 30. Portkey's shell is a one-shot command runner, not a terminal
 
 Date: 2026-09-23
 Status: accepted

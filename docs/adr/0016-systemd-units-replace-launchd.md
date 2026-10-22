@@ -1,7 +1,7 @@
 # 16. systemd user units run tmux and the bridge; resurrect never spawns claude
 
 Date: 2026-08-09
-Status: accepted
+Status: accepted; Restore pairing amended 2026-10-03 (no session-map save at stop)
 
 ## Context
 
@@ -25,8 +25,9 @@ nobody watching.
   spelunking. Bridge restarts are `Restart=always` with `RestartSec=5s` and
   `StartLimitIntervalSec=300`: the systemd defaults (100ms × 5-in-10s) give up
   permanently after five fast crashes, e.g. a port-in-use loop.
-- **Restore pairing**: `tmux.service` `ExecStop` runs `claude0 save-sessions` before
-  `kill-server`; `ExecStartPost` runs resurrect's restore script (NOT continuum's
+- **Restore pairing**: the pane→session map is saved only by resurrect's `post-save-all`
+  hook, alongside the layout snapshot it is restored onto (`ExecStop` is just
+  `kill-server`; see the 2026-10-03 addendum); `ExecStartPost` runs resurrect's restore script (NOT continuum's
   restore-on-server-start, which races the forking handshake under systemd —
   tmux-continuum #110 — and killed the server), whose post-restore hook then runs
   `claude0 restore-sessions` to resume each pane's Claude session by id.

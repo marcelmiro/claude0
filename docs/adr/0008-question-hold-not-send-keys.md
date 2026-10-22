@@ -1,7 +1,7 @@
 # 8. Questions stay hook-held; the send-keys redesign is rejected
 
 Date: 2026-07-22
-Status: accepted
+Status: accepted; amended by ADR 19 (2026-08-19: presence replaces the frontmost-app probe in focus-release)
 
 ## Context
 
@@ -44,7 +44,8 @@ Keep the file-IPC hook-hold as the phone's answer channel — race-free by const
 supports every question shape — and fix its real defects instead:
 
 1. **Focus-release**: the hold's poll loop releases the moment the user is back at the
-   Mac (active window + attached client + Ghostty frontmost), so the native picker
+   Mac (active window + attached client + a client keystroke within the presence
+   window — `atDeskFocus`, `core/tmux.ts`), so the native picker
    renders in front of them within ~1s. Release polarity fails toward *holding*;
    the intercept gate's polarity fails toward *native* — same probes, opposite defaults.
 2. **4h question window** (`QUESTION_HOLD_MS`), split from the 600s approval window and
