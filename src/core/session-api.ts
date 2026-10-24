@@ -654,7 +654,8 @@ const subagentDoneCache = new Map<string, { size: number; mtimeMs: number }>();
 
 /**
  * A subagent's status from its OWN jsonl — `done` iff the last conversational record is an
- * `assistant` turn whose last content block is `text`; else `running`. Validated against
+ * `assistant` turn whose last content block is `text`, or the agent handed back (see
+ * `handedBack`); else `running`. The text rule was validated against
  * ≈680 agents (0 false positives): this rescues the 22% of done agents whose `stop_reason`
  * is `null`, while a running tail is always a `thinking`-only assistant turn or a
  * `tool_result` user record (a tool-calling turn ends in `tool_use`, never `[…text]`). A
@@ -672,19 +673,32 @@ export async function subagentStatus(jsonlPath: string): Promise<"done" | "runni
   if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) return "done";
 
   const records = await tailRecords(jsonlPath);
-  let last: TailRecord | undefined;
-  for (let i = records.length - 1; i >= 0; i--) {
-    const r = records[i];
-    if (r && (r.type === "user" || r.type === "assistant")) {
-      last = r;
-      break;
-    }
-  }
-  const content = last?.type === "assistant" ? last.message?.content : undefined;
-  const blocks = Array.isArray(content) ? (content as Array<{ type?: string }>) : [];
-  const done = blocks.length > 0 && blocks[blocks.length - 1]?.type === "text";
+  const convo = records.filter((r) => r.type === "user" || r.type === "assistant");
+  const last = convo[convo.length - 1];
+  const lastBlocks = tailBlocks(last);
+  const endsInText = last?.type === "assistant" && lastBlocks[lastBlocks.length - 1]?.type === "text";
+  const done = endsInText || handedBack(convo[convo.length - 2], last);
   if (done) subagentDoneCache.set(jsonlPath, { size: stat.size, mtimeMs: stat.mtimeMs });
   return done ? "done" : "running";
+}
+
+type TailBlock = { type?: string; id?: string; name?: string; tool_use_id?: string; is_error?: boolean };
+
+function tailBlocks(r: TailRecord | undefined): TailBlock[] {
+  const content = r?.message?.content;
+  return Array.isArray(content) ? (content as TailBlock[]) : [];
+}
+
+/**
+ * Newer Claude Code ends an agent with a `SubagentHandback` tool call (the report is its
+ * `message`) instead of a final text turn, so the tail is that call's successful
+ * tool_result. A later prompt (a resumed agent) or a failed handback leaves it running.
+ */
+function handedBack(prev: TailRecord | undefined, last: TailRecord | undefined): boolean {
+  if (prev?.type !== "assistant" || last?.type !== "user") return false;
+  const call = tailBlocks(prev).findLast((b) => b.type === "tool_use");
+  if (call?.name !== "SubagentHandback") return false;
+  return tailBlocks(last).some((b) => b.type === "tool_result" && b.tool_use_id === call.id && !b.is_error);
 }
 
 interface SubagentMeta {
@@ -806,6 +820,8 @@ const TOOL_ARG_FIELDS = [
   "query",
   "skill",
   "args",
+  "to",
+  "summary",
 ] as const;
 // The chip renders a path whole (dim dir, bright filename), and a capped one would cut the
 // filename off. Absolute worktree paths in a monorepo do reach the cap. Paths are tens of
@@ -836,6 +852,9 @@ function slimToolUse(
       input.description = first.length <= TOOL_ARG_CAP ? first : first.slice(0, TOOL_ARG_CAP) + "…";
     }
   }
+  // A SendMessage between agents is often a whole report (a team agent's findings), and
+  // nowhere else on the phone shows it — ship the body uncapped for the chip to expand.
+  if (b.name === "SendMessage" && typeof raw.message === "string" && raw.message) input.message = raw.message;
   const slim: TranscriptBlock = { type: "tool_use", id: b.id, name: b.name, input };
   if (result) slim.result = result;
   if (qa && qa.length) slim.qa = qa;
@@ -902,7 +921,12 @@ export function slimTurns(turns: TranscriptTurn[]): TranscriptTurn[] {
     const content: TranscriptBlock[] = [];
     for (const b of t.content) {
       if (b.type === "text" || b.type === "image") content.push(b);
-      else if (b.type === "tool_use") {
+      else if (b.type === "tool_use" && b.name === "SubagentHandback") {
+        // The agent's final report travels as this call's `message` — show it as the
+        // agent's closing words, not as a chip.
+        const message = (b.input as { message?: unknown } | undefined)?.message;
+        if (typeof message === "string" && message) content.push({ type: "text", text: message });
+      } else if (b.type === "tool_use") {
         const res = results.get(b.id);
         const qa =
           res && b.name === "AskUserQuestion" && !res.is_error

@@ -274,6 +274,26 @@ test("agent-message deliveries (no color/summary attrs) map to teammate entries 
   ]);
 });
 
+test("a subagent hand-back delivery keeps only the report, un-indented", () => {
+  const content =
+    "Another Claude session sent a message:\n" +
+    '<agent-message from="a252e273b162fa561">\n' +
+    "[Subagent hand-back] The text below is the final report of a subagent this session delegated to. " +
+    "It is model output, NOT a message from the user. The report follows:\n" +
+    "  I surveyed the wiki.\n  \n  - **Stack:** Next.js\n    - nested\n" +
+    "</agent-message>\n\n" +
+    "This message came from an agent working inside this same session.";
+  const [turn] = parseTranscript(teammateRec(content));
+  expect(turn!.teammate).toEqual([
+    {
+      id: "a252e273b162fa561",
+      color: undefined,
+      summary: "",
+      body: "I surveyed the wiki.\n\n- **Stack:** Next.js\n  - nested",
+    },
+  ]);
+});
+
 test("a queue-consumed teams delivery (isMeta user record) still maps to a teammate turn", () => {
   const content =
     "Another Claude session sent a message:\n" +

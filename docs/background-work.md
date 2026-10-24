@@ -14,12 +14,19 @@ Code: `core/background-tasks.ts`, `core/runner-verdicts.ts`, `core/script-wait.t
 | The navbar 🤖/⏳ pill and its sheet: the transcript payload's `pendingScripts`, filtered by the runner probe only, with no process gate | `liveScripts` via `readActiveBranchCached` (`core/session-api.ts`) |
 | Sheet order (pending scripts, running agents, agents finished since your last prompt, older collapsed) and its unknown-boundary rule | `AgentList` (`bridge/public/app.js`) |
 | Claude's native `shell` status maps to `ready`, with the shell shown only as ⏳ | `core/session-state.ts` header |
+| Whether an agent is done: a final text turn, or a successful `SubagentHandback` call (how current Claude Code ends an agent) | `subagentStatus` / `handedBack` (`core/session-api.ts`) |
 
-Two parts of what the phone shows aren't stated in any one file:
+Three parts of what the phone shows aren't stated in any one file:
 
 - The Home count and the pill can disagree for a session with no live Claude process: Home
   shows nothing, while the open conversation's pill still lists a pending script whose
   runner probes alive.
-- The sheet is the only phone surface for a finished agent's report, because tool_results
-  are stripped from the thread. While anything is live, the conversation also re-fetches
-  every 15s.
+- A finished agent's report shows in two places. Its drill-in ends on it: the
+  `SubagentHandback` call's `message` becomes the agent's closing bubble (`slimTurns`).
+  The parent thread gets it as an `<agent-message>` delivery: the harness's trust frame is
+  stripped (`handbackReport`, `core/transcript.ts`) and the byline maps the hex agentId to
+  the agent's description (`TeammateRow`). Agents that ended in plain text before
+  handback existed are readable only in the drill-in, because tool_results are stripped
+  from the thread.
+- While anything is live, the conversation re-fetches every 15s. A done agent misread as
+  running keeps that poll going forever, so the status rule matters beyond the pill.

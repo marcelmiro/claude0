@@ -371,6 +371,10 @@
       .tool.open .arg { order: 1; flex-basis: 100%; overflow: visible; white-space: pre-wrap; word-break: break-all; }
       .tool .tdetail { margin-top: 5px; padding-top: 5px; border-top: 1px solid var(--border); color: var(--muted); font-family: var(--mono); font-size: 11.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
       .tool .tdetail.bad { color: var(--red); }
+      /* A SendMessage body: prose, so markdown in the body font rather than mono pre-wrap. */
+      .tool .tdetail.md { white-space: normal; font-family: inherit; font-size: 12.5px; }
+      .tool .tdetail.md > *:first-child { margin-top: 0; }
+      .tool .tdetail.md > *:last-child { margin-bottom: 0; }
       .tool .tlines { color: var(--dim-text); }
       /* Edit chip: the dir shrinks (dimmed .fl-dir ellipsis), the basename never does —
          the filename must survive any width. Same span pair the changed-files list uses. */

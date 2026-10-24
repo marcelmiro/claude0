@@ -2288,9 +2288,12 @@ function TeammateRow({ msg }) {
     body = JSON.stringify(JSON.parse(msg.body), null, 2);
     isJson = true;
   } catch {}
+  // A background agent's report is addressed from its hex agentId — byline it with the
+  // agent's description instead. Named teammates ("ux") match no agentId and keep their name.
+  const agent = ((transcript.value && transcript.value.subagents) || []).find((a) => a.agentId === msg.id);
   return html`<div class="tm-bubble" style=${`border-left-color:${open ? tint : "var(--border)"}`}>
     <div class="tm-head" onClick=${() => setOpen(!open)}>
-      <div class="tm-byline"><span style=${`color:${tint}`}>🤝 ${msg.id}</span><span class="tm-chev">${open ? "▾" : "▸"}</span></div>
+      <div class="tm-byline"><span style=${`color:${tint}`}>🤝 ${(agent && agent.description) || msg.id}</span><span class="tm-chev">${open ? "▾" : "▸"}</span></div>
       <div class="tm-sum">${msg.summary || firstLine(msg.body)}</div>
     </div>
     ${open &&
@@ -2364,6 +2367,7 @@ function ToolChip({ b, at }) {
     input.description ||
     input.url ||
     input.query ||
+    input.summary ||
     "";
   const details = [];
   if (input.description && input.description !== arg) details.push(input.description);
@@ -2386,7 +2390,8 @@ function ToolChip({ b, at }) {
   } else {
     label = html`<span class="tname"
         >${live ? html`<span class="livedot">⦿</span>` : "▸"} ${name}${input.subagent_type &&
-        html` <span class="tsub">${input.subagent_type}</span>`}</span
+        html` <span class="tsub">${input.subagent_type}</span>`}${input.to &&
+        html` <span class="tsub">→ ${input.to}</span>`}</span
       >${arg && html`<span class="arg">${arg}</span>`}`;
   }
   return html`<div class=${cls} onClick=${onTap}>
@@ -2395,6 +2400,9 @@ function ToolChip({ b, at }) {
       html`<span class="elapsed">· ${elapsed}</span>`}${agent && html`<span class="tchev">›</span>`}
     </div>
     ${open && details.length > 0 && html`<div class="tdetail">${details.join("\n")}</div>`}
+    ${open &&
+    input.message &&
+    html`<div class="tdetail md" dangerouslySetInnerHTML=${{ __html: md(input.message) }}></div>`}
     ${open &&
     showRes &&
     html`<div class=${`tdetail${res.ok ? "" : " bad"}`}>
@@ -4377,9 +4385,20 @@ function SubagentView() {
   // Swipe-right-to-go-back closes the drill-in. Re-binds when a drill-in opens (dep on
   // agentId): the root node only exists while `o` is set.
   const { rootRef } = useSwipeBack(closeSubagent, [o ? o.agentId : null]);
+  const data = subTranscript.value;
+  // Land on the last turn once per open: a finished agent's report sits there, below every
+  // tool call it took to get it. Later refreshes leave the scroll alone.
+  const scrollRef = useRef(null);
+  const landed = useRef(null);
+  useEffect(() => {
+    if (!data) return void (landed.current = null);
+    if (!o || landed.current === o.agentId) return;
+    landed.current = o.agentId;
+    const last = scrollRef.current && scrollRef.current.lastElementChild;
+    if (last) last.scrollIntoView({ block: "start" });
+  }, [data, o ? o.agentId : null]);
 
   if (!o) return null;
-  const data = subTranscript.value;
   const turns = (data && data.turns) || [];
   // Opening user turn = the task brief; the rest is the agent's actual work.
   const opening = turns[0] && turns[0].role === "user" ? turns[0] : null;
@@ -4397,7 +4416,7 @@ function SubagentView() {
           <span class="sub">${o.agentType}</span>
         </span>
       </div>
-      <div class="scroll">
+      <div class="scroll" ref=${scrollRef}>
         ${!data && html`<div class="sub" style="padding:8px">loading…</div>`}
         ${opening &&
         html`<div class="brief">

@@ -268,6 +268,42 @@ test("slimTurns: tool_use input trimmed to the capped chip fields", () => {
   expect(block.input.command.endsWith("…")).toBe(true);
 });
 
+test("slimTurns: a SubagentHandback call becomes the agent's report as a text block", () => {
+  const report = "## Findings\n" + "r".repeat(5000);
+  const turns = [
+    {
+      role: "assistant" as const,
+      content: [{ type: "tool_use" as const, id: "h", name: "SubagentHandback", input: { message: report } }],
+    },
+    {
+      role: "user" as const,
+      content: [{ type: "tool_result" as const, tool_use_id: "h", content: "Report delivered to your caller." }],
+    },
+  ];
+  const out = slimTurns(turns);
+  expect(out).toHaveLength(1);
+  expect(out[0]!.content).toEqual([{ type: "text", text: report }]); // uncapped
+});
+
+test("slimTurns: SendMessage keeps recipient, summary and the full message body", () => {
+  const body = "UX audit, rest of the findings\n" + "f".repeat(9000);
+  const turns = [
+    {
+      role: "assistant" as const,
+      content: [
+        {
+          type: "tool_use" as const,
+          id: "m",
+          name: "SendMessage",
+          input: { to: "team-lead", summary: "Resend fixes 5-14", message: body, content: body.slice(0, 50) + "…" },
+        },
+      ],
+    },
+  ];
+  const block = slimTurns(turns)[0]!.content[0] as { input: Record<string, string> };
+  expect(block.input).toEqual({ to: "team-lead", summary: "Resend fixes 5-14", message: body });
+});
+
 test("slimTurns: Agent/WebFetch/Skill chips get their describing fields; empty strings dropped", () => {
   const turns = [
     {

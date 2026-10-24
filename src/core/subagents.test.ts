@@ -6,7 +6,8 @@
  * MUST stay the first import — it redirects CLAUDE0_HOME before `config` freezes `PATHS.dir`.
  *
  * The status rule is the validated core (content-shape, NOT `stop_reason`): `done` iff the
- * last conversational record is an `assistant` turn ending in a `text` block. The
+ * last conversational record is an `assistant` turn ending in a `text` block, or a successful
+ * `SubagentHandback` call's tool_result. The
  * >64KB-final-record and torn-trailing-line cases exercise `tailRecords`' backward chunked
  * reader through `subagentStatus` (the reader itself is internal).
  */
@@ -97,6 +98,24 @@ test("subagentStatus: thinking-only assistant tail → running", async () => {
 test("subagentStatus: tool_result user tail → running", async () => {
   const p = join(WORK, "r2.jsonl");
   writeFileSync(p, asst([txt("call"), tuse("1", "Bash")]) + "\n" + usr([tres("1")]) + "\n");
+  expect(await subagentStatus(p)).toBe("running");
+});
+
+test("subagentStatus: SubagentHandback call answered by its tool_result → done", async () => {
+  const p = join(WORK, "hb.jsonl");
+  writeFileSync(p, asst([tuse("1", "Bash")]) + "\n" + usr([tres("1")]) + "\n" + asst([tuse("2", "SubagentHandback")]) + "\n" + usr([tres("2")]) + "\n");
+  expect(await subagentStatus(p)).toBe("done");
+});
+
+test("subagentStatus: handed back, then resumed with a new message → running", async () => {
+  const p = join(WORK, "hb-resumed.jsonl");
+  writeFileSync(p, asst([tuse("2", "SubagentHandback")]) + "\n" + usr([tres("2")]) + "\n" + usr([txt("one more thing")]) + "\n");
+  expect(await subagentStatus(p)).toBe("running");
+});
+
+test("subagentStatus: a failed SubagentHandback → running (the agent carries on)", async () => {
+  const p = join(WORK, "hb-failed.jsonl");
+  writeFileSync(p, asst([tuse("2", "SubagentHandback")]) + "\n" + usr([{ ...tres("2"), is_error: true }]) + "\n");
   expect(await subagentStatus(p)).toBe("running");
 });
 

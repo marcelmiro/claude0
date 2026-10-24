@@ -83,6 +83,23 @@ export function isTeammateDelivery(text: string): boolean {
   return TEAMMATE_PREFIX.test(text) || BARE_DELIVERY.test(text);
 }
 
+/**
+ * A subagent's `SubagentHandback` report reaches its parent as an `<agent-message>` whose
+ * body is a trust-boundary paragraph ending "The report follows:", then the report with
+ * every line indented two spaces. Returns the bare report, or null for any other body.
+ */
+const HANDBACK_FRAME = /^\[Subagent hand-back\][^\n]*The report follows:\n/;
+function handbackReport(body: string): string | null {
+  const frame = body.match(HANDBACK_FRAME);
+  if (!frame) return null;
+  return body
+    .slice(frame[0].length)
+    .split("\n")
+    .map((l) => l.replace(/^ {2}/, ""))
+    .join("\n")
+    .trim();
+}
+
 /** Parse a teams delivery's tagged blocks; null when the prefix or every tag is absent. */
 function parseTeammateDelivery(text: string): TranscriptTurn["teammate"] | null {
   if (!isTeammateDelivery(text)) return null;
@@ -101,7 +118,7 @@ function parseTeammateDelivery(text: string): TranscriptTurn["teammate"] | null 
       id: attrs.match(/(?:teammate_id|from)="([^"]*)"/)?.[1] ?? "teammate",
       color: attrs.match(/color="([^"]*)"/)?.[1],
       summary,
-      body,
+      body: handbackReport(body) ?? body,
     });
   }
   return msgs.length ? msgs : null;
