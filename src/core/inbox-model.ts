@@ -45,6 +45,8 @@ export interface InboxSession {
   pr?: { number?: number; state: PullRequestInfo["state"]; branch?: string; fetchedAt: number };
   /** Incremental transcript-scan cursor behind `pr` — where the session's edits land. */
   workScan?: EditScan;
+  /** No user prompt yet (Claude writes no transcript before one), so once archived there is nothing to reread or resume. */
+  empty?: boolean;
 }
 
 export type Section = "needs-you" | "running" | "parked" | "done";
@@ -127,6 +129,7 @@ export function wakeBanner(snoozedAt: number, now: number): string {
 /** Which section a session renders in right now. null = History, off the sidebar. */
 export function sectionOf(s: InboxSession, now: number): Section | null {
   if (s.archivedAt) {
+    if (s.empty) return null;
     return now - s.archivedAt < 86_400_000 ? "done" : null; // >24h → History
   }
   if (s.disposition) {

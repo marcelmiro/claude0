@@ -101,6 +101,7 @@ export async function discoveryTick(store: InboxStore): Promise<void> {
       // title on a first-prompt snippet — what the user asked for identifies
       // the session better than a branch name or a raw id.
       name: getSessionName(s.id, nameCache) || s.name || snippet(s.firstPrompt) || s.branch,
+      empty: !s.firstPrompt || undefined,
       reason:
         pending?.name === "AskUserQuestion" && pending.question
           ? "question"

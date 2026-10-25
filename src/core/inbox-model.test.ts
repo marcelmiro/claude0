@@ -111,6 +111,11 @@ describe("sectionOf", () => {
     expect(sectionOf(sess({ archivedAt: NOW - D - 1 }), NOW)).toBeNull();
   });
 
+  test("an archived session that never got a prompt skips done", () => {
+    expect(sectionOf(sess({ archivedAt: NOW - H, empty: true }), NOW)).toBeNull();
+    expect(sectionOf(sess({ empty: true }), NOW)).toBe("needs-you");
+  });
+
   test("disposition parks; a due snooze reads as needs-you (woken)", () => {
     expect(sectionOf(sess({ disposition: { kind: "blocked", note: "" } }), NOW)).toBe("parked");
     expect(sectionOf(sess({ disposition: { kind: "snoozed", until: NOW + H } }), NOW)).toBe("parked");
