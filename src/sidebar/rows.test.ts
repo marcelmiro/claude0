@@ -77,6 +77,16 @@ describe("renderView", () => {
     for (const row of view.rows) expect(plainLen(row)).toBeLessThanOrEqual(26);
   });
 
+  test("a services-only ⏳ row files under Needs You, ⏳ after the reply marks", () => {
+    const rows = [
+      sess({ id: "svc", name: "dev-server", since: NOW - 5 * M, script: true, unread: true, real: { paneId: "%1", target: "main:1", status: "ready" } }),
+    ];
+    const view = renderView(rows, vs(), { width: 26, height: 10 }, NOW);
+    const plain = view.rows.map((r) => r.replace(/\x1b\[[0-9;]*m/g, ""));
+    expect(view.visible).toEqual([{ id: "svc", section: "needs-you" }]);
+    expect(plain.find((r) => r.includes("dev-server"))).toContain("⚡⏳ 5m");
+  });
+
   test("wide emoji, CJK, and combining marks do not overflow a row", () => {
     const unicode = [
       sess({ id: "unicode", name: "⚡ Fix 日本 e\u0301 rendering", since: NOW - 2 * H }),

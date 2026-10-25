@@ -369,9 +369,9 @@ async function main(): Promise<void> {
   const sidOf = (s: Session): string =>
     (s.tmuxPane ? paneSessionMap[s.tmuxPane.paneId] : undefined) ?? s.id;
   const readyIds = [...new Set(sessions.filter((s) => s.status === "ready" && sidOf(s)).map(sidOf))];
-  const scriptWaitIds = readyIds.length > 0 ? await detectScriptWaits(readyIds) : new Set<string>();
+  const scriptWaitIds = readyIds.length > 0 ? await detectScriptWaits(readyIds) : new Map();
   if (scriptWaitIds.size > 0) {
-    await debugLog(`script-wait: ${[...scriptWaitIds].join(", ")}`);
+    await debugLog(`script-wait: ${[...scriptWaitIds.keys()].join(", ")}`);
   }
 
   // Sync prefixes on tmux window names.

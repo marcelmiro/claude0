@@ -467,7 +467,7 @@ async function refresh(opts?: { skipArchivedSummaries?: boolean }) {
     // in memory survives to the next one. Visibility only: never affects status,
     // sort, or attention.
     const readyIds = sessions.filter((s) => s.status === "ready" && s.id).map((s) => s.id);
-    const scriptWaitIds = readyIds.length > 0 ? await detectScriptWaits(readyIds) : new Set<string>();
+    const scriptWaitIds = readyIds.length > 0 ? await detectScriptWaits(readyIds) : new Map();
     for (const session of sessions) {
       if (scriptWaitIds.has(session.id)) session.scriptWaiting = true;
     }

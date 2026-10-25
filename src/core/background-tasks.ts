@@ -47,6 +47,8 @@ export interface BackgroundTask {
   launchedAt?: string;
   /** The task's output file (from the Bash launch confirmation) — the liveness probe target. */
   outputPath?: string;
+  /** A script that keeps running (a server, a tunnel) rather than one Claude waits on — `isServiceScript`. */
+  service?: true;
 }
 
 const LABEL_CAP = 160;
@@ -95,14 +97,15 @@ function taskLineParser(): { feed: (line: string) => void; tasks: () => Backgrou
   const byTaskId = new Map<string, BackgroundTask>();
   // Background tool_uses awaiting their tool_result, so the launch can be confirmed
   // and labelled. Also drives the line prefilter (a result line carries its use's id).
-  const candidates = new Map<string, { name: string; label: string }>();
-  // Labels of foreground Bash calls, in case one times out into the background.
-  const foregroundBash = new Map<string, string>();
+  const candidates = new Map<string, { name: string; label: string; command: string }>();
+  // Foreground Bash calls, in case one times out into the background.
+  const foregroundBash = new Map<string, { label: string; command: string }>();
   // A `!` command's input and output are separate records; the output carries no command.
   let lastBashInput = "";
 
-  const launch = (toolUseId: string, kind: BackgroundTaskKind, label: string, taskId: string | undefined, text: string, ts: string | undefined): void => {
+  const launch = (toolUseId: string, kind: BackgroundTaskKind, label: string, command: string, taskId: string | undefined, text: string, ts: string | undefined): void => {
     const task: BackgroundTask = { toolUseId, kind, label, status: "pending" };
+    if (kind === "script" && isServiceScript(label, command)) task.service = true;
     if (taskId) {
       task.taskId = taskId;
       byTaskId.set(taskId, task);
@@ -154,7 +157,12 @@ function taskLineParser(): { feed: (line: string) => void; tasks: () => Backgrou
             name === "Workflow" ||
             (name === "Agent" && input["run_in_background"] !== false);
           if (!isCandidate) {
-            if (name === "Bash") foregroundBash.set(String(block["id"]), String(input["description"] ?? input["command"] ?? name).slice(0, LABEL_CAP));
+            if (name === "Bash") {
+              foregroundBash.set(String(block["id"]), {
+                label: String(input["description"] ?? input["command"] ?? name).slice(0, LABEL_CAP),
+                command: String(input["command"] ?? ""),
+              });
+            }
             continue;
           }
           // Description first: it's the model's own human label ("Background wait for
@@ -162,15 +170,16 @@ function taskLineParser(): { feed: (line: string) => void; tasks: () => Backgrou
           candidates.set(String(block["id"]), {
             name,
             label: String(input["description"] ?? input["command"] ?? name).slice(0, LABEL_CAP),
+            command: String(input["command"] ?? ""),
           });
         } else if (block["type"] === "tool_result") {
           const toolUseId = String(block["tool_use_id"] ?? "");
           const text = blockText(block["content"]);
           const use = candidates.get(toolUseId);
           if (!use) {
-            const label = foregroundBash.get(toolUseId);
+            const fg = foregroundBash.get(toolUseId);
             const timedOut = text.match(TIMEOUT_LAUNCH_RE);
-            if (label !== undefined && timedOut) launch(toolUseId, "script", label, timedOut[1], text, ts);
+            if (fg && timedOut) launch(toolUseId, "script", fg.label, fg.command, timedOut[1], text, ts);
             continue;
           }
           candidates.delete(toolUseId);
@@ -179,16 +188,16 @@ function taskLineParser(): { feed: (line: string) => void; tasks: () => Backgrou
           if (use.name === "Bash" && !bash) continue; // denied / failed to start
           if (use.name === "Agent" && !agent) continue; // ran synchronously
           const kind = use.name === "Bash" ? "script" : use.name === "Agent" ? "agent" : "workflow";
-          launch(toolUseId, kind, use.label, bash?.[1] ?? agent?.[1], text, ts);
+          launch(toolUseId, kind, use.label, use.command, bash?.[1] ?? agent?.[1], text, ts);
         }
       }
     }
 
     if (typeof content === "string") {
       const input = content.match(BASH_INPUT_RE)?.[1];
-      if (input !== undefined) lastBashInput = input.trim().slice(0, LABEL_CAP);
+      if (input !== undefined) lastBashInput = input.trim();
       const taskId = content.match(TIMEOUT_LAUNCH_RE)?.[1];
-      if (taskId) launch(taskId, "script", lastBashInput, taskId, content, ts);
+      if (taskId) launch(taskId, "script", lastBashInput.slice(0, LABEL_CAP), lastBashInput, taskId, content, ts);
     }
 
     const attachment = rec["attachment"] as { prompt?: unknown } | undefined;
@@ -216,6 +225,23 @@ function taskLineParser(): { feed: (line: string) => void; tasks: () => Backgrou
  */
 export function pendingScripts(tasks: BackgroundTask[]): BackgroundTask[] {
   return tasks.filter((t) => t.kind === "script" && t.status === "pending");
+}
+
+// A script Claude launched to keep running (a dev server, a tunnel) rather than to wait
+// on. The label (the model-written description) names it, or the command binds a port,
+// opens a tunnel or runs a dev server. A label that opens with a wait verb is a wait
+// even when it names a service ("Wait for the preview deploy").
+const SERVICE_NOUN = /\b(dev server|server|serve|tunnel|port[- ]forward|ssm|vite|next dev|localhost|ngrok|proxy|preview)\b|\bon port \d+/i;
+const SERVICE_COMMAND = /\b[A-Z_]*PORT=\d+|--port[ =]\d+|\s-p \d{2,5}\b|\bssm start-session\b|-L \d+:|\b(vite|next dev|serve)\b|\brun dev\b|\bbridge\s*$/;
+const WAIT_VERB = /^\s*(background[- ])?(wait|poll|watch|monitor)\b/i;
+
+/**
+ * Whether a background script is a long-lived service rather than a wait. Only inbox
+ * placement uses it: a wait holds its session in Running, a service doesn't.
+ */
+export function isServiceScript(label: string, command: string): boolean {
+  if (WAIT_VERB.test(label)) return false;
+  return SERVICE_NOUN.test(label) || SERVICE_COMMAND.test(command);
 }
 
 /** The verdict-store key for a task: the harness task id, or the tool use it came from. */

@@ -31,11 +31,11 @@ export interface InboxSession {
   branch?: string;
   /** A woken snooze already auto-reopened its pane — never spawn twice. */
   autoResumed?: boolean;
-  /** Turn is over but a live run_in_background script is still going (the ⏳ tier). */
+  /** Turn is over but a live run_in_background script is still going (the ⏳ mark). */
   script?: boolean;
   /** The monitor's attention flag (state.json) — the same ⚡ the tmux window name and portkey show. */
   unread?: boolean;
-  /** When the script-wait state began (⧗ rows age from this, not the prompt). */
+  /** When the script-wait state began — set while a wait is live; a Running ⏳ row ages from it. */
   scriptSince?: number;
   /**
    * PR of the checkout the session last edited in (a worktree the pane never cd'd
@@ -172,7 +172,7 @@ export function deriveSections(sessions: InboxSession[], now: number): InboxSect
   const by = (sec: Section) => sessions.filter((s) => sectionOf(s, now) === sec);
   // running sorts longest-first on the same anchor its age displays
   // (script-waiters age from the handover, turns from the prompt)
-  const runningSince = (s: InboxSession) => (s.script ? (s.scriptSince ?? s.since) : s.since);
+  const runningSince = (s: InboxSession) => s.scriptSince ?? s.since;
   return {
     // oldest-ignored first, whatever the reason: the question/approval glyph
     // on the row says what kind of reply is due, the order says how long

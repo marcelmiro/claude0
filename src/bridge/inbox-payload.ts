@@ -53,8 +53,8 @@ function metaOf(s: InboxSession, section: Section, now: number): InboxRowMeta {
     since:
       section === "done"
         ? (s.archivedAt ?? s.since)
-        : s.script
-          ? (s.scriptSince ?? s.since)
+        : section === "running" && s.scriptSince
+          ? s.scriptSince
           : effectiveSince(s, now),
   };
   if (s.disposition?.kind === "snoozed" && s.disposition.until > now) m.wakeAt = s.disposition.until;

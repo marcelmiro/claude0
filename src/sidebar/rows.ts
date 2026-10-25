@@ -213,7 +213,9 @@ export function renderView(
     // Bun.stringWidth agree on that, so the width math holds (the ADR's
     // one-cell rule was about blessed, which this renderer bypasses).
     const marks = (s.unread ? "⚡" : "") + (woken ? "⏰" : s.reason === "question" ? "❓" : s.reason === "approval" ? "✋" : "");
-    const glyph = marks ? `${marks} ` : "";
+    // ⏳ here = a script still runs: a service (a dev server, a tunnel), or a wait past the cap
+    const script = s.script ? "⏳" : "";
+    const glyph = marks || script ? `${marks}${script} ` : "";
     // names stay white — peach is reserved for signal: the reason glyph, and
     // a stale (>1d) age, escalating to red past 3d (ignored debt should
     // burn). The whole point is not losing these.
@@ -222,7 +224,7 @@ export function renderView(
     push(s, "needs-you", sessionLine(s, vs, width, C.fg, {
       right: `${glyph}${age}`,
       rightColor: C.muted,
-      rightRendered: (glyph ? fg(C.peach, glyph) : "") + fg(ageColor, age),
+      rightRendered: (marks ? fg(C.peach, marks) : "") + (script ? fg(C.mint, script) : "") + (glyph ? " " : "") + fg(ageColor, age),
     }));
   }
 
@@ -235,7 +237,7 @@ export function renderView(
     // still set (the window name and status bar count it, so the row must
     // too); it never rides an in-flight turn — the monitor clears the flag on
     // running, and its tick may lag this one.
-    const age = fmtAge(now - (s.script ? (s.scriptSince ?? s.since) : s.since));
+    const age = fmtAge(now - (s.scriptSince ?? s.since));
     const unread = s.script && s.unread;
     push(s, "running", sessionLine(s, vs, width, C.fg, {
       right: `${unread ? "⚡" : ""}${s.script ? "⏳ " : ""}${age}`,

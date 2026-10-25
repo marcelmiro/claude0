@@ -11,7 +11,7 @@ import { CONFIG_DIR } from "../../test/helpers/home";
 import { test, expect, beforeEach } from "bun:test";
 import { rmSync, writeFileSync, readFileSync, readdirSync, mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { detectScriptWaits, isWaiting, type ScriptWaitEntry } from "./script-wait";
+import { detectScriptWaits, liveTasks, waitKind, type ScriptWaitEntry } from "./script-wait";
 import { resolveVerdicts, runnersAlive, type ProbeTarget } from "./runner-verdicts";
 import { desiredPrefix, stripAllPrefixes, ATTENTION_PREFIX, RUNNING_PREFIX, SCRIPT_PREFIX } from "./notifications";
 
@@ -41,26 +41,27 @@ test("stripAllPrefixes strips ⏳ like the others, and stacked prefixes fully", 
   expect(stripAllPrefixes("claude0")).toBe("claude0");
 });
 
-// --- isWaiting ------------------------------------------------------------
+// --- liveTasks / waitKind ---------------------------------------------------
 
 function entry(pending: ScriptWaitEntry["pending"]): ScriptWaitEntry {
   return { size: 1, mtimeMs: 1, pending, seenAt: 0 };
 }
+const keys = (e: ScriptWaitEntry, v: Map<string, boolean>) => liveTasks(e, v).map((t) => t.key);
 
-test("no pending scripts → not waiting", () => {
-  expect(isWaiting(entry([]), new Map())).toBe(false);
+test("no pending scripts → nothing live", () => {
+  expect(keys(entry([]), new Map())).toEqual([]);
 });
 
-test("a live runner means waiting; a dead one does not", () => {
+test("a live runner is live; a dead one is not", () => {
   const e = entry([{ key: "t1", outputPath: "/tmp/t1.output" }]);
-  expect(isWaiting(e, new Map([["t1", true]]))).toBe(true);
-  expect(isWaiting(e, new Map([["t1", false]]))).toBe(false);
+  expect(keys(e, new Map([["t1", true]]))).toEqual(["t1"]);
+  expect(keys(e, new Map([["t1", false]]))).toEqual([]);
   // No verdict at all (probe failed) must not read as alive.
-  expect(isWaiting(e, new Map())).toBe(false);
+  expect(keys(e, new Map())).toEqual([]);
 });
 
 test("unprobeable task (no outputPath) stays visible", () => {
-  expect(isWaiting(entry([{ key: "t1" }]), new Map())).toBe(true);
+  expect(keys(entry([{ key: "t1" }]), new Map())).toEqual(["t1"]);
 });
 
 test("one live among dead is enough", () => {
@@ -68,7 +69,13 @@ test("one live among dead is enough", () => {
     { key: "dead", outputPath: "/tmp/dead.output" },
     { key: "live", outputPath: "/tmp/live.output" },
   ]);
-  expect(isWaiting(e, new Map([["dead", false], ["live", true]]))).toBe(true);
+  expect(keys(e, new Map([["dead", false], ["live", true]]))).toEqual(["live"]);
+});
+
+test("waitKind: any live wait → wait; only services → service; nothing live → null", () => {
+  expect(waitKind([{ key: "ci" }, { key: "dev", service: true }])).toBe("wait");
+  expect(waitKind([{ key: "dev", service: true }, { key: "tunnel", service: true }])).toBe("service");
+  expect(waitKind([])).toBeNull();
 });
 
 // --- resolveVerdicts (the shared, persisted store) -------------------------
@@ -184,7 +191,7 @@ test("runnersAlive: empty input does not spawn anything", async () => {
 const PROJECTS = join(CONFIG_DIR, "projects");
 
 /** Write a transcript whose only content is one pending background script. */
-function transcript(sessionId: string, taskId: string): void {
+function transcript(sessionId: string, taskId: string, description?: string): void {
   mkdirSync(join(PROJECTS, "proj"), { recursive: true });
   writeFileSync(
     join(PROJECTS, "proj", `${sessionId}.jsonl`),
@@ -193,7 +200,7 @@ function transcript(sessionId: string, taskId: string): void {
         type: "assistant",
         message: {
           content: [
-            { type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "sleep 99", run_in_background: true } },
+            { type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "sleep 99", description, run_in_background: true } },
           ],
         },
       }),
@@ -220,10 +227,17 @@ test("a live runner makes the session wait; a dead one does not", async () => {
   rmSync(PROJECTS, { recursive: true, force: true });
   rmSync(CACHE, { force: true });
   transcript("sessA", "blive");
-  expect(await detectScriptWaits(["sessA"], probeAll(true), PROJECTS)).toEqual(new Set(["sessA"]));
+  expect(await detectScriptWaits(["sessA"], probeAll(true), PROJECTS)).toEqual(new Map([["sessA", "wait"]]));
 
   rmSync(VERDICTS_DIR, { recursive: true, force: true });
-  expect(await detectScriptWaits(["sessA"], probeAll(false), PROJECTS)).toEqual(new Set());
+  expect(await detectScriptWaits(["sessA"], probeAll(false), PROJECTS)).toEqual(new Map());
+});
+
+test("a session whose only live script is a service reads as service", async () => {
+  rmSync(PROJECTS, { recursive: true, force: true });
+  rmSync(CACHE, { force: true });
+  transcript("sessS", "bsvc", "Run the ink dev server on port 3000");
+  expect(await detectScriptWaits(["sessS"], probeAll(true), PROJECTS)).toEqual(new Map([["sessS", "service"]]));
 });
 
 test("an unchanged cycle rewrites nothing — the TUI polls at 3s and the monitor per tick", async () => {
@@ -284,17 +298,17 @@ test("a parked job's live script makes its PARENT session wait", async () => {
   writeFileSync(join(PROJECTS, "proj", "parent.jsonl"), "");
   const jobs = new Map([["parent", "job"]]);
 
-  expect(await detectScriptWaits(["parent"], probeAll(true), PROJECTS, jobs)).toEqual(new Set(["parent"]));
+  expect(await detectScriptWaits(["parent"], probeAll(true), PROJECTS, jobs)).toEqual(new Map([["parent", "wait"]]));
   // The job id itself is never returned — callers badge the pane's session.
   expect(await detectScriptWaits(["parent"], probeAll(true), PROJECTS, jobs).then((s) => s.has("job"))).toBe(false);
 
   rmSync(VERDICTS_DIR, { recursive: true, force: true });
-  expect(await detectScriptWaits(["parent"], probeAll(false), PROJECTS, jobs)).toEqual(new Set());
+  expect(await detectScriptWaits(["parent"], probeAll(false), PROJECTS, jobs)).toEqual(new Map());
 });
 
 test("without a parked job the parent's own transcript still decides", async () => {
   rmSync(PROJECTS, { recursive: true, force: true });
   rmSync(CACHE, { force: true });
   transcript("solo", "bsolo");
-  expect(await detectScriptWaits(["solo"], probeAll(true), PROJECTS, new Map())).toEqual(new Set(["solo"]));
+  expect(await detectScriptWaits(["solo"], probeAll(true), PROJECTS, new Map())).toEqual(new Map([["solo", "wait"]]));
 });

@@ -37,8 +37,8 @@ const SEEN_REFRESH_MS = 60 * 60 * 1000;
 export interface ScriptWaitEntry {
   size: number;
   mtimeMs: number;
-  /** Pending scripts per the transcript: identity + probe target only. */
-  pending: Array<{ key: string; outputPath?: string }>;
+  /** Pending scripts per the transcript: identity, probe target, and whether it's a service (`isServiceScript`). */
+  pending: Array<{ key: string; outputPath?: string; service?: boolean }>;
   /** Last time a caller looked this session up — drives age-based pruning. */
   seenAt: number;
 }
@@ -65,16 +65,25 @@ function probeTargets(entries: ScriptWaitEntry[]): ProbeTarget[] {
 }
 
 /**
- * Whether an entry's session still waits on a script, given already-resolved
- * verdicts. A task without an outputPath can't be probed and counts as waiting
- * (same posture as `liveScripts`).
+ * An entry's pending scripts that are still running, given already-resolved verdicts.
+ * A task without an outputPath can't be probed and counts as live (same posture as
+ * `liveScripts`).
  */
-export function isWaiting(entry: ScriptWaitEntry, verdicts: Map<string, boolean>): boolean {
-  return entry.pending.some((t) => !t.outputPath || verdicts.get(t.key) === true);
+export function liveTasks(entry: ScriptWaitEntry, verdicts: Map<string, boolean>): ScriptWaitEntry["pending"] {
+  return entry.pending.filter((t) => !t.outputPath || verdicts.get(t.key) === true);
+}
+
+/** `wait` = the session waits on a live script; `service` = every live script is a service. */
+export type ScriptWait = "wait" | "service";
+
+export function waitKind(live: ScriptWaitEntry["pending"]): ScriptWait | null {
+  if (live.length === 0) return null;
+  return live.every((t) => t.service) ? "service" : "wait";
 }
 
 /**
- * The subset of `sessionIds` still waiting on a live background script.
+ * The subset of `sessionIds` with a live background script (the ⏳ mark), each with
+ * its `waitKind` — only inbox placement reads the kind.
  *
  * Entries for other sessions are preserved, not pruned: the TUI and the monitor both
  * call this with their own candidate sets, and dropping "everything the current
@@ -86,7 +95,7 @@ export async function detectScriptWaits(
   probe: RunnerProbe = runnersAlive,
   projectsDir?: string,
   jobs?: Map<string, string>,
-): Promise<Set<string>> {
+): Promise<Map<string, ScriptWait>> {
   const now = Date.now();
   const cache = await loadCache();
   const current = new Map<string, ScriptWaitEntry>();
@@ -117,6 +126,7 @@ export async function detectScriptWaits(
           pending: pendingScripts(tasks).map((t) => ({
             key: taskKey(t),
             outputPath: t.outputPath,
+            ...(t.service && { service: true }),
           })),
           seenAt: now,
         };
@@ -127,16 +137,17 @@ export async function detectScriptWaits(
       // unreadable transcript — no verdict, no ⏳
     }
   }
-  if (current.size === 0) return new Set();
+  if (current.size === 0) return new Map();
 
   // One probe round for every candidate session at once, so the batched `lsof` gets
   // the whole set rather than one call per session.
   const verdicts = await resolveVerdicts(probeTargets([...current.values()]), now, probe);
-  const out = new Set<string>();
+  const out = new Map<string, ScriptWait>();
   for (const id of sessionIds) {
     const job = jobBySession.get(id);
     const entries = [current.get(id), job ? current.get(job) : undefined];
-    if (entries.some((e) => e && isWaiting(e, verdicts))) out.add(id);
+    const kind = waitKind(entries.flatMap((e) => (e ? liveTasks(e, verdicts) : [])));
+    if (kind) out.set(id, kind);
   }
 
   // Re-read before writing: concurrent callers each hold a different slice, and a

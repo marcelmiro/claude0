@@ -23,6 +23,13 @@ docblocks carry the implementation detail. Decisions:
   You ages from when the session handed you the turn (>1d renders loud). Running ages from
   the user's last prompt. Script-wait (`⏳`) is a running mode aged from the turn→script
   handover, because "is this wait normal or wedged" is the question it answers.
+- **A wait holds Running; a service doesn't.** A `ready` session with a live background
+  script stays in Running while that script is something Claude waits on (CI, a deploy, a
+  review). When every live script is a service it merely started (a dev server, a tunnel,
+  judged by label and command: `isServiceScript`), the session files under Needs You with
+  `⏳`: an endless server must not hide a session that is asking you something. A wait
+  holds Running for at most 2h (`SCRIPT_WAIT_CAP_MS`, `core/inbox-discovery.ts`), which
+  catches a service the check misses; the released row ages from when the wait began.
 - **`/clear`** hands a pane to a new session id; the daemon tick archives the old one into
   Recent (`replacedInPane`, `core/inbox-discovery.ts`). A pane that is simply killed is
   not a replacement.
@@ -125,8 +132,10 @@ no hide marker does.
 - **Right slot.** `⚡` = unread (the monitor's `needsAttention` flag for the row's pane —
   the same flag behind the window prefix and portkey's row glow, so all three clear
   together; overlaid per paint by `overlayAttention`). Then the reply due: `❓` question,
-  `✋` approval, `⏰` snooze wake; a plain ready session shows only its age. Running rows
-  show `⏳` for script-wait, and `⚡⏳` while that turn still carries the attention flag.
+  `✋` approval, `⏰` snooze wake; a plain ready session shows only its age, and `⏳` follows
+  the marks while a service still runs. Running rows show `⏳` for script-wait, and `⚡⏳`
+  while that turn still carries the attention flag. `e` on any `⏳` row needs a second
+  press, because the script dies with the pane.
   Parked keeps one-cell `☾` (snoozed) and `✗` (blocked) so parked rows stay light.
 - **Status-right** renders `⚡ N 🔄 N` only (a `✓N` cleared-today counter was tried and
   removed).

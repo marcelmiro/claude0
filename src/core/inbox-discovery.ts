@@ -22,15 +22,21 @@ import { loadState } from "./state";
 import type { InboxStore } from "./inbox-store";
 import { peekEngaged, stripOverlay, type InboxSession } from "./inbox-model";
 
+// A wait that outlives this is almost surely a service `isServiceScript` missed, or a
+// hung wait — either way the session should surface. 99% of completed background
+// scripts finish within ~2.3h.
+const SCRIPT_WAIT_CAP_MS = 2 * 60 * 60 * 1000;
+
 export async function discoveryTick(store: InboxStore): Promise<void> {
   const nameCache = await loadNameCache(); // AI names, same source as the TUI
   const { sessions } = await discoverSessions({ skipArchivedSummaries: true, nameMap: nameCache.names });
-  // ⏳ tier: `ready` but still waiting on a live run_in_background script —
-  // that session hasn't handed you anything yet, so it belongs in RUNNING,
-  // not Needs You. Same detector as the tmux ⏳ prefix (cached transcript
-  // parse + lsof liveness), so the two surfaces can't disagree.
+  // ⏳ tier: `ready` with a live run_in_background script. A wait (CI, a
+  // deploy, a review) hasn't handed you anything yet, so it holds the row in
+  // RUNNING; a session whose only live scripts are services (a dev server, a
+  // tunnel) did hand you the turn, so it files under Needs You with ⏳. Same
+  // detector as the tmux ⏳ prefix (cached transcript parse + lsof liveness).
   const readyIds = sessions.filter((s) => s.tmuxPane && s.status === "ready").map((s) => s.id);
-  const scriptWaits = readyIds.length ? await detectScriptWaits(readyIds) : new Set<string>();
+  const scriptWaits = readyIds.length ? await detectScriptWaits(readyIds) : new Map();
   const now = Date.now();
   // ⚡ unread = the monitor's per-pane attention flag, read once per tick so
   // the sidebar, the window name and portkey clear together
@@ -55,9 +61,14 @@ export async function discoveryTick(store: InboxStore): Promise<void> {
     const dup = byId.get(s.id);
     if (dup && !/^\d+:/.test(dup.real!.target)) continue;
     const p = prevById.get(s.id);
-    // effective status: script-waiting `ready` counts as running, and the
-    // transition script-done → truly-ready stamps `since` like any other
-    const eff = s.status === "ready" && scriptWaits.has(s.id) ? "running" : s.status;
+    // effective status: a `ready` session waiting on a script counts as running
+    // until the cap, and the transition script-done → truly-ready stamps `since`
+    // like any other. The wait's start is carried across ticks — past the cap too,
+    // so a released row can't re-hold on the next tick.
+    const scriptWait = s.status === "ready" ? scriptWaits.get(s.id) : undefined;
+    const waitSince =
+      scriptWait === "wait" ? (p?.scriptSince ?? (p ? now : s.lastTurnAt ? +s.lastTurnAt : now)) : undefined;
+    const eff = waitSince !== undefined && now - waitSince < SCRIPT_WAIT_CAP_MS ? "running" : s.status;
     const statusChanged = p?.real?.status !== eff;
     // age = how long in this state: an OBSERVED transition stamps now (we
     // watched it happen — the transcript's lastTurnAt can lag or lie); first
@@ -65,6 +76,8 @@ export async function discoveryTick(store: InboxStore): Promise<void> {
     // ("how long has it been churning on my instruction"), which also spans
     // the turn-end → script-wait handover without a reset.
     let since = !p ? (s.lastTurnAt ? +s.lastTurnAt : now) : statusChanged ? now : p.since;
+    // released by the cap: the turn ended when the wait began, so Needs You ages from then
+    if (statusChanged && waitSince !== undefined && eff === "ready") since = waitSince;
     let promptAt: number | null = null;
     if (eff === "running" && (!p || (statusChanged && p.real?.status !== "running"))) {
       try {
@@ -96,11 +109,12 @@ export async function discoveryTick(store: InboxStore): Promise<void> {
             : "turn-done",
       since,
       running: eff === "running" ? { finishAt: Number.MAX_SAFE_INTEGER } : undefined,
-      script: eff === "running" && s.status === "ready" ? true : undefined,
-      // ⧗ ages from when the script-wait STATE began (age = time in state,
-      // like every other section): the observed turn→script transition, or
-      // the transcript's last record for scripts already waiting at startup
-      scriptSince: undefined, // filled below once `script` is known
+      script: scriptWait ? true : undefined,
+      // a Running ⏳ row ages from when the script-wait STATE began (age = time
+      // in state, like every other section): the observed turn→script
+      // transition, or the transcript's last record for scripts already
+      // waiting at startup
+      scriptSince: undefined, // filled below while a wait is live
       fromSnooze: p?.fromSnooze,
       unread: state.sessions[s.tmuxPane.paneId]?.needsAttention || undefined,
       real: {
@@ -109,14 +123,7 @@ export async function discoveryTick(store: InboxStore): Promise<void> {
         status: eff,
       },
     };
-    if (row.script) {
-      const firstSight = s.lastTurnAt ? +s.lastTurnAt : now; // already waiting when we arrived
-      row.scriptSince = p?.script
-        ? (p.scriptSince ?? firstSight) // same stretch — carry (or backfill) the anchor
-        : p
-          ? now // observed the turn→script transition this tick
-          : firstSight;
-    }
+    if (waitSince !== undefined) row.scriptSince = waitSince;
     // it started working again — you clearly went back to it, so the parked/
     // archived overlay no longer describes reality (reply observed, per ADR).
     // Exception: a PEEKED row's pane is provisional — its `claude -r` boot

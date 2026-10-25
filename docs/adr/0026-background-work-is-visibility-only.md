@@ -1,7 +1,7 @@
 # 26. Background work is one visibility-only surface
 
 Date: 2026-08-24 (records decisions made when the feature shipped, 2026-07-21 → 27)
-Status: accepted
+Status: accepted; amended 2026-10-24 (a script Claude waits on holds inbox placement)
 
 How detection, the runner-liveness probe, the caches and the phone sheet work:
 [docs/background-work.md](../background-work.md).
@@ -33,6 +33,12 @@ forever. Real data had a 3-day-old wait on a live pane.
   demands action. A badge that lingers is a shrug; a notification or attention flag that
   lingers is a lie that trains the user to ignore the tier. The ⏳ prefix ranks below ⚡
   and 🔄, and exists so a `ready`-looking window reads as "churning, not waiting on you".
+- **One exception: inbox placement.** A session waiting on a script (CI after a merge, a
+  deploy, a review) doesn't need the user until it finishes, so the wait holds it in
+  Running. A script that is a service (a dev server, a tunnel — judged by its label and
+  command) never holds it: an endless server would hide a session that is asking
+  something. Because that judgement can miss, a wait holds for at most 2h. The
+  notifications and ⚡ above still fire at turn end either way.
 - **A pending task counts only once the harness confirms it and a live runner backs it.**
   A Bash or Agent launch counts only when its `tool_result` confirms a task was created:
   without that, no notification will ever come (it was denied, or ran synchronously). Every pending task is then checked against reality: the

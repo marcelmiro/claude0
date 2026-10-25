@@ -6,7 +6,7 @@ import { CONFIG_DIR } from "../../test/helpers/home";
 import { describe, expect, test, beforeEach } from "bun:test";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
-import { parseBackgroundTasks, pendingScripts, liveScripts } from "./background-tasks";
+import { parseBackgroundTasks, pendingScripts, liveScripts, isServiceScript } from "./background-tasks";
 
 // Dead verdicts are terminal AND persisted, so they would otherwise leak between tests.
 beforeEach(() => rmSync(join(CONFIG_DIR, "verdicts"), { recursive: true, force: true }));
@@ -326,4 +326,55 @@ describe("pendingScripts", () => {
     expect(pending[0]!.taskId).toBe("bwait2");
     expect(pending[0]!.label).toBe("gh pr checks --watch");
   });
+});
+
+// --- isServiceScript: real labels and commands from transcripts on disk ---
+
+test("isServiceScript: servers and tunnels are services, by label", () => {
+  for (const label of [
+    "Run the ink dev server on port 3000",
+    "Start Next.js dev server on :3000 (prod supabase)",
+    "Open the SSM port-forward to the Libretto QA API",
+    "Open the Maestro RDS tunnel in the background",
+    "Run local production server on :3002 (background)",
+    "Start embedded Postgres 18 on port 5439",
+  ]) expect(isServiceScript(label, "")).toBe(true);
+});
+
+test("isServiceScript: a port-binding, tunnel or dev-server command is a service whatever its label", () => {
+  for (const command of [
+    "CLAUDE0_BRIDGE_FIXTURES=1 CLAUDE0_BRIDGE_TOKEN=design-token CLAUDE0_BRIDGE_HOST=127.0.0.2 CLAUDE0_BRIDGE_PORT=8481 bun run bin/claude0.ts bridge",
+    "cd apps/dashboard && bun run dev --port 3001",
+    "aws ssm start-session --target i-0abc --document-name AWS-StartPortForwardingSession",
+    "ssh -N -L 5432:db.internal:5432 bastion",
+    "bunx vite --host",
+  ]) expect(isServiceScript("Restart fixtures bridge for the prototype", command)).toBe(true);
+});
+
+test("isServiceScript: waits stay waits, even when they name a service", () => {
+  for (const label of [
+    "Wait for CI to settle on new HEAD",
+    "Background-wait for Codex review on HEAD",
+    "Wait for the Trigger.dev preview deploy to finish",
+    "Poll GitHub Actions status once after 8 min",
+    "Watch detached reconcile driver pid 10527; exits when driver exits",
+    "Monitor the deploy to prod",
+    "sleep 99",
+  ]) expect(isServiceScript(label, "")).toBe(false);
+  expect(isServiceScript("Wait for the dev server to answer", "until curl -sf localhost:3000; do sleep 2; done")).toBe(false);
+  expect(isServiceScript("Wait for CI to settle on new HEAD", "gh pr checks 42 --watch")).toBe(false);
+});
+
+test("a background launch carries the service flag from its label or command", () => {
+  const tasks = parseBackgroundTasks([
+    JSON.stringify({ type: "assistant", message: { content: [
+      { type: "tool_use", id: "t1", name: "Bash", input: { command: "PORT=8481 bun run bin/claude0.ts bridge", description: "Restart fixtures bridge", run_in_background: true } },
+      { type: "tool_use", id: "t2", name: "Bash", input: { command: "gh pr checks 42 --watch", description: "Wait for CI", run_in_background: true } },
+    ] } }),
+    JSON.stringify({ type: "user", message: { content: [
+      { type: "tool_result", tool_use_id: "t1", content: "Command running in background with ID: b1. Output is being written to: /tmp/b1.output." },
+      { type: "tool_result", tool_use_id: "t2", content: "Command running in background with ID: b2. Output is being written to: /tmp/b2.output." },
+    ] } }),
+  ]);
+  expect(tasks.map((t) => [t.taskId, t.service])).toEqual([["b1", true], ["b2", undefined]]);
 });

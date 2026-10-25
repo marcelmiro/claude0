@@ -818,12 +818,13 @@ export function runSidebarRenderer(): void {
           break;
         }
         // done closes the pane. RUNNING keeps the double-tap — killing a
-        // mid-turn Claude throws away in-flight work.
+        // mid-turn Claude throws away in-flight work — and so does any ⏳ row:
+        // its background script dies with the pane.
         const s = findSession(row.id);
         const willKill = !!s?.real;
-        if (row.section === "running" && willKill && win.confirmKillId !== row.id) {
+        if ((row.section === "running" || s?.script) && willKill && win.confirmKillId !== row.id) {
           win.confirmKillId = row.id;
-          showFlash(win, "e again — done + close pane (mid-turn!)");
+          showFlash(win, s?.script ? "e again — done + close pane (script running!)" : "e again — done + close pane (mid-turn!)");
           paint(win);
           break;
         }

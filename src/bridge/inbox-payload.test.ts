@@ -57,6 +57,16 @@ describe("orderInboxRows", () => {
     expect(by["turn"]).toBe(NOW - H);
   });
 
+  test("a services-only ⏳ row is Needs You, aged from its turn end", () => {
+    const rows = orderInboxRows([sess({ id: "svc", since: NOW - 10 * 60_000, script: true })], new Map(), NOW);
+    expect(rows[0]!.meta).toEqual({ section: "needs-you", since: NOW - 10 * 60_000 });
+  });
+
+  test("a wait released by the cap is Needs You, aged from its turn end, not its wait anchor", () => {
+    const rows = orderInboxRows([sess({ id: "cap", since: NOW - 3 * H, script: true, scriptSince: NOW - 3 * H + 1 })], new Map(), NOW);
+    expect(rows[0]!.meta).toEqual({ section: "needs-you", since: NOW - 3 * H });
+  });
+
   test("archived >24h is History — dropped entirely", () => {
     const rows = orderInboxRows([sess({ id: "old", archivedAt: NOW - D - 1 })], new Map(), NOW);
     expect(rows).toEqual([]);

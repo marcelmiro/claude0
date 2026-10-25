@@ -14,6 +14,7 @@ Code: `core/background-tasks.ts`, `core/runner-verdicts.ts`, `core/script-wait.t
 | The navbar 🤖/⏳ pill and its sheet: the transcript payload's `pendingScripts`, filtered by the runner probe only, with no process gate | `liveScripts` via `readActiveBranchCached` (`core/session-api.ts`) |
 | Sheet order (pending scripts, running agents, agents finished since your last prompt, older collapsed) and its unknown-boundary rule | `AgentList` (`bridge/public/app.js`) |
 | Claude's native `shell` status maps to `ready`, with the shell shown only as ⏳ | `core/session-state.ts` header |
+| Wait vs service: a script whose label names a server or tunnel, or whose command binds a port, opens a tunnel or runs a dev server, is a service unless its label opens with a wait verb; only inbox placement reads the difference | `isServiceScript` (`core/background-tasks.ts`), `waitKind` (`core/script-wait.ts`) |
 | Whether an agent is done: a final text turn, or a successful `SubagentHandback` call (how current Claude Code ends an agent) | `subagentStatus` / `handedBack` (`core/session-api.ts`) |
 
 Three parts of what the phone shows aren't stated in any one file:
