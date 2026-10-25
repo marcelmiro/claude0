@@ -333,8 +333,11 @@
       .bubble.user:active { transform: scale(0.97); }
       .bubble.pending { opacity: 0.5; }
       /* Server-confirmed queue entry: sent mid-turn, waiting for Claude to consume it.
-         Dashed + dim to read as "held", distinct from the optimistic .pending fade. */
-      .bubble.queued { opacity: 0.55; border-style: dashed; }
+         Full-strength text in a dashed peach outline reads as "held" — distinct from the
+         optimistic .pending fade, which means "not delivered yet". */
+      .bubble.queued { background: transparent; border: 1px dashed rgba(255, 199, 153, 0.45); }
+      .queued > .queuedtag { color: var(--peach); opacity: 0.85; }
+      .queued > .queuedtag::before { content: "◷"; margin-right: 4px; letter-spacing: 0; }
       .queuedtag { margin-top: 4px; font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; text-align: right; color: var(--muted); }
       .tool {
         font-size: 12px;
@@ -494,7 +497,7 @@
       .bang-cmd.running { border-color: rgba(153, 255, 228, 0.45); }
       .bang-cmd.running .queuedtag { color: var(--mint); }
       .bang-cmd .livedot { animation: livepulse 1.4s ease-in-out infinite; }
-      .bang-cmd.queued { opacity: 0.55; border-style: dashed; }
+      .bang-cmd.queued { background: transparent; border-style: dashed; }
       .bang-out { width: 100%; margin: 0 0 2px; font-family: var(--mono); font-size: 12px; border-left: 2px solid var(--border); padding-left: 10px; }
       .bang-out pre { margin: 0; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; color: var(--mint); }
       .bang-out.err pre { color: var(--red); }
@@ -511,6 +514,7 @@
       /* halve the resting gap to the dock (base .scroll bottom is 24px; + dock's 8px top) */
       .scroll.thread { display: flex; flex-direction: column; align-items: flex-start; padding-bottom: 8px; }
       .scroll.thread::before { content: ""; margin-top: auto; }
+      .turnlist { display: contents; } /* DOM-only wrapper; turns stay flex items of .thread */
       /* Each Turn's blocks are wrapped in a .turn div which is the actual flex child.
          Pin it to full width (and let it shrink) so the bubbles' max-width %, the tool
          chip's ellipsis, and the left/right auto-margins all resolve against the SCREEN

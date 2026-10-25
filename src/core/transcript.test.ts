@@ -134,6 +134,21 @@ test("command turn label includes the args", () => {
   ]);
 });
 
+test("a bare slash-command prompt record is a command turn; a path-led prompt stays text", () => {
+  // A queued /compact dequeued at turn end is written as its bare text first (no
+  // <command-name>), and stays the thread's last turn for the whole compaction.
+  const raw = [
+    '{"type":"user","message":{"role":"user","content":"/compact"}}',
+    '{"type":"user","message":{"role":"user","content":"/loop 10m /pr-triage"}}',
+    '{"type":"user","message":{"role":"user","content":"/tmp/x is broken"}}',
+  ].join("\n");
+  expect(parseTranscript(raw)).toEqual([
+    { role: "user", content: [], command: "/compact" },
+    { role: "user", content: [], command: "/loop 10m /pr-triage" },
+    { role: "user", content: [{ type: "text", text: "/tmp/x is broken" }] },
+  ]);
+});
+
 test("drops isMeta user records (e.g. skill base-directory injection)", () => {
   const raw = [
     '{"type":"user","isMeta":true,"message":{"role":"user","content":"Base directory for this skill: /x\\n\\n# Skill"}}',

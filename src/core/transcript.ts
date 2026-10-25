@@ -238,6 +238,12 @@ function recordToTurnBody(record: RawRecord): FoldableTurn | null {
 
   // `!cmd` bash passthrough records (see BASH_INPUT above). Only `user` records carry them.
   if (record.type === "user") {
+    // A queued slash command dequeued at turn end is written first as its bare text, with
+    // no <command-name> — and a queued /compact stays the last turn for the whole
+    // compaction. Same command turn as its runner record. ("/tmp/x …" isn't a command.)
+    if (blocks.length === 1 && /^\/[\w:.-]+(\s|$)/.test(joined.trim())) {
+      return { role: "user", content: [], command: joined.trim() };
+    }
     const input = joined.match(BASH_INPUT);
     if (input) {
       return { role: "user", content: [], bash: { command: input[1].trim(), stdout: "", stderr: "" } };

@@ -291,6 +291,18 @@ function bangKey(text) {
   return s.startsWith("!") ? "!" + s.slice(1).trim() : s;
 }
 
+// A slash command's inline rendering — mono name, plain args — shared by executed command
+// turns and the queued/optimistic bubbles of a command that hasn't run yet.
+function commandBody(command) {
+  const s = command.trim();
+  const sp = s.search(/\s/);
+  const name = sp === -1 ? s : s.slice(0, sp);
+  const args = sp === -1 ? "" : s.slice(sp + 1).trim();
+  return html`<span class="cmdname">${name}</span>${args && ` ${args}`}`;
+}
+// Whether not-yet-run text is a slash command ("/tmp/x is broken" is a prompt, not one).
+const isSlashCommand = (text) => /^\/[\w:.-]+(\s|$)/.test(String(text || "").trim());
+
 // Text of every user turn already in the transcript — used to retire optimistic
 // bubbles once the real send lands (the transcript lags the pane by a few seconds).
 function userTurnTexts(t) {
@@ -576,7 +588,7 @@ function applyTranscript(id, data) {
     }
   }
   // Drop optimistic bubbles that have now materialized as real user turns — or as
-  // server-confirmed queue entries (the dim queued bubble takes over from there).
+  // server-confirmed queue entries (the outlined queued bubble takes over from there).
   if (pendingSends.value.length) {
     const seen = userTurnTexts(transcript.value);
     for (const q of transcript.value.queuedPending || []) seen.add(q.trim());
@@ -2497,12 +2509,9 @@ function Turn({ turn, upCount, canCode }) {
   // read as the same kind of thing the user said. Not a rewind checkpoint (content is
   // empty, so isPromptTurn already excludes it) — long-press is copy-only.
   if (turn.command) {
-    const sp = turn.command.indexOf(" ");
-    const name = sp === -1 ? turn.command : turn.command.slice(0, sp);
-    const args = sp === -1 ? "" : turn.command.slice(sp + 1).trim();
     // Single-line template: .bubble is pre-wrap, so template newlines would render.
     return html`<div class="turn">
-      <div class="bubble user" ...${lpProps(lpStartCopyOnly(turn.command))}><span class="cmdname">${name}</span>${args && ` ${args}`}</div>
+      <div class="bubble user" ...${lpProps(lpStartCopyOnly(turn.command))}>${commandBody(turn.command)}</div>
     </div>`;
   }
 
@@ -3206,6 +3215,7 @@ function Composer({ disabled, status }) {
     el.value = "";
     grow();
     syncHasText();
+    closeSlash(); // a programmatic clear fires no input event, so onInput can't close it
     el.blur(); // drop focus so the soft keyboard dismisses on submit
     // Exit bash mode after dispatch; no refocus — the blur above dismissed the keyboard.
     if (bashRef.current) exitBash({ focus: false });
@@ -3620,7 +3630,7 @@ function Detail() {
       if (b.type === "text" && b.text) landed.add(stripImagePrefix(b.text).trim());
     }
   }
-  // Queue entries count as landed too: the dim queued bubble renders them, so the
+  // Queue entries count as landed too: the outlined queued bubble renders them, so the
   // optimistic copy of the same text must stand down.
   for (const q of queued) landed.add(q.trim());
   const rawQuestions = t && (t.openQuestions || (t.openQuestion ? [t.openQuestion] : null));
@@ -3817,7 +3827,10 @@ function Detail() {
         ${t &&
         t.partial &&
         html`<div class="tail-loading">loading earlier messages…</div>`}
-        ${(() => {
+        <!-- The turn list gets its own parent: as a bare array beside the queued/pending
+             arrays and the working line, Preact inserted the turns added when the full
+             branch replaced the partial tail AFTER those siblings, stranding them mid-thread. -->
+        <div class="turnlist">${(() => {
           // Per user turn: upCount = Up-presses to reach it in the /rewind picker (0 = not a
           // checkpoint, so no rewind offered); canCode = whether any file-editing tool ran
           // after it (offer code-restore only when there's code to restore — Bash edits aren't
@@ -3883,7 +3896,7 @@ function Detail() {
             out.push(html`<${Turn} key=${i} turn=${turn} upCount=${up} canCode=${editAfter[i]} />`);
           }
           return out;
-        })()}
+        })()}</div>
         ${queued.map((text, i) =>
           text.trim().startsWith("!")
             ? html`<div
@@ -3899,7 +3912,7 @@ function Detail() {
                 key=${`q${i}`}
                 ...${lpProps(lpStartCopyOnly(text))}
               >
-                ${text}
+                ${isSlashCommand(text) ? commandBody(text) : text}
                 <div class="queuedtag">queued</div>
               </div>`,
         )}
@@ -3925,7 +3938,7 @@ function Detail() {
                   class="bubble user pending"
                   key=${`p${i}`}
                   ...${lpProps(lpStartCopyOnly(text))}
-                >${text}<${SendingTag} /></div>`,
+                >${isSlashCommand(text) ? commandBody(text) : text}<${SendingTag} /></div>`,
           )}
         ${pendingImageSends.value
           .filter((e) => !landed.has(stripImagePrefix(e.text).trim()))
