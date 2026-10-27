@@ -1859,6 +1859,8 @@ function List() {
         ? html`<span class="markdot" style=${dotStyle(s)}></span>`
         : null;
     const zap = s.unread && html`<span class="zapmark" title="unread">⚡</span>`;
+    // mid-turn ⏳ contradicts nothing — same rule as the window prefix (desiredPrefix)
+    const script = s.status !== "running" && s.pendingScripts > 0;
     return html`
       <button
         type="button"
@@ -1869,8 +1871,7 @@ function List() {
       >
         <span class="grow">
           <span class="name"
-            >${zap}${mark}${ib.woken && html`<span class="wokemark" title="snooze came due">☾</span>`}${s.pendingScripts >
-              0 &&
+            >${zap}${mark}${ib.woken && html`<span class="wokemark" title="snooze came due">☾</span>`}${script &&
             html`<span class="scriptmark" title="waiting on a background script">⏳</span>`}${listTitle(s)}</span
           >
           ${sub && html`<span class="sub">${sub}</span>`}
