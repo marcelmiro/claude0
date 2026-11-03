@@ -18,10 +18,11 @@
  *   Gating on the result of a known background tool_use also means a foreground
  *   command that merely PRINTS launch-shaped text can't false-positive.
  * - A foreground command that outlives its timeout is moved to the background by
- *   the harness: a Bash tool_result, or a user `!` command's `<bash-stdout>`, that
- *   OPENS with "Command did not complete within its Ns timeout and was moved to the
- *   background (ID: <id>)". Anchored at the start, because output quoting the
- *   notice (grepping transcripts) contains it mid-text.
+ *   the harness: a Bash tool_result that OPENS with "Command did not complete
+ *   within its Ns timeout and was moved to the background (ID: <id>)", or a user
+ *   `!` command's `<bash-stdout>` with that notice at the start of a line — the
+ *   stdout keeps whatever the command printed before the timeout. Anchored,
+ *   because output quoting the notice (grepping transcripts) contains it mid-line.
  * - The completion arrives as a `<task-notification>` payload in one of three
  *   carriers: a `user` message (session was idle), or a `queue-operation` /
  *   queued_command `attachment` record (session was mid-turn). Paired by
@@ -54,8 +55,9 @@ export interface BackgroundTask {
 const LABEL_CAP = 160;
 const BASH_LAUNCH_RE = /Command running in background with ID: (\S+?)\./;
 const OUTPUT_PATH_RE = /Output is being written to: (\S+)/;
-const TIMEOUT_LAUNCH_RE =
-  /^(?:<bash-stdout>)?Command did not complete within its \d+s timeout and was moved to the background \(ID: (\w+)\)/;
+const TIMEOUT_NOTICE = String.raw`Command did not complete within its \d+s timeout and was moved to the background \(ID: (\w+)\)`;
+const TIMEOUT_LAUNCH_RE = new RegExp(`^${TIMEOUT_NOTICE}`);
+const BANG_TIMEOUT_LAUNCH_RE = new RegExp(`(?:^<bash-stdout>|\n)${TIMEOUT_NOTICE}`);
 const BASH_INPUT_RE = /<bash-input>([\s\S]*?)<\/bash-input>/;
 const AGENT_LAUNCH_RE = /Async agent launched successfully[\s\S]*?agentId: (\w+)/;
 const NOTIF_TASK_ID_RE = /<task-id>(\S+?)<\/task-id>/;
@@ -196,7 +198,7 @@ function taskLineParser(): { feed: (line: string) => void; tasks: () => Backgrou
     if (typeof content === "string") {
       const input = content.match(BASH_INPUT_RE)?.[1];
       if (input !== undefined) lastBashInput = input.trim();
-      const taskId = content.match(TIMEOUT_LAUNCH_RE)?.[1];
+      const taskId = content.match(BANG_TIMEOUT_LAUNCH_RE)?.[1];
       if (taskId) launch(taskId, "script", lastBashInput.slice(0, LABEL_CAP), lastBashInput, taskId, content, ts);
     }
 

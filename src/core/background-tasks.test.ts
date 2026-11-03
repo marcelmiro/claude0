@@ -182,6 +182,22 @@ describe("parseBackgroundTasks", () => {
     ]);
   });
 
+  test("a user ! command that printed output before timing out is still a pending script", () => {
+    const jsonl = [
+      line({ type: "user", message: { content: "<bash-input> bun import.ts --push</bash-input>" } }),
+      line({
+        type: "user",
+        message: { content: `<bash-stdout>Retrying in 1,000 ms\n{"status":502}\n${timeoutNotice("bbang02")}</bash-stdout><bash-stderr></bash-stderr>` },
+      }),
+    ].join("\n");
+    expect(parseBackgroundTasks(jsonl).map((t) => [t.taskId, t.label, t.status])).toEqual([["bbang02", "bun import.ts --push", "pending"]]);
+  });
+
+  test("a user ! command whose output quotes the timeout notice mid-line yields no task", () => {
+    const jsonl = line({ type: "user", message: { content: `<bash-stdout>session.jsonl:${timeoutNotice("bzzz")}</bash-stdout>` } });
+    expect(parseBackgroundTasks(jsonl)).toEqual([]);
+  });
+
   test("foreground bash whose OUTPUT quotes the timeout notice yields no task", () => {
     const jsonl = foregroundBash("toolu_1", `session.jsonl:${timeoutNotice("bzzz")}`).join("\n");
     expect(parseBackgroundTasks(jsonl)).toEqual([]);
