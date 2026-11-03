@@ -182,6 +182,16 @@ describe("parseBackgroundTasks", () => {
     ]);
   });
 
+  test("an api-request-blob replaying a launch's result neither relaunches nor reopens the task", () => {
+    const launched = foregroundBash("toolu_1", timeoutNotice("btime02"));
+    const replay = line({
+      type: "api-request-blob",
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_1", content: timeoutNotice("btime02") }] },
+    });
+    const done = [...launched, line({ type: "user", message: { content: notif("btime02", "toolu_1") } }), replay];
+    expect(parseBackgroundTasks(done.join("\n")).map((t) => [t.status, t.launchedAt])).toEqual([["completed", "2026-07-21T00:02:00Z"]]);
+  });
+
   test("a user ! command that printed output before timing out is still a pending script", () => {
     const jsonl = [
       line({ type: "user", message: { content: "<bash-input> bun import.ts --push</bash-input>" } }),

@@ -146,6 +146,8 @@ function taskLineParser(): { feed: (line: string) => void; tasks: () => Backgrou
     } catch {
       return; // torn/partial line
     }
+    // Claude Code's copy of an API request: it replays already-logged messages, untimestamped.
+    if (rec["type"] === "api-request-blob") return;
     const content = (rec["message"] as { content?: unknown } | undefined)?.content;
     const ts = typeof rec["timestamp"] === "string" ? (rec["timestamp"] as string) : undefined;
 
