@@ -1,6 +1,5 @@
-// Claude0 (portkey) mobile bridge UI — Preact + signals + htm, no build step. Auth is the
-// HttpOnly `claude0` cookie (set by POST /auth); this file never touches the token
-// after the one login POST, and never puts it in a URL.
+// Claude0 (portkey) mobile bridge UI — Preact + signals + htm, no build step. No login:
+// the bridge admits same-origin requests from the tailnet owner (request-guard.ts).
 import { h, render } from "preact";
 import { useRef, useEffect, useLayoutEffect, useState } from "preact/hooks";
 import { signal } from "@preact/signals";
@@ -412,7 +411,11 @@ async function refreshSessions() {
   const seq = ++listReqSeq;
   try {
     const r = await fetch("/sessions");
-    if (r.status === 401) return (authed.value = false);
+    if (r.status === 403) {
+      // request-guard.ts refused this page (wrong host, or not the tailnet owner)
+      error.value = `bridge refused this page (${(await r.json().catch(() => ({}))).reason ?? "forbidden"})`;
+      return (authed.value = false);
+    }
     if (!r.ok) return;
     const data = await r.json();
     if (seq < listAppliedSeq) return; // a newer response already applied — never regress
@@ -636,7 +639,7 @@ async function refreshSubagent() {
 // Coalesce refetch bursts: an action's eager refresh and the SSE broadcast it triggers
 // land within a few hundred ms, and each fired a full /sessions + /transcript pair. The
 // leading call runs immediately; calls inside the window collapse into one trailing run.
-// Sites that must await a guaranteed-fresh result (login, boot) call the raw functions.
+// Sites that must await a guaranteed-fresh result (connect, boot) call the raw functions.
 function coalesce(fn, ms = 300) {
   let last = 0;
   let timer = null;
@@ -855,16 +858,10 @@ async function enablePush() {
   }
 }
 
-async function login(token) {
+async function connect() {
   error.value = "";
   loadingAuth.value = true;
   try {
-    const r = await fetch("/auth", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ token }),
-    });
-    if (!r.ok) return (error.value = "wrong token");
     await Promise.all([refreshSessions(), refreshPreferences()]);
     if (authed.value) {
       connectStream();
@@ -1770,21 +1767,12 @@ function Spinner() {
   `;
 }
 
-function Login() {
-  let value = "";
+function Unavailable() {
   return html`
     <div class="center login">
       <h1 class="brand">portkey</h1>
-      <div class="brandsub">enter your bridge token to connect</div>
-      <input
-        type="password"
-        autocomplete="off"
-        placeholder="bridge token"
-        onInput=${(e) => (value = e.target.value)}
-        onKeyDown=${(e) => e.key === "Enter" && login(value)}
-      />
-      <button class="primary" onClick=${() => login(value)}>Connect</button>
-      ${error.value && html`<div class="err">${error.value}</div>`}
+      <div class="err">${error.value || "bridge unreachable"}</div>
+      <button class="primary" onClick=${connect}>Retry</button>
     </div>
   `;
 }
@@ -4857,7 +4845,7 @@ function FilesView() {
 
 function App() {
   if (loadingAuth.value) return html`<${Spinner} />`;
-  if (!authed.value) return html`<${Login} />`;
+  if (!authed.value) return html`<${Unavailable} />`;
   const screen = showShell.value
     ? html`<${Shell} />`
     : showNewSession.value
@@ -5094,11 +5082,11 @@ window.addEventListener("pageshow", (e) => {
 // iOS sometimes evicts without a visibilitychange — pagehide is the backstop.
 window.addEventListener("pagehide", sendGoodbye);
 
-// --- boot: probe auth; the cookie (if present from a prior visit) authenticates ---
+// --- boot: probe the bridge; request-guard.ts admits this page or answers 403 ---
 // The static boot spinner in index.html owns the screen during this probe. We delay
 // Preact's first render() until the probe resolves so its first paint is already the
-// list/login — never a second spinner that would replace the static one and restart
-// its animation (the flicker). After boot, the in-app Spinner covers manual logins.
+// list/unavailable screen — never a second spinner that would replace the static one and
+// restart its animation (the flicker). After boot, the in-app Spinner covers a Retry.
 let booted = false;
 function boot() {
   if (booted) return;
@@ -5189,7 +5177,7 @@ async function followNotificationTap() {
 // Stale-while-revalidate boot: iOS evicts the backgrounded page constantly, so the most
 // common interaction — reopen after minutes — used to boot from a blank spinner. Paint
 // the last-persisted list immediately and let the auth probe below reconcile: a fresh
-// snapshot replaces it in place, and a 401 flips authed → the login screen as before.
+// snapshot replaces it in place, and a 403 flips authed → the unavailable screen.
 try {
   const saved = JSON.parse(localStorage.getItem("claude0-sessions") || "null");
   if (Array.isArray(saved) && saved.length) {
@@ -5215,7 +5203,7 @@ Promise.all([refreshSessions(), refreshPreferences()])
   })
   .finally(boot);
 
-// Timeout: if the auth probe hangs >20s, give up the spinner and show login/error.
+// Timeout: if the probe hangs >20s, give up the spinner and show the unavailable screen.
 bootTimeout = setTimeout(() => {
   if (!authed.value) error.value = "connection timeout";
   boot();

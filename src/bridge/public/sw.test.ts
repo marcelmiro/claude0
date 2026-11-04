@@ -278,7 +278,7 @@ test("API paths are never intercepted", async () => {
   const h = await loadWorker({ fetch: hang });
   expect(await h.dispatchFetch(get("/sessions"))).toBeUndefined();
   expect(await h.dispatchFetch(get("/stream?device=d1"))).toBeUndefined();
-  expect(await h.dispatchFetch({ method: "POST", url: `${ORIGIN}/auth`, mode: "cors" })).toBeUndefined();
+  expect(await h.dispatchFetch({ method: "POST", url: `${ORIGIN}/shell`, mode: "cors" })).toBeUndefined();
   // Cross-origin shell-shaped path: still not ours.
   expect(await h.dispatchFetch({ method: "GET", url: "https://other.test/app.js", mode: "no-cors" })).toBeUndefined();
 });

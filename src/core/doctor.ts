@@ -1,6 +1,6 @@
 /**
  * `claude0 doctor` — read-only, role-aware health checks; deliberately never
- * prints credentials or the bridge token. Every probe is wrapped: a failed
+ * prints credentials. Every probe is wrapped: a failed
  * probe is a failed check, never a crash.
  */
 
@@ -427,25 +427,32 @@ function bridgeCheck(): DoctorCheck {
   return {
     name: "bridge",
     async run(ctx) {
-      const envPath = `${ctx.home}/.config/claude0/bridge.env`;
-      const env = await readText(envPath);
-      if (env === null) return [fail(`bridge EnvironmentFile is missing or unreadable: ${envPath}`)];
-      const token = envValue(env, "CLAUDE0_BRIDGE_TOKEN");
-      if (!token) return [fail("bridge EnvironmentFile has no CLAUDE0_BRIDGE_TOKEN")];
       const port = await bridgePort(ctx.home);
       try {
-        const response = await fetch(`http://127.0.0.1:${port}/auth`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ token }),
-          signal: AbortSignal.timeout(3000),
-        });
-        return [response.status === 200 ? ok("bridge authentication = 200") : fail(`bridge authentication = ${response.status} (expected 200)`)];
+        // Loopback is the bridge's bind address, so request-guard.ts admits it.
+        const response = await fetch(`http://127.0.0.1:${port}/sessions`, { signal: AbortSignal.timeout(3000) });
+        return [response.status === 200 ? ok("bridge GET /sessions = 200") : fail(`bridge GET /sessions = ${response.status} (expected 200)`)];
       } catch {
         return [fail(`bridge is not answering on 127.0.0.1:${port}`)];
       }
     },
   };
+}
+
+/**
+ * Whether `tailscale serve status --json` output proxies tailnet https `port` to the
+ * bridge on the same loopback port — the shape setup installs. Portkey keeps an
+ * explicit port; the bare https://<host>/ is left to other host services.
+ */
+export function servesPortkey(statusJson: string, port: string): boolean {
+  try {
+    type Web = Record<string, { Handlers?: Record<string, { Proxy?: string }> }>;
+    const web = ((JSON.parse(statusJson) as { Web?: Web }).Web ?? {}) as Web;
+    const key = Object.keys(web).find((k) => k.endsWith(`:${port}`));
+    return !!key && web[key]?.Handlers?.["/"]?.Proxy === `http://127.0.0.1:${port}`;
+  } catch {
+    return false;
+  }
 }
 
 function tailscaleCheck(): DoctorCheck {
@@ -456,12 +463,12 @@ function tailscaleCheck(): DoctorCheck {
         return [fail("Tailscale is not connected")];
       }
       const port = await bridgePort(ctx.home);
-      const serve = (await probe(["tailscale", "serve", "status"])).out;
+      const serve = (await probe(["tailscale", "serve", "status", "--json"])).out;
       return [
         ok("Tailscale is connected"),
-        serve.includes(`127.0.0.1:${port}`)
-          ? ok("Tailscale Serve proxies the portkey bridge")
-          : fail(`Tailscale Serve is not proxying 127.0.0.1:${port}`),
+        servesPortkey(serve, port)
+          ? ok(`Tailscale Serve proxies https :${port} to the portkey bridge`)
+          : fail(`Tailscale Serve is not proxying https :${port} to 127.0.0.1:${port}`),
       ];
     },
   };

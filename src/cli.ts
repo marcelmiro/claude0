@@ -1966,23 +1966,6 @@ export async function sidebarCtl(cmd: string | undefined, paneId: string | undef
 }
 
 // ---------------------------------------------------------------------------
-// claude0 bridge token — print the bridge login token for phone pairing
-// ---------------------------------------------------------------------------
-
-export async function bridgeToken(): Promise<void> {
-  const path = `${PATHS.dir}/bridge.env`;
-  const env = await Bun.file(path)
-    .text()
-    .catch(() => null);
-  const token = env === null ? undefined : envValue(env, "CLAUDE0_BRIDGE_TOKEN");
-  if (!token) {
-    console.error(`No bridge token in ${path} — run \`claude0 setup --role host\` on the host first.`);
-    process.exit(2);
-  }
-  console.log(token);
-}
-
-// ---------------------------------------------------------------------------
 // claude0 notify <message> — broadcast a web push to every subscribed device
 // ---------------------------------------------------------------------------
 

@@ -1,7 +1,7 @@
 # 16. systemd user units run tmux and the bridge; resurrect never spawns claude
 
 Date: 2026-08-09
-Status: accepted; amended 2026-10-03 (session map saved only with the layout)
+Status: accepted; amended 2026-10-03 (session map saved only with the layout); amended by ADR 33 (no bridge token — bridge.env only carries a non-default port)
 
 Units, reboot checks and restore behavior: [deploy/README.md](../../deploy/README.md).
 

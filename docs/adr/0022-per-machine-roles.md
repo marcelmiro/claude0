@@ -1,7 +1,7 @@
 # 22. Every machine declares a deployment role; one Linux host owns the stack
 
 Date: 2026-08-23
-Status: accepted
+Status: accepted; amended by ADR 33 (host provisioning mints no bridge token)
 
 ## Context
 

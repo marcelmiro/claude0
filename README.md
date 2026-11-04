@@ -128,19 +128,14 @@ its config (`c0 doctor` reminds you). Change the chord with
 
 ### Phone
 
-The host serves the phone app over Tailscale. Grab the login token and the
-URL on the host:
-
-```sh
-c0 bridge token          # the login token
-tailscale serve status   # the app is the https:// line (proxy to port 8473)
-```
+The host serves the phone app over Tailscale at `https://<host's tailnet name>:8473/`
+(`tailscale serve status` shows it). There is no token: only you, signed in to the
+tailnet, get in ([ADR 33](docs/adr/0033-bridge-access-is-identity-not-a-token.md)).
 
 Then on your phone:
 
 1. Install the Tailscale app and log in to the same tailnet as the host.
-2. Open the https URL and paste the token when prompted. You should see your
-   sessions listed.
+2. Open the https URL. You should see your sessions listed.
 3. Add the page to your home screen (Share > Add to Home Screen) and open it
    from that icon; push notifications only work in the installed app. Allow
    them from the bell in the navbar when it appears.

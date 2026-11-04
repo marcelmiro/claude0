@@ -6,8 +6,8 @@
  * steps run first so a credential timeout can't half-apply a step.
  */
 
-import { existsSync, mkdirSync, writeFileSync, chmodSync, appendFileSync, readFileSync } from "node:fs";
-import { probe } from "./doctor";
+import { existsSync, mkdirSync, appendFileSync, readFileSync } from "node:fs";
+import { probe, servesPortkey } from "./doctor";
 
 /** apt packages the host workload needs. lsof: background-script liveness probes.
  * bubblewrap+socat: Claude Code's Linux sandbox — WITHOUT them it silently runs
@@ -92,7 +92,7 @@ export interface ProvisionStep {
   verdict: "run" | "done" | "blocked";
   message: string;
   commands: Command[];
-  /** TS-native effect (bridge token mint) — secrets never appear in the printable plan */
+  /** TS-native effect (bridge.env port line) */
   action?: (ctx: ProvisionContext) => void;
 }
 
@@ -116,7 +116,6 @@ export interface SystemState {
   lingerEnabled: boolean;
   /** Product units whose installed copy differs from the repo's */
   staleUnits: string[];
-  bridgeEnvPresent: boolean;
   bridgeEnvHasPort: boolean;
   bunPresent: boolean;
   claudePresent: boolean;
@@ -178,7 +177,7 @@ export async function probeSystemState(ctx: ProvisionContext): Promise<SystemSta
   const tailscalePresent = Bun.which("tailscale") !== null;
   const tailscaleUp = tailscalePresent && (await probe(["tailscale", "status"])).code === 0;
   const tailscaleServing =
-    tailscaleUp && (await probe(["tailscale", "serve", "status"])).out.includes(ctx.bridgePort);
+    tailscaleUp && servesPortkey((await probe(["tailscale", "serve", "status", "--json"])).out, ctx.bridgePort);
 
   const claudePresent = Bun.which("claude") !== null;
   let claudeAuthed = false;
@@ -206,7 +205,6 @@ export async function probeSystemState(ctx: ProvisionContext): Promise<SystemSta
     apparmorParserPresent: Bun.which("apparmor_parser") !== null,
     lingerEnabled: existsSync(`/var/lib/systemd/linger/${ctx.user}`),
     staleUnits,
-    bridgeEnvPresent: bridgeEnv !== null,
     bridgeEnvHasPort: bridgeEnv !== null && /^CLAUDE0_BRIDGE_PORT=/m.test(bridgeEnv),
     bunPresent: Bun.which("bun") !== null,
     claudePresent,
@@ -367,11 +365,11 @@ export function planProvision(state: SystemState, ctx: ProvisionContext): Provis
   } else if (!state.tailscaleUp) {
     steps.push(blocked("tailscale-serve", "sudo", "tailscale not up — join command in the checklist below"));
   } else if (state.tailscaleServing) {
-    steps.push(done("tailscale-serve", "sudo", `tailscale serve already proxying ${ctx.bridgePort}`));
+    steps.push(done("tailscale-serve", "sudo", `tailscale serve already proxying https :${ctx.bridgePort}`));
   } else {
     steps.push(
       run("tailscale-serve", "sudo", "enabling tailscale serve for the bridge", [
-        { argv: ["sudo", "tailscale", "serve", "--bg", ctx.bridgePort] },
+        { argv: ["sudo", "tailscale", "serve", "--bg", `--https=${ctx.bridgePort}`, ctx.bridgePort] },
       ]),
     );
   }
@@ -425,47 +423,30 @@ export function planProvision(state: SystemState, ctx: ProvisionContext): Provis
     );
   }
 
-  // bridge token — minted once, consumed by claude0-bridge.service via
-  // EnvironmentFile. TS-native action so the token never appears in the plan.
+  // A non-default bridge port reaches claude0-bridge.service through its optional
+  // EnvironmentFile; the default port needs no file at all.
   if (!state.systemd) {
-    steps.push(blocked("bridge-token", "user", "no systemd — skipping bridge token"));
-  } else if (state.bridgeEnvPresent && (ctx.bridgePort === "8473" || state.bridgeEnvHasPort)) {
-    steps.push(done("bridge-token", "user", "bridge token already minted"));
+    steps.push(blocked("bridge-port", "user", "no systemd — skipping bridge port"));
+  } else if (ctx.bridgePort === "8473" || state.bridgeEnvHasPort) {
+    steps.push(done("bridge-port", "user", `bridge port ${ctx.bridgePort} already in effect`));
   } else {
-    const message = state.bridgeEnvPresent
-      ? `recording bridge port ${ctx.bridgePort} → bridge.env`
-      : `minting bridge token → ${ctx.home}/.config/claude0/bridge.env`;
-    steps.push(run("bridge-token", "user", message, [], (c) => ensureBridgeEnv(c)));
+    steps.push(
+      run("bridge-port", "user", `recording bridge port ${ctx.bridgePort} → bridge.env`, [], (c) => ensureBridgeEnv(c)),
+    );
   }
 
   return steps;
 }
 
-/** 43 alphanumeric chars from a CSPRNG (matches the entropy of previously issued tokens). */
-export function generateBridgeToken(): string {
-  let token = "";
-  while (token.length < 43) {
-    const bytes = new Uint8Array(32);
-    crypto.getRandomValues(bytes);
-    token += Buffer.from(bytes).toString("base64").replace(/[^a-zA-Z0-9]/g, "");
-  }
-  return token.slice(0, 43);
-}
-
-/** Mint the bridge token (0600) and/or record a non-default port. */
+/** Record a non-default bridge port in bridge.env, which the bridge unit reads if present. */
 export function ensureBridgeEnv(ctx: ProvisionContext): void {
+  if (ctx.bridgePort === "8473") return;
   const dir = `${ctx.home}/.config/claude0`;
   const path = `${dir}/bridge.env`;
-  if (!existsSync(path)) {
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(path, `CLAUDE0_BRIDGE_TOKEN=${generateBridgeToken()}\n`, { mode: 0o600 });
-    chmodSync(path, 0o600);
-  }
-  // A non-default port must reach the bridge itself, not just tailscale serve: the
-  // server binds CLAUDE0_BRIDGE_PORT from this EnvironmentFile (default 8473).
-  if (ctx.bridgePort !== "8473" && !/^CLAUDE0_BRIDGE_PORT=/m.test(readFileSync(path, "utf8"))) {
-    appendFileSync(path, `CLAUDE0_BRIDGE_PORT=${ctx.bridgePort}\n`);
-  }
+  const current = existsSync(path) ? readFileSync(path, "utf8") : "";
+  if (/^CLAUDE0_BRIDGE_PORT=/m.test(current)) return;
+  mkdirSync(dir, { recursive: true });
+  appendFileSync(path, `CLAUDE0_BRIDGE_PORT=${ctx.bridgePort}\n`);
 }
 
 /**
@@ -489,7 +470,7 @@ export function guidedStops(state: SystemState, ctx: ProvisionContext): string[]
   }
   lines.push(
     "",
-    "Client pairing: run `claude0 bridge token` to print the phone login token — paste it into the phone app on first connect.",
+    `Client pairing: open https://<this host's tailnet name>:${ctx.bridgePort}/ on the phone and add it to the home screen.`,
     "Reboot once to prove unit autostart.",
   );
   return lines;

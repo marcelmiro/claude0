@@ -16,7 +16,7 @@ StartLimitBurst=5
 # tmux.service for why environment.d can't be trusted here).
 Environment=PATH=%h/.bun/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=%h/.bun/bin/claude0 bridge
-EnvironmentFile=%h/.config/claude0/bridge.env
+EnvironmentFile=-%h/.config/claude0/bridge.env
 Restart=always
 RestartSec=5s
 

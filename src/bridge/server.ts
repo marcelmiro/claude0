@@ -5,14 +5,12 @@
  * delegates to an existing `core/` function. Headless like `monitor.ts` — imports
  * `core/*` only, never `ui/`/`blessed`.
  *
- * Security posture: bind fail-closed (loopback / tailnet only); a static bearer
- * token, exchanged once via `POST /auth` for an HttpOnly cookie so the token never
- * rides in a URL. `/decision`, `/message`, `/answer`, `/config`, `/dialog` are remote-code-execution
- * by design (`/config` is allowlist-clamped) — the tailnet bind is the wall, the token is
- * defense-in-depth.
+ * Security posture: bind fail-closed (loopback / tailnet only), and no token —
+ * `request-guard.ts` admits the bind address and the node owner's tailnet identity,
+ * same-origin only (ADR 33). `/decision`, `/message`, `/answer`, `/config`, `/dialog`,
+ * `/shell` are remote-code-execution by design (`/config` is allowlist-clamped).
  */
 
-import { createHash, timingSafeEqual } from "node:crypto";
 import {
   existsSync,
   readdirSync,
@@ -106,6 +104,8 @@ import * as stream from "./stream";
 import { loadAllSessions, filterAndRankEntries, type SearchEntry } from "../core/search";
 import { fixtureData } from "./fixtures";
 import { runShell, SHELL_HISTORY, type ShellRun } from "../core/shell-run";
+import { probe } from "../core/doctor";
+import { bindHostHeader, guardRequest, tailnetIdentity, type GuardVerdict, type TailscaleStatus } from "./request-guard";
 import type { RestoreState, Session } from "../types";
 
 const PUBLIC_DIR = `${import.meta.dir}/public`;
@@ -147,27 +147,67 @@ const STATIC: Record<string, string> = {
 };
 
 // ---------------------------------------------------------------------------
-// Auth — sha256 + timingSafeEqual (equal-length digests → never throws, no leak)
+// Access control — request-guard.ts decides; this keeps its context current
 // ---------------------------------------------------------------------------
 
-let rawToken = "";
-let tokenDigest: Buffer;
+let bindHost = "";
+const tailnet: { name: string | null; owner: string | null } = { name: null, owner: null };
+let tailnetReadAt = 0;
+let tailnetTriedAt = 0;
+let tailnetRead: Promise<void> | null = null;
+let tailnetProblem = "";
+const TAILSCALE = Bun.which("tailscale") ?? "tailscale";
 
-function tokenMatches(presented: string | null | undefined): boolean {
-  if (!presented) return false;
-  const digest = createHash("sha256").update(presented).digest();
-  return timingSafeEqual(tokenDigest, digest);
+/**
+ * Re-read the node's MagicDNS name and owner login. Bounded by probe's deadline, and
+ * never more than one in flight. A good read is trusted for 30s (a rename needs a
+ * re-read); a failed one — tailscale not up yet at boot — may retry after 2s.
+ */
+function refreshTailnet(): Promise<void> {
+  if (tailnetRead) return tailnetRead;
+  const now = Date.now();
+  if (now - tailnetTriedAt < 2_000 || now - tailnetReadAt < 30_000) return Promise.resolve();
+  tailnetTriedAt = now;
+  tailnetRead = (async () => {
+    try {
+      const status = JSON.parse((await probe([TAILSCALE, "status", "--json"], 3_000)).out) as TailscaleStatus;
+      const read = tailnetIdentity(status, process.env.CLAUDE0_BRIDGE_OWNER);
+      if (read.problem) noteTailnetProblem(read.problem);
+      else {
+        tailnet.name = read.name;
+        tailnet.owner = read.owner;
+        tailnetReadAt = Date.now();
+        tailnetProblem = "";
+      }
+    } catch (e) {
+      noteTailnetProblem(`tailscale status --json failed: ${e}`); // down, missing, or not JSON
+    } finally {
+      tailnetRead = null;
+    }
+  })();
+  return tailnetRead;
 }
 
-function cookieToken(req: Request): string | null {
-  const header = req.headers.get("cookie");
-  if (!header) return null;
-  for (const part of header.split(";")) {
-    const eq = part.indexOf("=");
-    if (eq === -1) continue;
-    if (part.slice(0, eq).trim() === "claude0") return part.slice(eq + 1).trim();
-  }
-  return null;
+/** Logged once per distinct problem — the 2s retry would otherwise flood the journal. */
+function noteTailnetProblem(problem: string): void {
+  if (problem === tailnetProblem) return;
+  tailnetProblem = problem;
+  console.error(`tailnet identity not read (${tailnet.owner ? `keeping ${tailnet.owner}` : "tailnet requests refused"}): ${problem}`);
+}
+
+async function guard(req: Request): Promise<GuardVerdict> {
+  const input = {
+    host: req.headers.get("host"),
+    origin: req.headers.get("origin"),
+    secFetchSite: req.headers.get("sec-fetch-site"),
+    login: req.headers.get("tailscale-user-login"),
+    proxied: req.headers.has("x-forwarded-host") || req.headers.has("x-forwarded-for"),
+  };
+  const check = () => guardRequest(input, { bindHost, tailnetName: tailnet.name, owner: tailnet.owner });
+  const verdict = check();
+  if (verdict !== "bad-host" && verdict !== "not-owner") return verdict;
+  await refreshTailnet(); // the name/owner may not be read yet (boot) or may have changed
+  return check();
 }
 
 // ---------------------------------------------------------------------------
@@ -212,8 +252,15 @@ function staticResponse(rel: string): Response {
   // Vendored libs are immutable; the app's own HTML/JS changes as we iterate, so
   // forbid stale caching of it (mobile Safari otherwise serves an old bundle).
   const cache = rel.startsWith("vendor/") ? "public, max-age=86400" : "no-cache";
+  // No framing: a framed app's own fetches are same-origin and Serve attaches the owner's
+  // identity, so request-guard can't tell a page on another site steering it (ADR 33).
   return new Response(Bun.file(`${PUBLIC_DIR}/${rel}`), {
-    headers: { "content-type": type, "cache-control": cache },
+    headers: {
+      "content-type": type,
+      "cache-control": cache,
+      "content-security-policy": "frame-ancestors 'none'",
+      "x-frame-options": "DENY",
+    },
   });
 }
 
@@ -1211,17 +1258,9 @@ async function route(req: Request): Promise<Response> {
   // --- Public: static shell (carries no secret/data) ---
   if (method === "GET" && path in STATIC) return staticResponse(STATIC[path]!);
 
-  // --- Public: token → cookie exchange (the only place the token is accepted) ---
-  if (method === "POST" && path === "/auth") {
-    const body = (await req.json().catch(() => ({}))) as { token?: unknown };
-    if (typeof body.token !== "string" || !tokenMatches(body.token)) return json({ ok: false }, 401);
-    return json({ ok: true }, 200, {
-      "set-cookie": `claude0=${rawToken}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000`,
-    });
-  }
-
-  // --- Everything below is protected: valid claude0 cookie required ---
-  if (!tokenMatches(cookieToken(req))) return json({ ok: false }, 401);
+  // --- Everything below is protected (request-guard.ts) ---
+  const verdict = await guard(req);
+  if (verdict !== "ok") return json({ ok: false, reason: verdict }, 403);
 
   // --- Demo/test mode: canned data for the GET/action routes (`/stream` falls through) ---
   if (FIXTURES) {
@@ -1801,35 +1840,26 @@ async function route(req: Request): Promise<Response> {
 }
 
 // ---------------------------------------------------------------------------
-// Bind — fail-closed to loopback / tailnet (Tailscale CGNAT 100.64.0.0/10)
+// Bind — fail-closed to loopback: request-guard trusts identity headers only because
+// Tailscale Serve, in front, strips forged copies. A direct tailnet bind has nothing in front.
 // ---------------------------------------------------------------------------
 
-function isAllowedHost(host: string): boolean {
+export function isAllowedHost(host: string): boolean {
   if (host === "localhost" || host === "::1" || host === "[::1]") return true;
-  const m = host.match(/^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/);
-  if (!m) return false;
-  const a = Number(m[1]);
-  const b = Number(m[2]);
-  if (a === 127) return true; // loopback
-  if (a === 100 && b >= 64 && b <= 127) return true; // tailnet CGNAT
-  return false;
+  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
 }
 
 /** Returns the server so tests can bind port 0 and stop it; `claude0 bridge` ignores it. */
 export function startBridge(): ReturnType<typeof Bun.serve> {
   const host = process.env.CLAUDE0_BRIDGE_HOST ?? "127.0.0.1";
   const port = Number(process.env.CLAUDE0_BRIDGE_PORT ?? "8473");
-  rawToken = process.env.CLAUDE0_BRIDGE_TOKEN ?? "";
 
-  if (!rawToken) {
-    throw new Error("CLAUDE0_BRIDGE_TOKEN is required — refusing to start without a token (fail-closed)");
-  }
   if (!isAllowedHost(host)) {
     throw new Error(
-      `CLAUDE0_BRIDGE_HOST=${host} is not loopback or tailnet (100.64.0.0/10) — refusing to bind (fail-closed)`,
+      `CLAUDE0_BRIDGE_HOST=${host} is not loopback — refusing to bind (fail-closed; reach it through tailscale serve)`,
     );
   }
-  tokenDigest = createHash("sha256").update(rawToken).digest();
+  void refreshTailnet();
 
   // Warm the config cache so sync paths (abbreviateRepo in fork window naming)
   // see user config before the first route-level loadConfig() refreshes it.
@@ -1936,6 +1966,7 @@ export function startBridge(): ReturnType<typeof Bun.serve> {
       }
     },
   });
+  bindHost = bindHostHeader(host, server.port!); // the bound port — CLAUDE0_BRIDGE_PORT may be 0
   console.error(`claude0 bridge listening on http://${host}:${server.port}${FIXTURES ? " (fixtures mode — canned data)" : ""}`);
 
   // Pre-warm the /sessions projection so the phone's first request after a bridge
