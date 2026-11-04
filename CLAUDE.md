@@ -103,3 +103,4 @@ Processes & caches:
 | History depth | [7](docs/adr/0007-history-depth-is-claudes-retention.md) |  | `core/transcript.ts` |
 | Transcript stitching across project dirs, compact-link recovery | [29](docs/adr/0029-transcripts-span-project-dirs.md) |  | `core/last-turn.ts`, `core/transcript.ts`, `core/session-api.ts` |
 | Portkey shell (one-shot host command runner) | [30](docs/adr/0030-portkey-shell-is-a-one-shot-runner.md) | | `core/shell-run.ts`, `bridge/server.ts` |
+| Portkey served on its own port, not the host's bare URL | [32](docs/adr/0032-portkey-serves-on-its-own-port.md) | | `core/provision.ts`, `core/doctor.ts` |

@@ -70,7 +70,8 @@ Healthy looks like:
 
 - `systemctl --user status tmux claude0-bridge claude0-monitor claude0-daemon`
   shows all four active
-- `tailscale serve status` shows port 8473, and the phone reaches the bridge
+- `tailscale serve status` shows https :8473 → 127.0.0.1:8473, and the phone
+  reaches the bridge
 - tmux sessions are restored: tmux.service runs the resurrect restore on
   start, and its post-restore hook runs `claude0 restore-sessions` so Claude
   sessions resume in their panes

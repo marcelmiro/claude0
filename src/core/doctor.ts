@@ -448,6 +448,22 @@ function bridgeCheck(): DoctorCheck {
   };
 }
 
+/**
+ * Whether `tailscale serve status --json` output proxies tailnet https `port` to the
+ * bridge on the same loopback port — the shape setup installs. Portkey keeps an
+ * explicit port; the bare https://<host>/ is left to other host services.
+ */
+export function servesPortkey(statusJson: string, port: string): boolean {
+  try {
+    type Web = Record<string, { Handlers?: Record<string, { Proxy?: string }> }>;
+    const web = ((JSON.parse(statusJson) as { Web?: Web }).Web ?? {}) as Web;
+    const key = Object.keys(web).find((k) => k.endsWith(`:${port}`));
+    return !!key && web[key]?.Handlers?.["/"]?.Proxy === `http://127.0.0.1:${port}`;
+  } catch {
+    return false;
+  }
+}
+
 function tailscaleCheck(): DoctorCheck {
   return {
     name: "tailscale",
@@ -456,12 +472,12 @@ function tailscaleCheck(): DoctorCheck {
         return [fail("Tailscale is not connected")];
       }
       const port = await bridgePort(ctx.home);
-      const serve = (await probe(["tailscale", "serve", "status"])).out;
+      const serve = (await probe(["tailscale", "serve", "status", "--json"])).out;
       return [
         ok("Tailscale is connected"),
-        serve.includes(`127.0.0.1:${port}`)
-          ? ok("Tailscale Serve proxies the portkey bridge")
-          : fail(`Tailscale Serve is not proxying 127.0.0.1:${port}`),
+        servesPortkey(serve, port)
+          ? ok(`Tailscale Serve proxies https :${port} to the portkey bridge`)
+          : fail(`Tailscale Serve is not proxying https :${port} to 127.0.0.1:${port}`),
       ];
     },
   };

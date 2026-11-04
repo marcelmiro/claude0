@@ -168,8 +168,10 @@ screen; `--keep` leaves the bridge + Chrome up for poking around. Flags: `--port
 ## Notes
 
 - **HTTPS (optional, nicer):** enable *HTTPS Certificates* in the Tailscale admin
-  DNS page, then `tailscale serve --bg https://+:443 http://127.0.0.1:8473` for a
-  padlocked `https://<mac>.<tailnet>.ts.net/` with no port.
+  DNS page, then `tailscale serve --bg --https=8473 8473` for a padlocked
+  `https://<host>.<tailnet>.ts.net:8473/` — what `claude0 setup` installs on a Linux
+  host. The bare `:443` URL is left free for other host services
+  ([ADR 32](../../docs/adr/0032-portkey-serves-on-its-own-port.md)).
 - **Plain HTTP over the tailnet is fine** for the MVP — the tailnet is the
   encrypted transport and the wall; the token is defense-in-depth.
 - The bridge is a foreground/background process — it does **not** survive reboot

@@ -7,7 +7,7 @@
  */
 
 import { existsSync, mkdirSync, writeFileSync, chmodSync, appendFileSync, readFileSync } from "node:fs";
-import { probe } from "./doctor";
+import { probe, servesPortkey } from "./doctor";
 
 /** apt packages the host workload needs. lsof: background-script liveness probes.
  * bubblewrap+socat: Claude Code's Linux sandbox — WITHOUT them it silently runs
@@ -178,7 +178,7 @@ export async function probeSystemState(ctx: ProvisionContext): Promise<SystemSta
   const tailscalePresent = Bun.which("tailscale") !== null;
   const tailscaleUp = tailscalePresent && (await probe(["tailscale", "status"])).code === 0;
   const tailscaleServing =
-    tailscaleUp && (await probe(["tailscale", "serve", "status"])).out.includes(ctx.bridgePort);
+    tailscaleUp && servesPortkey((await probe(["tailscale", "serve", "status", "--json"])).out, ctx.bridgePort);
 
   const claudePresent = Bun.which("claude") !== null;
   let claudeAuthed = false;
@@ -367,11 +367,11 @@ export function planProvision(state: SystemState, ctx: ProvisionContext): Provis
   } else if (!state.tailscaleUp) {
     steps.push(blocked("tailscale-serve", "sudo", "tailscale not up — join command in the checklist below"));
   } else if (state.tailscaleServing) {
-    steps.push(done("tailscale-serve", "sudo", `tailscale serve already proxying ${ctx.bridgePort}`));
+    steps.push(done("tailscale-serve", "sudo", `tailscale serve already proxying https :${ctx.bridgePort}`));
   } else {
     steps.push(
       run("tailscale-serve", "sudo", "enabling tailscale serve for the bridge", [
-        { argv: ["sudo", "tailscale", "serve", "--bg", ctx.bridgePort] },
+        { argv: ["sudo", "tailscale", "serve", "--bg", `--https=${ctx.bridgePort}`, ctx.bridgePort] },
       ]),
     );
   }

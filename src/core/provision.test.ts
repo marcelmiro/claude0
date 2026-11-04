@@ -185,7 +185,7 @@ test("tailscale: installer only when missing; serve is guided-stop when not up, 
   expect(install.commands[0].argv[2]).toStartWith("set -o pipefail; ");
   expect(step(planProvision(satisfied({ tailscaleUp: false, tailscaleServing: false }), ctx), "tailscale-serve").verdict).toBe("blocked");
   const serve = step(planProvision(satisfied({ tailscaleServing: false }), { ...ctx, bridgePort: "9000" }), "tailscale-serve");
-  expect(serve.commands).toEqual([{ argv: ["sudo", "tailscale", "serve", "--bg", "9000"] }]);
+  expect(serve.commands).toEqual([{ argv: ["sudo", "tailscale", "serve", "--bg", "--https=9000", "9000"] }]);
 });
 
 test("bun/claude install via the official installer scripts only when missing", () => {

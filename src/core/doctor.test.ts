@@ -9,7 +9,7 @@ import "../../test/helpers/home";
 import { TEST_HOME, CONFIG_DIR } from "../../test/helpers/home";
 import { test, expect, beforeEach } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync, cpSync } from "node:fs";
-import { doctorChecks, summarize, runDoctor, renderTmuxFragment, renderTerminalLauncher, resurrectDoubleLoad, probe } from "./doctor";
+import { doctorChecks, summarize, runDoctor, renderTmuxFragment, renderTerminalLauncher, resurrectDoubleLoad, probe, servesPortkey } from "./doctor";
 import { imagePasteManifest, readServiceTemplates } from "./image-paste";
 import type { DoctorContext } from "./doctor";
 import { DEFAULT_CONFIG, tmuxKeys } from "./config";
@@ -362,4 +362,16 @@ test("image paste: a lock whose owner is dead is reported, a live owner's is not
   const dead = await check("image-paste", ctx({ role: "client", config }));
   expect(dead.at(-1)).toMatchObject({ status: "warn", label: expect.stringContaining("stale image paste lock") });
   rmSync(lock, { recursive: true, force: true });
+});
+
+test("servesPortkey: https :port must proxy to the bridge on the same loopback port", () => {
+  const status = (web: Record<string, string>) =>
+    JSON.stringify({
+      Web: Object.fromEntries(Object.entries(web).map(([k, proxy]) => [k, { Handlers: { "/": { Proxy: proxy } } }])),
+    });
+  expect(servesPortkey(status({ "vm.ts.net:8473": "http://127.0.0.1:8473" }), "8473")).toBe(true);
+  // the pre-move shape: portkey on the bare :443 URL
+  expect(servesPortkey(status({ "vm.ts.net:443": "http://127.0.0.1:8473" }), "8473")).toBe(false);
+  expect(servesPortkey(status({ "vm.ts.net:8473": "http://127.0.0.1:9000" }), "8473")).toBe(false);
+  expect(servesPortkey("", "8473")).toBe(false);
 });
