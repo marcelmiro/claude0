@@ -4,6 +4,8 @@
  *
  * - Host: the bridge's own bind address (loopback tools, the design loop) or the
  *   node's tailnet name. Anything else is a DNS-rebinding page, refused.
+ * - A request Tailscale Serve proxied never counts as loopback: Serve forwards the
+ *   client's Host verbatim, so `Host: 127.0.0.1:<port>` through it is a forgery.
  * - Tailnet requests must carry the node owner's `Tailscale-User-Login`. Tailscale
  *   Serve sets that header from the caller's identity and replaces a client-supplied
  *   copy; Funnel traffic and other tailnet users don't match.
@@ -17,6 +19,8 @@ export interface GuardRequest {
   origin: string | null;
   secFetchSite: string | null;
   login: string | null;
+  /** Arrived through a proxy (Serve adds X-Forwarded-For; a client can't strip it). */
+  proxied: boolean;
 }
 
 export interface GuardContext {
@@ -38,7 +42,7 @@ function hostnameOf(host: string): string {
 export function guardRequest(req: GuardRequest, ctx: GuardContext): GuardVerdict {
   const host = (req.host ?? "").toLowerCase();
   if (!host) return "bad-host";
-  if (host !== ctx.bindHost.toLowerCase()) {
+  if (req.proxied || host !== ctx.bindHost.toLowerCase()) {
     if (!ctx.tailnetName || hostnameOf(host) !== ctx.tailnetName.toLowerCase()) return "bad-host";
     if (!ctx.owner || req.login !== ctx.owner) return "not-owner";
   }

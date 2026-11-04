@@ -23,6 +23,8 @@ identity, replaces a client-supplied copy, preserves `Host`, and passes `Origin`
 
 1. **Host** is the bridge's own bind address (loopback tools, doctor, the design loop),
    or the node's MagicDNS name. Any other Host — a DNS-rebinding page — is refused.
+   A request that came through Serve (it adds `X-Forwarded-For`) never counts as
+   the bind address: Serve forwards the client's Host verbatim.
 2. **Tailnet requests carry the node owner's login.** The name and owner come from
    `tailscale status --json`; until they're known, tailnet requests are refused.
 3. **Browser requests are same-origin**: `Sec-Fetch-Site` must be `same-origin` or

@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 import { bindHostHeader, guardRequest, type GuardContext, type GuardRequest, type GuardVerdict } from "./request-guard";
 
 const CTX: GuardContext = { bindHost: "127.0.0.1:8473", tailnetName: "vm.example.ts.net", owner: "me@example.com" };
-const TAILNET = { host: "vm.example.ts.net:8473", login: "me@example.com" };
-const req = (r: Partial<GuardRequest>): GuardRequest => ({ host: null, origin: null, secFetchSite: null, login: null, ...r });
+const TAILNET = { host: "vm.example.ts.net:8473", login: "me@example.com", proxied: true };
+const req = (r: Partial<GuardRequest>): GuardRequest => ({ host: null, origin: null, secFetchSite: null, login: null, proxied: false, ...r });
 
 test.each<[string, Partial<GuardRequest>, Partial<GuardContext>, GuardVerdict]>([
   // Host allowlist
@@ -15,6 +15,8 @@ test.each<[string, Partial<GuardRequest>, Partial<GuardContext>, GuardVerdict]>(
   ["rebinding with a forged identity header", { host: "evil.example:8473", login: "me@example.com" }, {}, "bad-host"],
   ["tailnet name with a trailing dot", { ...TAILNET, host: "vm.example.ts.net.:8473" }, {}, "bad-host"],
   ["a lookalike suffix", { ...TAILNET, host: "vm.example.ts.net.evil.example:8473" }, {}, "bad-host"],
+  ["proxied request forging the loopback Host", { host: "127.0.0.1:8473", login: "someone@example.com", proxied: true }, {}, "bad-host"],
+  ["proxied request forging the loopback Host, no identity", { host: "127.0.0.1:8473", proxied: true }, {}, "bad-host"],
   ["loopback on another port", { host: "127.0.0.1:8921" }, {}, "bad-host"],
   ["tailnet IP instead of the name", { ...TAILNET, host: "100.77.206.39:8473" }, {}, "bad-host"],
   ["tailnet name unknown yet: fail closed", TAILNET, { tailnetName: null }, "bad-host"],

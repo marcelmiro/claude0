@@ -155,6 +155,7 @@ const tailnet: { name: string | null; owner: string | null } = { name: null, own
 let tailnetReadAt = 0;
 let tailnetTriedAt = 0;
 let tailnetRead: Promise<void> | null = null;
+let tailnetProblem = "";
 const TAILSCALE = Bun.which("tailscale") ?? "tailscale";
 
 /**
@@ -179,14 +180,22 @@ function refreshTailnet(): Promise<void> {
         tailnet.name = name;
         tailnet.owner = owner;
         tailnetReadAt = Date.now();
-      }
-    } catch {
-      // not JSON (tailscale down or missing) — tailnet requests stay refused
+        tailnetProblem = "";
+      } else noteTailnetProblem("no DNSName or owner login in tailscale status");
+    } catch (e) {
+      noteTailnetProblem(`tailscale status --json failed: ${e}`); // down, missing, or not JSON
     } finally {
       tailnetRead = null;
     }
   })();
   return tailnetRead;
+}
+
+/** Logged once per distinct problem — the 2s retry would otherwise flood the journal. */
+function noteTailnetProblem(problem: string): void {
+  if (problem === tailnetProblem) return;
+  tailnetProblem = problem;
+  if (!tailnet.name) console.error(`tailnet identity unknown, tailnet requests refused: ${problem}`);
 }
 
 async function guard(req: Request): Promise<GuardVerdict> {
@@ -195,6 +204,7 @@ async function guard(req: Request): Promise<GuardVerdict> {
     origin: req.headers.get("origin"),
     secFetchSite: req.headers.get("sec-fetch-site"),
     login: req.headers.get("tailscale-user-login"),
+    proxied: req.headers.has("x-forwarded-for"),
   };
   const check = () => guardRequest(input, { bindHost, tailnetName: tailnet.name, owner: tailnet.owner });
   const verdict = check();

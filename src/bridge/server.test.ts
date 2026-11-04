@@ -36,6 +36,7 @@ test("the guard refuses a foreign Host and cross-origin browser requests; the sh
   const status = async (path: string, headers: Record<string, string>, method = "GET") =>
     (await fetch(`${base}${path}`, { method, headers })).status;
   expect(await status("/sessions", { host: "evil.example:8473" })).toBe(403);
+  expect(await status("/sessions", { "x-forwarded-for": "100.64.0.9" })).toBe(403); // proxied, loopback Host forged
   expect(await status("/sessions", { "sec-fetch-site": "cross-site" })).toBe(403);
   expect(await status("/sessions", { "sec-fetch-site": "same-site" })).toBe(403);
   expect(await status("/shell", { origin: "http://127.0.0.1:8921" }, "POST")).toBe(403);
