@@ -1,6 +1,6 @@
 /**
  * `claude0 doctor` — read-only, role-aware health checks; deliberately never
- * prints credentials or the bridge token. Every probe is wrapped: a failed
+ * prints credentials. Every probe is wrapped: a failed
  * probe is a failed check, never a crash.
  */
 
@@ -427,20 +427,11 @@ function bridgeCheck(): DoctorCheck {
   return {
     name: "bridge",
     async run(ctx) {
-      const envPath = `${ctx.home}/.config/claude0/bridge.env`;
-      const env = await readText(envPath);
-      if (env === null) return [fail(`bridge EnvironmentFile is missing or unreadable: ${envPath}`)];
-      const token = envValue(env, "CLAUDE0_BRIDGE_TOKEN");
-      if (!token) return [fail("bridge EnvironmentFile has no CLAUDE0_BRIDGE_TOKEN")];
       const port = await bridgePort(ctx.home);
       try {
-        const response = await fetch(`http://127.0.0.1:${port}/auth`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ token }),
-          signal: AbortSignal.timeout(3000),
-        });
-        return [response.status === 200 ? ok("bridge authentication = 200") : fail(`bridge authentication = ${response.status} (expected 200)`)];
+        // Loopback is the bridge's bind address, so request-guard.ts admits it.
+        const response = await fetch(`http://127.0.0.1:${port}/sessions`, { signal: AbortSignal.timeout(3000) });
+        return [response.status === 200 ? ok("bridge GET /sessions = 200") : fail(`bridge GET /sessions = ${response.status} (expected 200)`)];
       } catch {
         return [fail(`bridge is not answering on 127.0.0.1:${port}`)];
       }

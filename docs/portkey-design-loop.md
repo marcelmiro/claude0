@@ -8,7 +8,7 @@ touching real sessions. Verified 2026-08-18 on the Linux VM host (Chrome at
 
 1. **Playground bridge** (fixtures, never real sessions):
    ```sh
-   CLAUDE0_BRIDGE_FIXTURES=1 CLAUDE0_BRIDGE_TOKEN=design-token \
+   CLAUDE0_BRIDGE_FIXTURES=1 \
    CLAUDE0_BRIDGE_HOST=127.0.0.2 CLAUDE0_BRIDGE_PORT=8481 bun run bin/claude0.ts bridge
    ```
    Fixtures cover every status/section including woken/blocked/done rows;
@@ -16,20 +16,16 @@ touching real sessions. Verified 2026-08-18 on the Linux VM host (Chrome at
 2. **Browser at phone viewport** via the `inspect-ui` skill:
    `session open "http://127.0.0.2:8481/" --width 390 --height 844`, then
    `act`/`shot`/`measure`/`a11y`.
-3. **Login once per profile**: `act` → `type:input[type=password]:design-token`,
-   `click:text:Connect`. The HttpOnly cookie persists in the debug profile —
-   no re-login on later runs.
-4. **Iterate**: edit `src/bridge/public/*` → reload/re-shot (served
+   No login: the bridge admits requests addressed to its own bind address.
+3. **Iterate**: edit `src/bridge/public/*` → reload/re-shot (served
    `no-cache`, no bridge restart). Server-side changes need the playground
    bridge process restarted.
 
 ## Gotchas
 
-- **The auth cookie is per-HOST, not per-port** — two bridges on 127.0.0.1
-  clobber each other's login. Bind the playground to `127.0.0.2` (loopback /8
-  passes the bridge's fail-closed host check) so the real bridge
-  (127.0.0.1:8473) and the playground keep independent cookies.
-- **Never reuse the real bridge token for the playground.**
+- Bind the playground to `127.0.0.2` (loopback /8 passes the bridge's fail-closed
+  host check) so it can't be confused with the real bridge on 127.0.0.1:8473 —
+  the two share no state in the browser (localStorage is per origin).
 - `act` has no long-press primitive, so the session action sheet can't be
   opened by driving the UI — iterate on it via a temporary dev hook or
   on-device.
@@ -38,8 +34,7 @@ touching real sessions. Verified 2026-08-18 on the Linux VM host (Chrome at
 
 ## Real-data variant
 
-Same tool against `http://127.0.0.1:8473` with the token from
-`~/.config/claude0/bridge.env` — read-only discipline: screenshots and opens are
+Same tool against `http://127.0.0.1:8473` — read-only discipline: screenshots and opens are
 fine; never tap approve/archive/send there.
 
 `bun run shoot` captures the fixture screens headlessly
@@ -59,8 +54,7 @@ switches) without touching live sessions, the inbox, or the phone:
   tmux call goes to the lab server.
 - **Whole stack in a browser:** a second bridge with `CLAUDE0_HOME=<scratch>/c0home`
   (copy `names.json` and `config.json` in first, or it AI-names every archived
-  session), the lab `TMUX`, `CLAUDE0_BRIDGE_HOST=127.0.0.3`, its own port and
-  token. Its "inbox snapshot is stale" banner is expected (no daemon).
+  session), the lab `TMUX`, `CLAUDE0_BRIDGE_HOST=127.0.0.3` and its own port. Its "inbox snapshot is stale" banner is expected (no daemon).
 - **`/model` and `/effort` write the global `~/.claude/settings.json`.** Snapshot
   it before the lab and restore it afterwards.
 - **Cleanup:** `tmux -L c0lab kill-server`, then delete the lab's

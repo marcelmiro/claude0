@@ -23,7 +23,6 @@ function help() {
     \x1b[36msave-sessions\x1b[0m       Snapshot pane→session map for tmux-resurrect
     \x1b[36mrestore-sessions\x1b[0m    Restore Claude sessions after tmux-resurrect restore
     \x1b[36mresurrect <action>\x1b[0m  Run tmux-resurrect's save|restore script (resolves the install)
-    \x1b[36mbridge token\x1b[0m        Print the phone app's login token
 
   \x1b[1mService commands\x1b[0m (run by launchd/systemd, not by hand):
     \x1b[36mbridge\x1b[0m              Serve the HTTP/SSE bridge for the mobile web app
@@ -189,10 +188,6 @@ switch (cmd) {
     await import("../src/cli").then((m) => m.sidebarCtl(process.argv[3], process.argv[4]));
     break;
   case "bridge":
-    if (process.argv[3] === "token") {
-      await import("../src/cli").then((m) => m.bridgeToken());
-      break;
-    }
     try {
       await import("../src/bridge/server").then((m) => m.startBridge());
     } catch (err) {

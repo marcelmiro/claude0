@@ -64,7 +64,7 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
   const isNav = req.mode === "navigate";
-  if (!isNav && !SHELL_PATHS.includes(url.pathname)) return; // API, /stream, /auth: untouched
+  if (!isNav && !SHELL_PATHS.includes(url.pathname)) return; // API, /stream: untouched
   const cacheKey = isNav ? "/" : url.pathname;
 
   // Network-first: fetch always starts, and a 200 always refreshes the cache —

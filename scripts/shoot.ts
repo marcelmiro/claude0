@@ -3,14 +3,13 @@
  * shoot.ts — screenshot the bridge mobile UI headlessly (zero deps).
  *
  * Boots the bridge in fixtures mode, drives headless Chrome over the DevTools Protocol
- * (sets the auth cookie — CDP bypasses HttpOnly — navigates, captures PNGs of the
- * login / list / detail screens), then tears everything down. Lets an agent or human
+ * (navigates, captures PNGs of the list / detail screens), then tears everything down. Lets an agent or human
  * VISUALLY verify CSS/layout changes without an iPhone.
  *
  *   bun run scripts/shoot.ts [--out <dir>] [--port <n>] [--cdp-port <n>] [--keep]
  *
- * Requires Google Chrome (or set CHROME=/path/to/chrome). Writes login.png, list.png,
- * detail.png to <dir> (default: $TMPDIR/c0-shots).
+ * Requires Google Chrome (or set CHROME=/path/to/chrome). Writes list.png, detail.png
+ * and the other screens to <dir> (default: $TMPDIR/c0-shots).
  */
 
 import { existsSync, mkdtempSync } from "node:fs";
@@ -27,7 +26,6 @@ const OUT = flag("--out", join(tmpdir(), "c0-shots"));
 const BRIDGE_PORT = Number(flag("--port", "8479"));
 const CDP_PORT = Number(flag("--cdp-port", "9223"));
 const KEEP = args.includes("--keep");
-const TOKEN = process.env.CLAUDE0_BRIDGE_TOKEN || "shoot-token";
 const BASE = `http://127.0.0.1:${BRIDGE_PORT}`;
 
 const log = (m: string) => console.error(`[shoot] ${m}`);
@@ -125,7 +123,6 @@ async function main() {
     cwd: ROOT,
     env: {
       ...process.env,
-      CLAUDE0_BRIDGE_TOKEN: TOKEN,
       CLAUDE0_BRIDGE_HOST: "127.0.0.1",
       CLAUDE0_BRIDGE_PORT: String(BRIDGE_PORT),
       CLAUDE0_BRIDGE_FIXTURES: "1",
@@ -159,12 +156,7 @@ async function main() {
   // iPhone-ish viewport (the app caps content at 680px; 402 keeps the mobile layout).
   await cdp.send("Emulation.setDeviceMetricsOverride", { width: 402, height: 874, deviceScaleFactor: 2, mobile: true });
 
-  // 3a. Login screen — no cookie yet → /sessions 401 → login renders.
-  await navigate(cdp, `${BASE}/`);
-  await shoot(cdp, "login.png");
-
-  // 3b. Set the auth cookie (CDP bypasses HttpOnly), reload → session list.
-  await cdp.send("Network.setCookie", { name: "claude0", value: TOKEN, domain: "127.0.0.1", path: "/" });
+  // 3b. Session list — the bridge admits its own bind address (request-guard.ts).
   await navigate(cdp, `${BASE}/`);
   await shoot(cdp, "list.png");
 

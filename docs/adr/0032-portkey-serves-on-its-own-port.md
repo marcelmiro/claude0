@@ -1,7 +1,7 @@
 # 32. Portkey is served on its own port, not the host's bare URL
 
 Date: 2026-11-04
-Status: accepted
+Status: accepted; amended by ADR 33 (no sign-in cookie)
 
 ## Context
 
@@ -24,5 +24,3 @@ loopback port, and leaves `:443` alone.** Doctor checks that exact shape.
   hand (they would keep receiving pushes whose taps open whatever now owns `:443`).
 - The old origin's service worker stays registered on the bare URL. It is
   network-first, so it passes through to whatever serves there.
-- The sign-in cookie is host-scoped and cookies ignore ports, so a cookie set on the
-  old origin still authenticates on `:8473`.

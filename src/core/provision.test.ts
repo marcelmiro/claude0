@@ -8,7 +8,7 @@
 import "../../test/helpers/home";
 import { TEST_HOME } from "../../test/helpers/home";
 import { test, expect } from "bun:test";
-import { readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import {
   HOST_PACKAGES,
   PRODUCT_UNITS,
@@ -16,7 +16,6 @@ import {
   planProvision,
   executeProvision,
   guidedStops,
-  generateBridgeToken,
   ensureBridgeEnv,
   renderDryRun,
 } from "./provision";
@@ -50,7 +49,6 @@ function satisfied(overrides: Partial<SystemState> = {}): SystemState {
     apparmorParserPresent: true,
     lingerEnabled: true,
     staleUnits: [],
-    bridgeEnvPresent: true,
     bridgeEnvHasPort: false,
     bunPresent: true,
     claudePresent: true,
@@ -89,7 +87,7 @@ test("steps are batched sudo-first in the notes' execution order", () => {
     "claude",
     "units",
     "units-enable",
-    "bridge-token",
+    "bridge-port",
   ]);
   const firstUser = steps.findIndex((s) => s.scope === "user");
   expect(steps.slice(0, firstUser).every((s) => s.scope === "sudo")).toBe(true);
@@ -220,36 +218,25 @@ test("units: stale product units are copied from config/units and all four enabl
   expect(step(blocked, "units-enable").verdict).toBe("blocked");
 });
 
-test("bridge token: minted when absent, port recorded when non-default, done otherwise", () => {
-  expect(step(planProvision(satisfied(), ctx), "bridge-token").verdict).toBe("done");
-  expect(step(planProvision(satisfied({ bridgeEnvPresent: false }), ctx), "bridge-token").verdict).toBe("run");
-  // non-default port not yet recorded → run; recorded → done
-  expect(step(planProvision(satisfied(), { ...ctx, bridgePort: "9000" }), "bridge-token").verdict).toBe("run");
-  expect(step(planProvision(satisfied({ bridgeEnvHasPort: true }), { ...ctx, bridgePort: "9000" }), "bridge-token").verdict).toBe("done");
-  expect(step(planProvision(satisfied({ bridgeEnvPresent: false, systemd: false }), ctx), "bridge-token").verdict).toBe("blocked");
+test("bridge port: done on the default port, recorded once when non-default", () => {
+  expect(step(planProvision(satisfied(), ctx), "bridge-port").verdict).toBe("done");
+  expect(step(planProvision(satisfied(), { ...ctx, bridgePort: "9000" }), "bridge-port").verdict).toBe("run");
+  expect(step(planProvision(satisfied({ bridgeEnvHasPort: true }), { ...ctx, bridgePort: "9000" }), "bridge-port").verdict).toBe("done");
+  expect(step(planProvision(satisfied({ systemd: false }), ctx), "bridge-port").verdict).toBe("blocked");
 });
 
 // --- bridge env action ---
 
-test("ensureBridgeEnv mints a 43-char alnum token at 0600 and appends only a missing non-default port", () => {
+test("ensureBridgeEnv writes nothing on the default port and appends a missing non-default port once", () => {
   const path = `${TEST_HOME}/.config/claude0/bridge.env`;
   rmSync(path, { force: true });
   ensureBridgeEnv(ctx);
-  const env = readFileSync(path, "utf8");
-  const token = env.match(/^CLAUDE0_BRIDGE_TOKEN=([a-zA-Z0-9]{43})\n/)?.[1];
-  expect(token).toBeDefined();
-  expect(statSync(path).mode & 0o777).toBe(0o600);
-  // re-run with a non-default port: token untouched, port appended once
+  expect(existsSync(path)).toBe(false);
+  // a fresh host: the file and its directory don't exist yet
   ensureBridgeEnv({ ...ctx, bridgePort: "9000" });
   ensureBridgeEnv({ ...ctx, bridgePort: "9000" });
-  const after = readFileSync(path, "utf8");
-  expect(after).toContain(`CLAUDE0_BRIDGE_TOKEN=${token}`);
-  expect(after.match(/^CLAUDE0_BRIDGE_PORT=9000$/gm)).toHaveLength(1);
+  expect(readFileSync(path, "utf8").match(/^CLAUDE0_BRIDGE_PORT=9000$/gm)).toHaveLength(1);
   rmSync(path, { force: true });
-});
-
-test("generateBridgeToken is 43 alphanumeric chars", () => {
-  for (let i = 0; i < 5; i++) expect(generateBridgeToken()).toMatch(/^[a-zA-Z0-9]{43}$/);
 });
 
 // --- executor ---
@@ -289,12 +276,12 @@ test("a failed required command aborts naming the step; allowFailure continues w
   expect(failing.ran.some((c) => c.startsWith("systemctl --user daemon-reload"))).toBe(true);
 });
 
-test("executeProvision fires the bridge-token action", async () => {
+test("executeProvision fires the bridge-port action", async () => {
   const path = `${TEST_HOME}/.config/claude0/bridge.env`;
   rmSync(path, { force: true });
-  const steps = planProvision(satisfied({ bridgeEnvPresent: false }), ctx);
-  await executeProvision(steps, ctx, () => {}, fakeExec().exec);
-  expect(readFileSync(path, "utf8")).toMatch(/^CLAUDE0_BRIDGE_TOKEN=/);
+  const portCtx = { ...ctx, bridgePort: "9000" };
+  await executeProvision(planProvision(satisfied(), portCtx), portCtx, () => {}, fakeExec().exec);
+  expect(readFileSync(path, "utf8")).toMatch(/^CLAUDE0_BRIDGE_PORT=9000$/m);
   rmSync(path, { force: true });
 });
 
@@ -307,18 +294,17 @@ test("guided stops list exactly the unauthenticated tools with exact commands; p
   expect(all.filter((l) => l.includes("[todo]"))).toHaveLength(3);
   const none = guidedStops(satisfied(), ctx);
   expect(none.some((l) => l.includes("[todo]"))).toBe(false);
-  expect(none.join("\n")).toContain("bridge token");
+  expect(none.join("\n")).toContain(":8473/");
 });
 
-test("renderDryRun prints every step with a verdict and never a secret", () => {
-  const state = satisfied({ bridgeEnvPresent: false, missingPackages: ["netcat-openbsd"], claudeAuthed: false });
+test("renderDryRun prints every step with a verdict", () => {
+  const state = satisfied({ missingPackages: ["netcat-openbsd"], claudeAuthed: false });
   const lines = renderDryRun(planProvision(state, ctx), state, ctx);
   expect(lines[0]).toContain("--dry-run");
-  for (const id of ["packages", "sysctl", "bridge-token", "units-enable"]) {
+  for (const id of ["packages", "sysctl", "bridge-port", "units-enable"]) {
     expect(lines.some((l) => l.includes(id))).toBe(true);
   }
   expect(lines.some((l) => l.includes("[run ]") && l.includes("packages"))).toBe(true);
   expect(lines.some((l) => l.includes("[skip]") && l.includes("timezone already"))).toBe(true);
-  expect(lines.join("\n")).not.toMatch(/CLAUDE0_BRIDGE_TOKEN=[a-zA-Z0-9]/);
   expect(lines.join("\n")).toContain("$ sudo apt-get update -qq");
 });

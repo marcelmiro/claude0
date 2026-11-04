@@ -1,7 +1,8 @@
 /**
  * Bridge routes — the Web Push surface (`/push/*`) and the `/sw.js` no-cache
  * guarantee, exercised over a real `startBridge` server on an ephemeral port.
- * Auth is the real cookie exchange; core state lands under the temp HOME.
+ * Access control is the real request guard (loopback bind Host); core state lands
+ * under the temp HOME.
  *
  * `home` helper first — freezes PATHS/EVENTS_DIR under a temp HOME before
  * server.ts (via core/config) freezes them at import time.
@@ -14,35 +15,35 @@ import { EVENTS_DIR } from "../core/hook-events";
 import { CONSUMERS_DIR, fromB64url } from "../core/web-push";
 import { startBridge, applyTail, gzipJson } from "./server";
 
-const TOKEN = "route-test-token";
 let server: ReturnType<typeof startBridge>;
 let base = "";
-let cookie = "";
 
 beforeAll(async () => {
   mkdirSync(EVENTS_DIR, { recursive: true });
-  process.env.CLAUDE0_BRIDGE_TOKEN = TOKEN;
   process.env.CLAUDE0_BRIDGE_PORT = "0"; // ephemeral — never collides with a live bridge
   server = startBridge();
   base = `http://127.0.0.1:${server.port}`;
-  const res = await fetch(`${base}/auth`, {
-    method: "POST",
-    body: JSON.stringify({ token: TOKEN }),
-  });
-  expect(res.status).toBe(200);
-  cookie = res.headers.get("set-cookie")!.split(";")[0]!;
 });
 
 afterAll(() => {
   server?.stop(true);
 });
 
-const get = (path: string) => fetch(`${base}${path}`, { headers: { cookie } });
-const post = (path: string, body: unknown) =>
-  fetch(`${base}${path}`, { method: "POST", headers: { cookie }, body: JSON.stringify(body) });
+const get = (path: string) => fetch(`${base}${path}`);
+const post = (path: string, body: unknown) => fetch(`${base}${path}`, { method: "POST", body: JSON.stringify(body) });
 
-test("/push/vapid-key requires auth and returns a 65-byte P-256 key", async () => {
-  expect((await fetch(`${base}/push/vapid-key`)).status).toBe(401);
+test("the guard refuses a foreign Host and cross-origin browser requests; the shell stays public", async () => {
+  const status = async (path: string, headers: Record<string, string>, method = "GET") =>
+    (await fetch(`${base}${path}`, { method, headers })).status;
+  expect(await status("/sessions", { host: "evil.example:8473" })).toBe(403);
+  expect(await status("/sessions", { "sec-fetch-site": "cross-site" })).toBe(403);
+  expect(await status("/sessions", { "sec-fetch-site": "same-site" })).toBe(403);
+  expect(await status("/shell", { origin: "http://127.0.0.1:8921" }, "POST")).toBe(403);
+  expect(await status("/sessions", { "sec-fetch-site": "same-origin" })).toBe(200);
+  expect(await status("/", { host: "evil.example:8473", "sec-fetch-site": "cross-site" })).toBe(200);
+});
+
+test("/push/vapid-key returns a 65-byte P-256 key", async () => {
   const res = await get("/push/vapid-key");
   expect(res.status).toBe(200);
   const { key } = (await res.json()) as { key: string };
@@ -86,8 +87,7 @@ test("/push/goodbye unlinks the device's consumer marker (text/plain body)", asy
   writeFileSync(marker, "");
   const res = await fetch(`${base}/push/goodbye`, {
     method: "POST",
-    headers: { cookie },
-    body: "goodbye-dev-1",
+        body: "goodbye-dev-1",
   });
   expect(res.status).toBe(200);
   expect(existsSync(marker)).toBe(false);
@@ -109,7 +109,7 @@ async function readStreamUntil(
   pred: (ev: Record<string, unknown>) => boolean,
   ms = 5000,
 ): Promise<Record<string, unknown> | null> {
-  const res = await fetch(`${base}${path}`, { headers: { cookie } });
+  const res = await fetch(`${base}${path}`, {});
   expect(res.status).toBe(200);
   expect(res.headers.get("content-type")).toContain("text/event-stream");
   const reader = res.body!.getReader();
@@ -150,7 +150,7 @@ test("/stream pushes a seq-stamped sessions snapshot on connect", async () => {
 test("/stream/open subscribes the device and pushes a transcript snapshot", async () => {
   const sub = await fetch(`${base}/stream/open`, {
     method: "POST",
-    headers: { cookie, "x-claude0-device": "stream-test-dev" },
+    headers: { "x-claude0-device": "stream-test-dev" },
     body: JSON.stringify({ sessionId: "no-such-session" }),
   });
   expect(await sub.json()).toEqual({ ok: true });
@@ -170,7 +170,7 @@ test("/stream/open validates its body and requires a device", async () => {
   expect(noDevice.status).toBe(400);
   const badBody = await fetch(`${base}/stream/open`, {
     method: "POST",
-    headers: { cookie, "x-claude0-device": "stream-test-dev" },
+    headers: { "x-claude0-device": "stream-test-dev" },
     body: JSON.stringify({ sessionId: 42 }),
   });
   expect(badBody.status).toBe(400);
@@ -206,7 +206,7 @@ test("gzipJson passes through small bodies, non-JSON, and clients without gzip",
 
 test("routes serve gzip end-to-end when the client asks for it", async () => {
   // /sessions under the temp HOME is small — asserts the passthrough path over HTTP…
-  const r = await fetch(`${base}/sessions`, { headers: { cookie, "accept-encoding": "gzip" } });
+  const r = await fetch(`${base}/sessions`, { headers: { "accept-encoding": "gzip" } });
   expect(r.status).toBe(200);
   expect(await r.json()).toBeDefined(); // fetch transparently decodes either way
 });
@@ -244,7 +244,7 @@ test("applyTail ignores absent, zero, negative, huge, and garbage tail values", 
 });
 
 test("GET /transcript?tail on an unknown session returns the (short) payload un-marked", async () => {
-  const r = await fetch(`${base}/sessions/never-existed/transcript?tail=40`, { headers: { cookie } });
+  const r = await fetch(`${base}/sessions/never-existed/transcript?tail=40`, {});
   expect(r.status).toBe(200);
   const body = (await r.json()) as { turns: unknown[]; partial?: boolean };
   expect(Array.isArray(body.turns)).toBe(true);
@@ -255,7 +255,7 @@ test("/stream/open rejects a sessionId with glob/path metacharacters", async () 
   for (const bad of ["*", "../../etc/passwd", "a/b", "a?b", "a[b]", "**", "x".repeat(101)]) {
     const res = await fetch(`${base}/stream/open`, {
       method: "POST",
-      headers: { cookie, "x-claude0-device": "stream-test-dev" },
+      headers: { "x-claude0-device": "stream-test-dev" },
       body: JSON.stringify({ sessionId: bad }),
     });
     expect(res.status).toBe(400);
@@ -270,7 +270,6 @@ test("GET /transcript rejects a session id with glob metacharacters", async () =
 });
 
 test("/shell runs a command on the host and keeps it in the scrollback", async () => {
-  expect((await fetch(`${base}/shell`, { method: "POST", body: JSON.stringify({ command: "id" }) })).status).toBe(401);
   expect((await post("/shell", { command: "" })).status).toBe(400);
   const res = await post("/shell", { command: "printf hello; printf oops >&2; exit 2" });
   expect(res.status).toBe(200);

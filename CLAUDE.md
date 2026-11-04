@@ -25,7 +25,7 @@ Entry: `bin/claude0.ts` (CLI router) → `src/index.ts` (TUI) or `src/cli.ts` (s
 
 These are routine, durably-authorized actions — **do them yourself, don't just tell the user**:
 
-- **Bridge restart** after changes to `src/bridge/server.ts` or the `core/` functions it imports (loaded into the running process): `systemctl --user restart claude0-bridge`; logs: `journalctl --user -u claude0-bridge`. NOT needed for `src/bridge/public/*` — served fresh with `cache-control: no-cache`; the user refreshes the page ([ADR 21](docs/adr/0021-offline-app-shell.md)). The token lives in a 0600 `EnvironmentFile`, so a plain restart preserves it. Verify: `POST /auth` → 200 and the changed route behaves.
+- **Bridge restart** after changes to `src/bridge/server.ts` or the `core/` functions it imports (loaded into the running process): `systemctl --user restart claude0-bridge`; logs: `journalctl --user -u claude0-bridge`. NOT needed for `src/bridge/public/*` — served fresh with `cache-control: no-cache`; the user refreshes the page ([ADR 21](docs/adr/0021-offline-app-shell.md)). Verify: `curl http://127.0.0.1:8473/sessions` → 200 (loopback needs no login, [ADR 33](docs/adr/0033-bridge-access-is-identity-not-a-token.md)) and the changed route behaves.
 - **Daemon restart** after changes to `src/sidebar/`, `core/inbox-*.ts`, or config the daemon loads at startup (e.g. `tmux.keys` sidebar keys): `systemctl --user restart claude0-daemon` (launchd on a Mac host).
 - **Re-run `claude0 setup`** after changes to tmux/zsh fragments, systemd/launchd units, or CLI entry routing — that's how they propagate to the installed machine.
 
@@ -104,3 +104,4 @@ Processes & caches:
 | Transcript stitching across project dirs, compact-link recovery | [29](docs/adr/0029-transcripts-span-project-dirs.md) |  | `core/last-turn.ts`, `core/transcript.ts`, `core/session-api.ts` |
 | Portkey shell (one-shot host command runner) | [30](docs/adr/0030-portkey-shell-is-a-one-shot-runner.md) | | `core/shell-run.ts`, `bridge/server.ts` |
 | Portkey served on its own port, not the host's bare URL | [32](docs/adr/0032-portkey-serves-on-its-own-port.md) | | `core/provision.ts`, `core/doctor.ts` |
+| Bridge access control: no token — bind address or the tailnet owner, same-origin only | [33](docs/adr/0033-bridge-access-is-identity-not-a-token.md) | | `bridge/request-guard.ts`, `bridge/server.ts` |
