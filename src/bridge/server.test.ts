@@ -45,6 +45,14 @@ test("the guard refuses a foreign Host and cross-origin browser requests; the sh
   expect(await status("/", { host: "evil.example:8473", "sec-fetch-site": "cross-site" })).toBe(200);
 });
 
+test("the app shell refuses to be framed — a framed app passes the guard as same-origin", async () => {
+  for (const path of ["/", "/app.js"]) {
+    const res = await fetch(`${base}${path}`);
+    expect(res.headers.get("content-security-policy")).toBe("frame-ancestors 'none'");
+    expect(res.headers.get("x-frame-options")).toBe("DENY");
+  }
+});
+
 test("/push/vapid-key returns a 65-byte P-256 key", async () => {
   const res = await get("/push/vapid-key");
   expect(res.status).toBe(200);

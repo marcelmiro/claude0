@@ -252,8 +252,15 @@ function staticResponse(rel: string): Response {
   // Vendored libs are immutable; the app's own HTML/JS changes as we iterate, so
   // forbid stale caching of it (mobile Safari otherwise serves an old bundle).
   const cache = rel.startsWith("vendor/") ? "public, max-age=86400" : "no-cache";
+  // No framing: a framed app's own fetches are same-origin and Serve attaches the owner's
+  // identity, so request-guard can't tell a page on another site steering it (ADR 33).
   return new Response(Bun.file(`${PUBLIC_DIR}/${rel}`), {
-    headers: { "content-type": type, "cache-control": cache },
+    headers: {
+      "content-type": type,
+      "cache-control": cache,
+      "content-security-policy": "frame-ancestors 'none'",
+      "x-frame-options": "DENY",
+    },
   });
 }
 
