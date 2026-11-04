@@ -26,7 +26,11 @@ identity, replaces a client-supplied copy, preserves `Host`, and passes `Origin`
    A request that came through Serve (it adds `X-Forwarded-For`) never counts as
    the bind address: Serve forwards the client's Host verbatim.
 2. **Tailnet requests carry the node owner's login.** The name and owner come from
-   `tailscale status --json`; until they're known, tailnet requests are refused.
+   `tailscale status --json`; until they're known, tailnet requests are refused. A
+   tagged node has no owning person (its user is a stand-in carrying the node's own
+   name), so its owner is the one person whose devices are its peers — every device
+   that can connect is a peer. Two or more people: refused until `CLAUDE0_BRIDGE_OWNER`
+   names one. That variable, when set, always wins.
 3. **Browser requests are same-origin**: `Sec-Fetch-Site` must be `same-origin` or
    `none`; without it, `Origin` must match `Host` exactly (port included). A request
    with neither is not from a browser and passes.
@@ -45,5 +49,8 @@ The static app shell stays public, as before.
 - A bridge served over plain HTTP gets no `Sec-Fetch-Site` from browsers, so cross-site
   GETs fall back to the Origin check (absent on GETs). Setup serves HTTPS only; the
   plain-HTTP Mac walkthrough was removed with this change.
+- Assumed, not yet seen on a tagged node of ours: the stand-in user and `Self.Tags`
+  shape (taken from Tailscale's source and a third-party report), and that shared-in
+  devices appear in `Peer` (Tailscale's `ShareeNode` doc says they do).
 - Access depends on the Tailscale CLI answering `status --json`; if it can't, only
   loopback works and the phone sees "bridge refused this page".

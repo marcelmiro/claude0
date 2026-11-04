@@ -29,6 +29,9 @@ something is wrong.
 - **Tailscale join** is interactive: `sudo tailscale up --ssh
   --hostname=<name> --authkey=<key>`. Use a pre-tagged auth key. Tagging after
   join does not disable key expiry, and an expired node key strands the box.
+  On a tagged node portkey admits the one person whose devices are its peers; if
+  the tailnet has several, set `CLAUDE0_BRIDGE_OWNER=<login>` in
+  `~/.config/claude0/bridge.env` ([ADR 33](../docs/adr/0033-bridge-access-is-identity-not-a-token.md)).
 - **Logins**: `claude` and `gh auth login` are guided stops. Setup prints the
   exact commands instead of attempting them non-interactively.
 - **State from another machine.** Starting fresh is fine. To replicate an

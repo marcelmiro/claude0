@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { bindHostHeader, guardRequest, type GuardContext, type GuardRequest, type GuardVerdict } from "./request-guard";
+import { bindHostHeader, guardRequest, tailnetIdentity, type GuardContext, type GuardRequest, type GuardVerdict, type TailscaleStatus } from "./request-guard";
 
 const CTX: GuardContext = { bindHost: "127.0.0.1:8473", tailnetName: "vm.example.ts.net", owner: "me@example.com" };
 const TAILNET = { host: "vm.example.ts.net:8473", login: "me@example.com", proxied: true };
@@ -42,4 +42,31 @@ test.each<[string, Partial<GuardRequest>, Partial<GuardContext>, GuardVerdict]>(
 test("bindHostHeader brackets IPv6", () => {
   expect(bindHostHeader("127.0.0.2", 8481)).toBe("127.0.0.2:8481");
   expect(bindHostHeader("::1", 8473)).toBe("[::1]:8473");
+});
+
+const ME = 1, FRIEND = 2, TAGGED = 3;
+const status = (self: { tags?: string[] }, peers: { user: number; tags?: string[] }[]): TailscaleStatus => ({
+  Self: { DNSName: "vm.example.ts.net.", UserID: self.tags ? TAGGED : ME, Tags: self.tags ?? null },
+  Peer: Object.fromEntries(peers.map((p, i) => [`k${i}`, { UserID: p.user, Tags: p.tags ?? null }])),
+  User: { [ME]: { LoginName: "me@example.com" }, [FRIEND]: { LoginName: "friend@example.com" }, [TAGGED]: { LoginName: "vm.example.ts.net" } },
+});
+const TAG = ["tag:server"];
+
+test.each<[string, TailscaleStatus, string | undefined, string | null]>([
+  ["user-owned node: its user", status({}, [{ user: FRIEND }]), undefined, "me@example.com"],
+  ["tagged node, one person among the peers: that person", status({ tags: TAG }, [{ user: ME }, { user: ME }]), undefined, "me@example.com"],
+  ["tagged node: tagged peers don't count", status({ tags: TAG }, [{ user: ME }, { user: TAGGED, tags: TAG }]), undefined, "me@example.com"],
+  ["tagged node, two people: ambiguous, fails closed", status({ tags: TAG }, [{ user: ME }, { user: FRIEND }]), undefined, null],
+  ["tagged node, no people: fails closed", status({ tags: TAG }, [{ user: TAGGED, tags: TAG }]), undefined, null],
+  ["override wins on a tagged node", status({ tags: TAG }, [{ user: ME }, { user: FRIEND }]), "friend@example.com", "friend@example.com"],
+  ["override wins on a user-owned node", status({}, []), "friend@example.com", "friend@example.com"],
+])("tailnetIdentity: %s", (_name, s, override, owner) => {
+  const read = tailnetIdentity(s, override);
+  expect(read.owner).toBe(owner);
+  expect(read.name).toBe("vm.example.ts.net");
+  expect(read.problem === null).toBe(owner !== null);
+});
+
+test("tailnetIdentity: no Self is a problem, not a guess", () => {
+  expect(tailnetIdentity({}, undefined)).toEqual({ name: null, owner: null, problem: "no DNSName or owner login in tailscale status" });
 });

@@ -19,7 +19,7 @@ export interface GuardRequest {
   origin: string | null;
   secFetchSite: string | null;
   login: string | null;
-  /** Arrived through a proxy (Serve adds X-Forwarded-For; a client can't strip it). */
+  /** Arrived through a proxy (Serve sets X-Forwarded-Host/-For, overwriting a client's copy). */
   proxied: boolean;
 }
 
@@ -58,6 +58,37 @@ export function guardRequest(req: GuardRequest, ctx: GuardContext): GuardVerdict
     }
   }
   return "ok";
+}
+
+interface StatusNode { DNSName?: string; UserID?: number; Tags?: string[] | null }
+export interface TailscaleStatus {
+  Self?: StatusNode;
+  Peer?: Record<string, StatusNode>;
+  User?: Record<string, { LoginName?: string }>;
+}
+
+export interface TailnetIdentity { name: string | null; owner: string | null; problem: string | null }
+
+/**
+ * The node's MagicDNS name and owner login from `tailscale status --json`. `override`
+ * (CLAUDE0_BRIDGE_OWNER) wins. A user-owned node's owner is its user. A tagged node has
+ * no person behind it — its UserID is a stand-in whose login is the node's own name —
+ * so the owner is the one person whose devices are its peers. Any device that can
+ * connect is a peer (WireGuard needs its key; shared-in users' devices included), so a
+ * second person makes the owner ambiguous and the node fails closed.
+ */
+export function tailnetIdentity(status: TailscaleStatus, override: string | undefined): TailnetIdentity {
+  const name = status.Self?.DNSName?.replace(/\.$/, "") || null;
+  const login = (id: number | undefined) => (id === undefined ? undefined : status.User?.[String(id)]?.LoginName);
+  let owner: string | null = override || null;
+  let problem: string | null = null;
+  if (!owner && status.Self?.Tags?.length) {
+    const people = new Set(Object.values(status.Peer ?? {}).filter((p) => !p.Tags?.length).map((p) => login(p.UserID)));
+    if (people.size === 1) owner = [...people][0] ?? null;
+    else problem = `tagged node with ${people.size} people among its peers: set CLAUDE0_BRIDGE_OWNER in bridge.env`;
+  } else if (!owner) owner = login(status.Self?.UserID) ?? null;
+  if (!problem && !(name && owner)) problem = "no DNSName or owner login in tailscale status";
+  return { name, owner, problem };
 }
 
 /** `host:port` as a client sends it for a socket bound to `hostname` (IPv6 bracketed). */

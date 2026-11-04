@@ -105,7 +105,7 @@ import { loadAllSessions, filterAndRankEntries, type SearchEntry } from "../core
 import { fixtureData } from "./fixtures";
 import { runShell, SHELL_HISTORY, type ShellRun } from "../core/shell-run";
 import { probe } from "../core/doctor";
-import { bindHostHeader, guardRequest, type GuardVerdict } from "./request-guard";
+import { bindHostHeader, guardRequest, tailnetIdentity, type GuardVerdict, type TailscaleStatus } from "./request-guard";
 import type { RestoreState, Session } from "../types";
 
 const PUBLIC_DIR = `${import.meta.dir}/public`;
@@ -170,18 +170,15 @@ function refreshTailnet(): Promise<void> {
   tailnetTriedAt = now;
   tailnetRead = (async () => {
     try {
-      const status = JSON.parse((await probe([TAILSCALE, "status", "--json"], 3_000)).out) as {
-        Self?: { DNSName?: string; UserID?: number };
-        User?: Record<string, { LoginName?: string }>;
-      };
-      const name = status.Self?.DNSName?.replace(/\.$/, "");
-      const owner = status.User?.[String(status.Self?.UserID)]?.LoginName;
-      if (name && owner) {
-        tailnet.name = name;
-        tailnet.owner = owner;
+      const status = JSON.parse((await probe([TAILSCALE, "status", "--json"], 3_000)).out) as TailscaleStatus;
+      const read = tailnetIdentity(status, process.env.CLAUDE0_BRIDGE_OWNER);
+      if (read.problem) noteTailnetProblem(read.problem);
+      else {
+        tailnet.name = read.name;
+        tailnet.owner = read.owner;
         tailnetReadAt = Date.now();
         tailnetProblem = "";
-      } else noteTailnetProblem("no DNSName or owner login in tailscale status");
+      }
     } catch (e) {
       noteTailnetProblem(`tailscale status --json failed: ${e}`); // down, missing, or not JSON
     } finally {
@@ -195,7 +192,7 @@ function refreshTailnet(): Promise<void> {
 function noteTailnetProblem(problem: string): void {
   if (problem === tailnetProblem) return;
   tailnetProblem = problem;
-  if (!tailnet.name) console.error(`tailnet identity unknown, tailnet requests refused: ${problem}`);
+  console.error(`tailnet identity not read (${tailnet.owner ? `keeping ${tailnet.owner}` : "tailnet requests refused"}): ${problem}`);
 }
 
 async function guard(req: Request): Promise<GuardVerdict> {
@@ -204,7 +201,7 @@ async function guard(req: Request): Promise<GuardVerdict> {
     origin: req.headers.get("origin"),
     secFetchSite: req.headers.get("sec-fetch-site"),
     login: req.headers.get("tailscale-user-login"),
-    proxied: req.headers.has("x-forwarded-for"),
+    proxied: req.headers.has("x-forwarded-host") || req.headers.has("x-forwarded-for"),
   };
   const check = () => guardRequest(input, { bindHost, tailnetName: tailnet.name, owner: tailnet.owner });
   const verdict = check();
