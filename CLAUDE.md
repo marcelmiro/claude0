@@ -44,6 +44,7 @@ These are routine, durably-authorized actions — **do them yourself, don't just
 - **Intertwine only with tmux and mosh.** Any terminal (Ghostty), notifier, or host tool is a configurable default, never a hard dependency ([ADR 19](docs/adr/0019-presence-is-client-activity-everywhere.md)/[23](docs/adr/0023-dotfiles-independence.md)).
 - Multiple agents (and the user) often work uncommitted in this same checkout on `main` — before diagnosing a test failure or "fixing" an unfamiliar diff, check it isn't someone's live work; re-run first.
 - **Vibe mode**: single-dev repo — work directly in this base checkout on `main`, commit and push to `main` when asked, no Linear, no plan docs. Exception: if `git status` shows uncommitted changes in files your task will touch, create a worktree per the global rule.
+- **No Codex**: the Codex GitHub connector isn't installed for this repo — `pr-triage` skips the Codex trigger and confirm (record `confirm=unavailable`); review is Claude-only, so say so in the handback.
 - All shell/IO in try/catch returning empty defaults — never crash the TUI.
 - Stream transcript IO in long-lived processes (`jsonlLines()` or windowed byte reads) — one `.text()` of a multi-MB JSONL permanently ratchets RSS (freed malloc pages don't return to the OS; the bridge hit a ~1GB plateau on a 3MB heap).
 - Dates and times render through hard-coded English formats (`shared/wake-abs.js`), never locale-sensitive `Intl` — Bun ignores `LANG` for its default locale and ICU builds disagree on locale data.
