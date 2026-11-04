@@ -15,8 +15,8 @@ c0 doctor
 
 Setup provisions everything in one pass with a single sudo authorization:
 packages, inotify limits, a swapfile, timezone, journald cap, the bubblewrap
-AppArmor profile, user-unit linger, the systemd user units, and the bridge
-token. `--dry-run` prints the plan (would-run/skip per step, exact commands)
+AppArmor profile, user-unit linger, the systemd user units, and (for a non-default
+port) the bridge port. `--dry-run` prints the plan (would-run/skip per step, exact commands)
 with no side effects and no sudo prompt. TZ defaults to `Europe/London`; swap
 defaults to the machine's RAM size. Run as your login user.
 
@@ -90,7 +90,7 @@ Installed and enabled by `c0 setup --role host` from `../config/units/`:
 | Unit | Purpose |
 |---|---|
 | `tmux.service` | tmux server at boot; resurrect restore on start, `kill-server` on stop (no session-map save at stop, [ADR 16](../docs/adr/0016-systemd-units-replace-launchd.md)). |
-| `claude0-bridge.service` | The portkey bridge, `Restart=always`, token via 0600 `EnvironmentFile`. |
+| `claude0-bridge.service` | The portkey bridge, `Restart=always`; optional `EnvironmentFile` for a non-default port. |
 | `claude0-monitor.service` | Monitor tick while no tmux client is attached, plus the unconditional 5-min resurrect autosave (the host's only periodic saver). |
 | `claude0-daemon.service` | The inbox daemon: snooze wakes, discovery snapshots, sidebar renderer. Wake alerts are Web Push (a headless host has no banner tier). |
 

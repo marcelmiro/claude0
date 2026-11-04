@@ -1,7 +1,7 @@
 # 27. Image paste is a macOS Service hotkey plus a path paste
 
 Date: 2026-08-25
-Status: accepted
+Status: accepted; amended by ADR 33 (the bridge has no token, so "the Mac would need the phone token" no longer rules out uploading through it)
 
 ## Context
 

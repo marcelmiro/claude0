@@ -38,7 +38,7 @@ Same tool against `http://127.0.0.1:8473` — read-only discipline: screenshots 
 fine; never tap approve/archive/send there.
 
 `bun run shoot` captures the fixture screens headlessly
-(login/list/detail/agents PNGs); `inspect-ui` is the interactive tool.
+(list/detail/agents PNGs); `inspect-ui` is the interactive tool.
 
 ## Real Claude TUI lab
 

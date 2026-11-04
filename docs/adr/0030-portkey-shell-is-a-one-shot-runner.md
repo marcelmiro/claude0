@@ -1,7 +1,7 @@
 # 30. Portkey's shell is a one-shot command runner, not a terminal
 
 Date: 2026-09-23
-Status: accepted
+Status: accepted; amended by ADR 33 (no bridge token — "tailnet plus token" is now the tailnet owner's identity)
 
 ## Context
 
