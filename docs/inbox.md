@@ -32,7 +32,8 @@ docblocks carry the implementation detail. Decisions:
   catches a service the check misses; the released row ages from when the wait began.
 - **`/clear`** hands a pane to a new session id; the daemon tick archives the old one into
   Recent (`replacedInPane`, `core/inbox-discovery.ts`). A pane that is simply killed is
-  not a replacement.
+  not a replacement, and neither is one that discovery reads as id-less — that's a lost
+  pane→session mapping (`reconcilePaneFiles`, `core/state.ts`), not a new session.
 - **An archived session that never got a prompt skips Recent** (`empty`, `sectionOf`):
   Claude writes no transcript before the first prompt, so there's nothing to reread or
   resume.

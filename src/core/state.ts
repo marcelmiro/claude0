@@ -47,8 +47,11 @@ export async function savePaneSessions(map: Record<string, string>): Promise<voi
 
 /** Drop per-pane files for panes that have truly left tmux, bounding dir growth. Liveness-gated
  *  on the full live-pane set (not "has a claude process") so a transient ps/tmux miss can't
- *  delete a still-live mapping — preserving the old disk-survives-a-cache-miss safety net. */
+ *  delete a still-live mapping — preserving the old disk-survives-a-cache-miss safety net.
+ *  An empty set never prunes: `listPanes()` returns [] when tmux hangs or errors, and pruning
+ *  on that wipes every mapping, leaving live panes id-less until their next SessionStart. */
 export async function reconcilePaneFiles(livePaneIds: Set<string>): Promise<void> {
+  if (livePaneIds.size === 0) return;
   try {
     const files = await readdir(PANES_DIR);
     await Promise.all(files.map(async (f) => {

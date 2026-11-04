@@ -253,7 +253,8 @@ export function replacedInPane(prevRows: InboxSession[], current: Map<string, In
   for (const p of prevRows) {
     if (!p.real || current.has(p.id)) continue;
     const now = idByPane.get(p.real.paneId);
-    if (now !== undefined && now !== p.id) out.push(p.id);
+    // "" = discovery lost the pane's id, not a new session: the old one is still live there
+    if (now && now !== p.id) out.push(p.id);
   }
   return out;
 }

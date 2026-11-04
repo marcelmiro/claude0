@@ -64,6 +64,12 @@ test("reconcilePaneFiles drops only files for panes absent from tmux", async () 
   expect(await loadPaneSessions()).toEqual({ "%1": "live" });
 });
 
+test("reconcilePaneFiles keeps every file when the live set is empty (a failed tmux list, not an empty server)", async () => {
+  await savePaneSessions({ "%1": "a", "%2": "b" });
+  await reconcilePaneFiles(new Set());
+  expect(await loadPaneSessions()).toEqual({ "%1": "a", "%2": "b" });
+});
+
 // --- phonePushed: scoped to one attention episode ----------------------------------
 // It gates the per-tick tier-4 retry, so carrying it one episode too far would mute a
 // real notification — the exact failure the retry exists to prevent.

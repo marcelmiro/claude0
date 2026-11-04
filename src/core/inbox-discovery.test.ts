@@ -29,3 +29,7 @@ test("replacedInPane: a pane-less previous row (parked/recent) is never a replac
 test("replacedInPane: a session that moved panes but is still live is not replaced", () => {
   expect(replacedInPane([row("a", "%7")], current(row("a", "%9"), row("b", "%7")))).toEqual([]);
 });
+
+test("replacedInPane: a pane that lost its id (id-less row) is not a replacement", () => {
+  expect(replacedInPane([row("a", "%7")], current(row("", "%7")))).toEqual([]);
+});
