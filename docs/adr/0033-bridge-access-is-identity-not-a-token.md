@@ -35,7 +35,8 @@ identity, replaces a client-supplied copy, preserves `Host`, and passes `Origin`
    `none`; without it, `Origin` must match `Host` exactly (port included). A request
    with neither is not from a browser and passes.
 
-The static app shell stays public, as before.
+The static app shell stays public, as before. The bridge binds loopback only: the
+identity header means something only because Serve, in front, strips forged copies.
 
 ## Consequences
 

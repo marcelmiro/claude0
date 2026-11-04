@@ -80,7 +80,7 @@ It navigates and captures each screen; `--keep` leaves the bridge + Chrome up fo
 
 | Env var | Default | Notes |
 |---------|---------|-------|
-| `CLAUDE0_BRIDGE_HOST` | `127.0.0.1` | Fail-closed to loopback / tailnet (`100.64.0.0/10`). Keep `127.0.0.1` when using `tailscale serve`. |
+| `CLAUDE0_BRIDGE_HOST` | `127.0.0.1` | Loopback only (`127.0.0.0/8`, `::1`), fail-closed: the tailnet reaches it through `tailscale serve`, which strips forged identity headers ([ADR 33](../../docs/adr/0033-bridge-access-is-identity-not-a-token.md)). |
 | `CLAUDE0_BRIDGE_PORT` | `8473` | |
 | `CLAUDE0_BRIDGE_OWNER` | derived | The tailnet login allowed in. Unset: the node's user, or on a tagged node the one person whose devices are its peers. Set it (in `bridge.env`) when a tagged node has several. |
 | `CLAUDE0_BRIDGE_FIXTURES` | — | Dev/test only: serve canned data (`fixtures.ts`) instead of `core/`. See [Local development & testing](#local-development--testing). |

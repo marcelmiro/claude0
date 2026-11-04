@@ -13,7 +13,7 @@ import { test, expect, beforeAll, afterAll } from "bun:test";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { EVENTS_DIR } from "../core/hook-events";
 import { CONSUMERS_DIR, fromB64url } from "../core/web-push";
-import { startBridge, applyTail, gzipJson } from "./server";
+import { startBridge, applyTail, gzipJson, isAllowedHost } from "./server";
 
 let server: ReturnType<typeof startBridge>;
 let base = "";
@@ -288,4 +288,9 @@ test("/shell refuses a second command while one is running", async () => {
   await Bun.sleep(100);
   expect((await post("/shell", { command: "true" })).status).toBe(409);
   expect((await first).status).toBe(200);
+});
+
+test("the bridge binds loopback only — a tailnet bind would take identity headers at face value", () => {
+  for (const ok of ["127.0.0.1", "127.0.0.2", "localhost", "::1"]) expect(isAllowedHost(ok)).toBe(true);
+  for (const no of ["100.77.206.39", "100.64.0.1", "0.0.0.0", "192.168.1.5", "::"]) expect(isAllowedHost(no)).toBe(false);
 });

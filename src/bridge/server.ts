@@ -1833,18 +1833,13 @@ async function route(req: Request): Promise<Response> {
 }
 
 // ---------------------------------------------------------------------------
-// Bind — fail-closed to loopback / tailnet (Tailscale CGNAT 100.64.0.0/10)
+// Bind — fail-closed to loopback: request-guard trusts identity headers only because
+// Tailscale Serve, in front, strips forged copies. A direct tailnet bind has nothing in front.
 // ---------------------------------------------------------------------------
 
-function isAllowedHost(host: string): boolean {
+export function isAllowedHost(host: string): boolean {
   if (host === "localhost" || host === "::1" || host === "[::1]") return true;
-  const m = host.match(/^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/);
-  if (!m) return false;
-  const a = Number(m[1]);
-  const b = Number(m[2]);
-  if (a === 127) return true; // loopback
-  if (a === 100 && b >= 64 && b <= 127) return true; // tailnet CGNAT
-  return false;
+  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
 }
 
 /** Returns the server so tests can bind port 0 and stop it; `claude0 bridge` ignores it. */
@@ -1854,7 +1849,7 @@ export function startBridge(): ReturnType<typeof Bun.serve> {
 
   if (!isAllowedHost(host)) {
     throw new Error(
-      `CLAUDE0_BRIDGE_HOST=${host} is not loopback or tailnet (100.64.0.0/10) — refusing to bind (fail-closed)`,
+      `CLAUDE0_BRIDGE_HOST=${host} is not loopback — refusing to bind (fail-closed; reach it through tailscale serve)`,
     );
   }
   void refreshTailnet();
