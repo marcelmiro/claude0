@@ -1837,6 +1837,22 @@ export async function daemon(): Promise<void> {
     return;
   }
 
+  // Internal: one search-index pass in a fresh process (ADR 36, docs/search.md).
+  if (process.argv.includes("--index-once")) {
+    const { indexOnce } = await import("./core/search-index");
+    try {
+      const r = await indexOnce();
+      // a quiet pass is the common case every 30s; log only real work
+      if (r.ms >= 1000 || r.dropped) {
+        console.error(`[search-index] files=${r.files} mb=${(r.bytes / 1e6).toFixed(1)} dropped=${r.dropped} ms=${r.ms}`);
+      }
+    } catch (e) {
+      console.error(`[search-index] pass failed: ${e instanceof Error ? e.message : e}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
   const { wakePass } = await import("./core/inbox-wake");
 
   // Populate the config cache once for the daemon's lifetime: the sidebar
@@ -1876,6 +1892,7 @@ export async function daemon(): Promise<void> {
 
   let tick = 0;
   let lastResurrectSave = Date.now();
+  let indexing = false;
   while (true) {
     try {
       const child = Bun.spawn(
@@ -1887,6 +1904,23 @@ export async function daemon(): Promise<void> {
       await child.exited;
       clearTimeout(killer);
     } catch {}
+    // Not awaited: the first build takes ~25s and must not hold discovery behind it.
+    // A killed pass loses only its open batch — the next one resumes from the offsets.
+    if (tick % 10 === 0 && !indexing) {
+      try {
+        const child = Bun.spawn([process.execPath, process.argv[1]!, "daemon", "--index-once"], {
+          stdin: "ignore",
+          stdout: "ignore",
+          stderr: "inherit",
+        });
+        indexing = true;
+        const killer = setTimeout(() => child.kill(), 10 * 60_000);
+        void child.exited.finally(() => {
+          clearTimeout(killer);
+          indexing = false;
+        });
+      } catch {}
+    }
     if (tick % 5 === 0) {
       try {
         const store = new InboxStore();

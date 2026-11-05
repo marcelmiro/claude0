@@ -63,6 +63,7 @@ test("check sets are role-dispatched; darwin-only checks skip cleanly off-darwin
   const names = (c: DoctorContext) => doctorChecks(c).map((entry) => entry.name);
   expect(names(ctx({ role: "host", platform: "linux" }))).toEqual([
     ...BASE_CHECKS,
+    "search-index",
     "host-tools",
     "units",
     "tmux",
@@ -71,10 +72,10 @@ test("check sets are role-dispatched; darwin-only checks skip cleanly off-darwin
     "sysctl",
     "swap",
   ]);
-  expect(names(ctx({ role: "local", platform: "darwin" }))).toEqual([...BASE_CHECKS, "daemon-present"]);
+  expect(names(ctx({ role: "local", platform: "darwin" }))).toEqual([...BASE_CHECKS, "search-index", "daemon-present"]);
   expect(names(ctx({ role: "client", platform: "darwin" }))).toEqual([...BASE_CHECKS, "daemon-absent", "image-paste"]);
   expect(names(ctx({ role: "client", platform: "linux" }))).toEqual(BASE_CHECKS);
-  expect(names(ctx({ role: "local", platform: "linux" }))).toEqual(BASE_CHECKS);
+  expect(names(ctx({ role: "local", platform: "linux" }))).toEqual([...BASE_CHECKS, "search-index"]);
 });
 
 // --- exit-code contract ---

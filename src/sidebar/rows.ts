@@ -60,6 +60,8 @@ export interface ViewState {
   modeLoading: boolean;
   hits: SearchHit[];
   hitsTotal: number;
+  /** Percent done while the conversation index's first build runs. */
+  indexing?: number;
   repos: RepoRow[];
 }
 

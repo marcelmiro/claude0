@@ -20,11 +20,12 @@
  * hook (Contract A), not here. Contract B covers resolved history only.
  */
 
-import { test, expect } from "bun:test";
+import { describe, test, expect } from "bun:test";
 import {
   parseTranscript,
   parseActiveBranch,
   lastAssistantMessage,
+  recordProse,
   type TranscriptBlock,
   type TranscriptTurn,
 } from "./transcript";
@@ -636,4 +637,24 @@ test("parseActiveBranch stitches a session split across files (cwd re-home)", ()
     "reply",
     "after move",
   ]);
+});
+
+describe("recordProse — what search indexes", () => {
+  const u = (content: unknown, extra: object = {}) => ({ type: "user", message: { role: "user", content }, ...extra });
+  const a = (content: unknown) => ({ type: "assistant", message: { role: "assistant", content } });
+  const cases: [string, unknown, string][] = [
+    ["a typed prompt", u("fix the login flow"), "fix the login flow"],
+    ["every text block of a reply, no thinking or tool input", a([{ type: "thinking", thinking: "hm" }, { type: "text", text: "one" }, { type: "tool_use", id: "t", name: "Bash", input: { command: "ls" } }, { type: "text", text: "two" }]), "one\ntwo"],
+    ["a tool result", u([{ type: "tool_result", tool_use_id: "t", content: "output" }]), ""],
+    ["a slash command", u("<command-name>/compact</command-name>"), ""],
+    ["a ! bash command", u("<bash-input>ls</bash-input>"), ""],
+    ["a meta record", u("Base directory for this skill", { isMeta: true }), ""],
+    ["a compaction summary", u("This session is being continued…", { isCompactSummary: true }), ""],
+    ["a task notification", u("<task-notification>done</task-notification>"), ""],
+    ["an interrupt marker", u([{ type: "text", text: "[Request interrupted by user for tool use]" }]), ""],
+    ["a queued prompt", { type: "attachment", attachment: { type: "queued_command", commandMode: "prompt", prompt: "also check auth" } }, "also check auth"],
+    ["the no-response sentinel", a([{ type: "text", text: "No response requested." }]), ""],
+    ["not a record", null, ""],
+  ];
+  for (const [name, record, prose] of cases) test(name, () => expect(recordProse(record)).toBe(prose));
 });

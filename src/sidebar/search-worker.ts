@@ -1,12 +1,13 @@
 /**
  * `claude0 search-worker` — the sidebar's search engine, in its own process
- * (docs/inbox.md, "Search"). Loading every transcript's search slices plateaus
- * near 240MB RSS (allocator retention, not live heap) while the daemon idles
+ * (docs/inbox.md, "Search"). Loading every session's entry plateaus near
+ * 210MB RSS (allocator retention, not live heap) while the daemon idles
  * near 73MB, so the renderer spawns this on the first `/`, talks JSON lines
  * over stdio, and the worker exits after IDLE_MS without a query — its memory
  * leaves with it. stdin closing (the daemon died) also ends it.
  */
-import { loadAllSessions, searchEntries, type MatchField, type SearchEntry } from "../core/search";
+import { addContentSnippets, loadAllSessions, searchEntries, type MatchField, type SearchEntry } from "../core/search";
+import { indexProgress } from "../core/search-index";
 import { loadNameCache } from "../core/names";
 
 export interface SearchRequest {
@@ -15,7 +16,7 @@ export interface SearchRequest {
   limit: number;
 }
 
-/** What a result row and an open need — the entry minus its corpus. */
+/** What a result row and an open need — the entry minus its search fields. */
 export interface SearchHit {
   sessionId: string;
   name: string;
@@ -33,6 +34,8 @@ export interface SearchResponse {
   seq: number;
   total: number;
   hits: SearchHit[];
+  /** Percent done while the conversation index's first build runs. */
+  indexing?: number;
 }
 
 /** Entries older than this are reloaded — after answering, never before. */
@@ -41,6 +44,7 @@ const IDLE_MS = 10 * 60_000;
 
 export function runQuery(entries: SearchEntry[], q: string, limit: number): { total: number; hits: SearchHit[] } {
   const { results, total } = searchEntries(entries, q, limit);
+  addContentSnippets(results);
   return {
     total,
     hits: results.map((e) => ({
@@ -94,7 +98,8 @@ export async function searchWorker(): Promise<void> {
       }
       const t0 = performance.now();
       const { total, hits } = runQuery(entries ?? [], req.q, req.limit);
-      const res: SearchResponse = { seq: req.seq, total, hits };
+      const indexing = indexProgress();
+      const res: SearchResponse = { seq: req.seq, total, hits, ...(indexing !== null ? { indexing } : {}) };
       process.stdout.write(`${JSON.stringify(res)}\n`);
       console.error(`[search-worker] q=${JSON.stringify(req.q)} hits=${total} ms=${(performance.now() - t0).toFixed(1)}`);
     } catch (e) {

@@ -24,13 +24,13 @@ Entry: `bin/claude0.ts` (CLI router) → `src/cli.ts` (subcommands), `src/sideba
 These are routine, durably-authorized actions — **do them yourself, don't just tell the user**:
 
 - **Bridge restart** after changes to `src/bridge/server.ts` or the `core/` functions it imports (loaded into the running process): `systemctl --user restart claude0-bridge`; logs: `journalctl --user -u claude0-bridge`. NOT needed for `src/bridge/public/*` — served fresh with `cache-control: no-cache`; the user refreshes the page ([ADR 21](docs/adr/0021-offline-app-shell.md)). Verify: `curl http://127.0.0.1:8473/sessions` → 200 (loopback needs no login, [ADR 33](docs/adr/0033-bridge-access-is-identity-not-a-token.md)) and the changed route behaves.
-- **Daemon restart** after changes to `src/sidebar/`, `core/inbox-*.ts`, or config the daemon loads at startup (e.g. `tmux.keys` sidebar keys): `systemctl --user restart claude0-daemon` (launchd on a Mac host).
+- **Daemon restart** after changes to `src/sidebar/`, `core/inbox-*.ts`, `core/search*.ts`, or config the daemon loads at startup (e.g. `tmux.keys` sidebar keys): `systemctl --user restart claude0-daemon` (launchd on a Mac host).
 - **Re-run `claude0 setup`** after changes to tmux/zsh fragments, systemd/launchd units, or CLI entry routing — that's how they propagate to the installed machine.
 
 ## Orientation
 
 - `src/core/` — pure/IO logic shared by all processes (discovery, tmux, status, git, inbox, transcripts). `src/bridge/` — phone HTTP server + `public/` client. `src/sidebar/` — inbox sidebar renderer and its search worker. `src/preview/` — the transcript preview popup. `src/monitor.ts` — status-right poller. Types in `src/types.ts`.
-- Processes share state through `~/.config/claude0/` (config.json, state.json, panes/, verdicts/, …): monitor (fresh per tick), daemon (sidebar renderer, plus its search worker and preview popups), bridge.
+- Processes share state through `~/.config/claude0/` (config.json, state.json, panes/, verdicts/, …): monitor (fresh per tick), daemon (sidebar renderer, plus its search worker, search indexer and preview popups), bridge.
 - Session discovery correlates Claude process TTYs with tmux pane TTYs, plus per-pane files under `panes/` written by the SessionStart hook (`claude0 setup` installs it). Session data: `~/.claude/projects/*/{sessions-index.json,<id>.jsonl}`.
 - Driving portkey in a real browser (fixtures bridge + inspect-ui): [docs/portkey-design-loop.md](docs/portkey-design-loop.md). Backlog: `ideas.txt`.
 
@@ -100,7 +100,7 @@ Processes & caches:
 | Sidebar is the only desk surface: search and new-session modes, preview popup; TUI retired | [34](docs/adr/0034-sidebar-is-the-only-desk-surface.md) (supersedes [3](docs/adr/0003-tui-requires-a-tty.md)), [35](docs/adr/0035-enter-never-refiles-a-parked-or-recent-row.md) | [inbox](docs/inbox.md), [preview](docs/preview.md) | `src/sidebar/`, `src/preview/` |
 | Offline app shell | [21](docs/adr/0021-offline-app-shell.md) | [portkey](docs/portkey.md) (iOS status bar) | `bridge/public/sw.js` |
 | History depth | [7](docs/adr/0007-history-depth-is-claudes-retention.md) |  | `core/transcript.ts` |
-| Search: conversation prose through an FTS5 index | [36](docs/adr/0036-search-matches-prose-through-an-fts5-index.md) |  | `core/search.ts` |
+| Search: conversation prose through an FTS5 index | [36](docs/adr/0036-search-matches-prose-through-an-fts5-index.md) | [search](docs/search.md) | `core/search.ts`, `core/search-index.ts` |
 | Transcript stitching across project dirs, compact-link recovery | [29](docs/adr/0029-transcripts-span-project-dirs.md) |  | `core/last-turn.ts`, `core/transcript.ts`, `core/session-api.ts` |
 | Portkey shell (one-shot host command runner) | [30](docs/adr/0030-portkey-shell-is-a-one-shot-runner.md) | | `core/shell-run.ts`, `bridge/server.ts` |
 | Portkey served on its own port, not the host's bare URL | [32](docs/adr/0032-portkey-serves-on-its-own-port.md) | | `core/provision.ts`, `core/doctor.ts` |

@@ -608,6 +608,43 @@ function imagePasteCheck(): DoctorCheck {
   };
 }
 
+/**
+ * The conversation search index (ADR 36): this Bun's SQLite must have FTS5 (macOS
+ * links the system SQLite — unverified there), and the daemon's indexer must be
+ * passing every 30s.
+ */
+function searchIndexCheck(): DoctorCheck {
+  return {
+    name: "search-index",
+    async run(ctx) {
+      const { Database } = await import("bun:sqlite");
+      try {
+        const mem = new Database(":memory:");
+        mem.exec("CREATE VIRTUAL TABLE t USING fts5(x)");
+        mem.close();
+      } catch {
+        return [fail("this Bun's SQLite has no FTS5 — search can't index conversations")];
+      }
+      const path = `${ctx.home}/.config/claude0/search.db`;
+      if (!(await Bun.file(path).exists())) return [warn("search index not built yet — the daemon builds it within a minute of starting")];
+      try {
+        const db = new Database(path, { readonly: true });
+        const row = db.query<{ value: string }, []>("SELECT value FROM meta WHERE key = 'last_pass'").get();
+        db.close();
+        if (!row) return [warn("search index has not finished a pass yet — the daemon's first build takes about a minute")];
+        const age = Date.now() - Number(row.value);
+        return [
+          age < 5 * 60_000
+            ? ok("search index is current (FTS5)")
+            : warn(`search index last updated ${Math.round(age / 60_000)} min ago — is the daemon running?`),
+        ];
+      } catch {
+        return [warn("search index is unreadable — delete it and the daemon rebuilds it")];
+      }
+    },
+  };
+}
+
 export function doctorChecks(ctx: DoctorContext): DoctorCheck[] {
   const checks: DoctorCheck[] = [
     toolsCheck("essential-tools", ctx.role === "client" ? CLIENT_TOOLS : ESSENTIAL_TOOLS),
@@ -617,6 +654,8 @@ export function doctorChecks(ctx: DoctorContext): DoctorCheck[] {
     authCheck(),
     hooksCheck(),
   ];
+  // the daemon (and so the indexer) runs wherever sessions do
+  if (ctx.role !== "client") checks.push(searchIndexCheck());
   if (ctx.role === "host") {
     checks.push(toolsCheck("host-tools", HOST_TOOLS), unitsCheck(), tmuxCheck(), bridgeCheck(), tailscaleCheck(), sysctlCheck(), swapCheck());
   }

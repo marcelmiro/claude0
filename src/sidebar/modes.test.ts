@@ -63,6 +63,11 @@ describe("search mode", () => {
     expect(view.rows[DIMS.height - 1]).toContain("↵ preview");
   });
 
+  test("while the index's first build runs, the query line shows its progress", () => {
+    const view = renderView([], vs({ query: "auth", hits: [hit("a")], hitsTotal: 1, indexing: 42 }), DIMS, NOW);
+    expect(view.rows[0]).toContain("indexing 42%");
+  });
+
   test("the cursor row stays in view and rowAtLine maps screen lines to hit ids", () => {
     const hits = Array.from({ length: 12 }, (_, i) => hit(`h${i}`));
     const view = renderView([], vs({ hits, hitsTotal: 12, modeCursor: 9 }), DIMS, NOW);

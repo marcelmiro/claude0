@@ -1,7 +1,8 @@
 import { test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { readSearchArtifacts, scoreSearchEntry, filterAndRankEntries, searchEntries, CHUNK_SIZE, type SearchEntry } from "./search";
+import { readSearchArtifacts, scoreSearchEntry, filterAndRankEntries, searchEntries, addContentSnippets, type SearchEntry } from "./search";
+import type { ContentIndex } from "./search-index";
 
 let dir: string;
 let n = 0;
@@ -27,9 +28,7 @@ const turn = (type: "user" | "assistant", text: string, timestamp: string) => ({
 
 // --- readSearchArtifacts ------------------------------------------------------
 
-test("tail content of a large transcript is searchable", async () => {
-  // Head + ~64KB of filler pushes the closing exchange past the head chunk, so it is
-  // only reachable via the tail read — the case that motivated the tail corpus.
+test("a large transcript's last reply and turn time come from its tail", async () => {
   const filler = Array.from({ length: 700 }, (_, i) =>
     turn("assistant", `filler block ${i} ${"x".repeat(80)}`, "2026-07-01T10:00:00.000Z"),
   );
@@ -39,61 +38,8 @@ test("tail content of a large transcript is searchable", async () => {
     turn("assistant", "done: the xylophone-widget bug is fixed", "2026-07-01T12:00:00.000Z"),
   ]);
   const a = await readSearchArtifacts(path);
-  expect(a.corpus).toContain("xylophone-widget");
-  expect(a.corpus).toContain("login flow"); // head still covered
-});
-
-// Non-conversational byte padding: parseConversationRecords drops anything whose
-// `type` isn't "user"/"assistant", so this contributes exact, known-size bytes to
-// the file with zero effect on corpusFrom's text budget — lets a test position byte
-// offsets precisely without the padding itself competing for the corpus cap.
-const pad = (n: number) => ({ type: "filler", blob: "x".repeat(Math.max(0, n)) });
-const padOverhead = JSON.stringify(pad(0)).length + 1; // + newline
-
-test("a line straddling the tail-window's byte boundary is not silently dropped", async () => {
-  // Reproduces a real transcript (throxy/leadflow eaf062f2): the tail read is a raw
-  // byte slice, not line-aligned, so a boundary landing mid-line used to fail
-  // JSON.parse on the leading fragment and drop that whole record — even though most
-  // of its bytes were inside the window. Position a target line so the read window's
-  // start byte falls strictly inside it, with only padding (no target text) after.
-  const target = "boundary-marker-phrase";
-  const targetLine = turn("assistant", `the csv has a ${target} column`, "2026-07-01T12:00:00.000Z");
-  const targetLen = JSON.stringify(targetLine).length + 1; // + newline
-
-  // Trailing padding sized so the tail window's start lands ~halfway through
-  // targetLine: solving tailStart = preSize + targetLen + after - CHUNK_SIZE for
-  // `after`, constrained to (CHUNK_SIZE - targetLen, CHUNK_SIZE) puts the boundary
-  // inside [0, targetLen).
-  const after = CHUNK_SIZE - Math.ceil(targetLen / 2);
-
-  // Head padding pushes targetLine's start past CHUNK_SIZE so it's unreachable via
-  // the head read — isolating this to the tail path.
-  const path = transcript([pad(CHUNK_SIZE + 4096), targetLine, pad(after - padOverhead)]);
-  const a = await readSearchArtifacts(path);
-  expect(a.corpus).toContain(target);
-});
-
-test("a match a few turns before a long final message stays in the tail corpus", async () => {
-  // Same transcript (eaf062f2), a second failure mode: the tail's cap was only
-  // 3000 chars, and corpusFrom stops (`break`) the moment the running total reaches
-  // it — before ever looking at earlier records. The real session's last two
-  // messages (2770 + 461 chars) alone exceeded that cap, so the match three turns
-  // back never got evaluated, independent of any slicing. Mirror those proportions.
-  const target = "week-start-column-marker";
-  const path = transcript([
-    pad(CHUNK_SIZE + 4096), // unreachable via head
-    turn("assistant", `columns unchanged: ${target}, week_end`, "2026-07-01T11:00:00.000Z"),
-    turn("assistant", "z".repeat(450), "2026-07-01T11:05:00.000Z"),
-    turn("assistant", "y".repeat(2600), "2026-07-01T11:10:00.000Z"), // long wrap-up, no target text
-  ]);
-  const a = await readSearchArtifacts(path);
-  expect(a.corpus).toContain(target);
-});
-
-test("small transcript: corpus holds the text once, not head+tail duplicated", async () => {
-  const path = transcript([turn("user", "unique-phrase-here", "2026-07-01T09:00:00.000Z")]);
-  const a = await readSearchArtifacts(path);
-  expect(a.corpus!.split("unique-phrase-here").length - 1).toBe(1);
+  expect(a.lastAssistant).toBe("done: the xylophone-widget bug is fixed");
+  expect(a.lastTurnAt).toBe(Date.parse("2026-07-01T12:00:00.000Z"));
 });
 
 test("lastTurnAt is the newest conversational turn, not trailing bookkeeping", async () => {
@@ -141,7 +87,7 @@ function mkEntry(over: Partial<SearchEntry>): SearchEntry {
     isDeletedWorktree: false,
     ...over,
   };
-  base.searchText = [base.summary, base.corpus || base.firstPrompt, base.name, base.branch, base.repo]
+  base.searchText = [base.summary, base.firstPrompt, base.name, base.branch, base.repo]
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
@@ -186,11 +132,44 @@ test("repo-only match carries field but no snippet (repo is already on the row)"
   expect(hit!.matchSnippet).toBeUndefined();
 });
 
-test("content-only match snippets from the original-case corpus", () => {
-  const e = mkEntry({ corpus: "…and then we fixed the Xylophone bug in the tail…" });
-  const [hit] = filterAndRankEntries([e], "xylophone");
-  expect(hit!.matchField).toBe("content");
-  expect(hit!.matchSnippet).toContain("Xylophone");
+/** A content index holding `prose` per session id. */
+function fakeIndex(prose: Record<string, string>): ContentIndex & { snippetCalls: number } {
+  const idx = {
+    snippetCalls: 0,
+    hits: (word: string) => new Set(Object.keys(prose).filter((id) => prose[id]!.toLowerCase().includes(word))),
+    snippet: (id: string, word: string) => {
+      idx.snippetCalls++;
+      return prose[id]?.toLowerCase().includes(word) ? `…${prose[id]}…` : undefined;
+    },
+  };
+  return idx;
+}
+
+test("a word only in the conversation matches through the index, at the content tier", () => {
+  const e = mkEntry({ summary: "auth refactor" });
+  const other = mkEntry({ summary: "xylophone tuning" });
+  const index = fakeIndex({ [e.sessionId]: "and then we fixed the Xylophone bug" });
+  const { results } = searchEntries([e, other], "xylophone", 50, index);
+  // the summary hit (contains tier) outranks the conversation-only one
+  expect(results.map((r) => r.sessionId)).toEqual([other.sessionId, e.sessionId]);
+  expect(results[1]!.matchField).toBe("content");
+});
+
+test("every word must match, each in metadata or the conversation", () => {
+  const e = mkEntry({ summary: "auth refactor" });
+  const index = fakeIndex({ [e.sessionId]: "the xylophone bug" });
+  expect(searchEntries([e], "auth xylophone", 50, index).total).toBe(1);
+  expect(searchEntries([e], "auth zeppelin", 50, index).total).toBe(0);
+});
+
+test("content snippets are fetched only for the rows passed in, not while ranking", () => {
+  const entries = Array.from({ length: 5 }, () => mkEntry({}));
+  const index = fakeIndex(Object.fromEntries(entries.map((e) => [e.sessionId, "the Xylophone bug"])));
+  const { results } = searchEntries(entries, "xylophone", 2, index);
+  expect(index.snippetCalls).toBe(0);
+  addContentSnippets(results, index);
+  expect(index.snippetCalls).toBe(2);
+  expect(results[0]!.matchSnippet).toContain("Xylophone");
 });
 
 // --- repo: scope + total ----------------------------------------------------
@@ -221,6 +200,17 @@ test("total reports all matches even when the page is capped", () => {
   const { results, total } = searchEntries(many, "resurrect", 3);
   expect(results).toHaveLength(3);
   expect(total).toBe(7);
+});
+
+test("an empty or repo-only query drops the previous query's match provenance", () => {
+  const e = mkEntry({ repo: "r", summary: "fix the xylophone" });
+  searchEntries([e], "xylophone");
+  expect(e.matchSnippet).toBeDefined();
+  for (const q of ["", "repo:r"]) {
+    const [hit] = searchEntries([e], q).results;
+    expect(hit!.matchField).toBeUndefined();
+    expect(hit!.matchSnippet).toBeUndefined();
+  }
 });
 
 test("empty query returns recency order untouched", () => {

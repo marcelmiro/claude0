@@ -123,7 +123,9 @@ focus loss) returns to the inbox. A click selects, a click on the selected row o
 Enter arrives as CR in the raw-mode stub, so LF is free to be `^j` (`input.ts`).
 
 - **Search** (`/`) covers every session Claude retains, live ones included; an empty query
-  lists them newest first. The list stops at 50 rows with a "+N more — keep typing" line
+  lists them newest first. Words match the name, summary, first prompt, branch and repo,
+  and the whole conversation through the search index ([search](search.md)); while the
+  index's first build runs, the query line shows `indexing N%` instead of the count. The list stops at 50 rows with a "+N more — keep typing" line
   (past ~20 rows typing narrows faster than scrolling). Rows show a state glyph (● needs you / running, ☾ snoozed with
   its wake, ✗ blocked, ✓ recent), and the match snippet when the match was in the
   conversation, else `repo/branch`. **Enter previews** the selected result
@@ -136,8 +138,8 @@ Enter arrives as CR in the raw-mode stub, so LF is free to be `^j` (`input.ts`).
   explicit unarchive matters: an archive older than RECENT would otherwise keep the
   restored session off the sidebar.
 - **The engine runs in `claude0 search-worker`**, spawned on the first query and exiting
-  after 10 min idle (`search-worker.ts`): loading every transcript's search slices plateaus
-  near 240MB RSS, about three times the daemon's own. It answers from its current entries
+  after 10 min idle (`search-worker.ts`): loading every session's entry (a tail read per
+  transcript) plateaus near 210MB RSS, about three times the daemon's own. It answers from its current entries
   and reloads after 15s in the background; only the newest request of a burst is answered,
   and the renderer drops responses older than the window's latest (`searchSeq`).
 - **New session** (`n`) filters repos — `discoverRepos` order, worktrees under their base,

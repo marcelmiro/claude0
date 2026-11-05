@@ -153,7 +153,7 @@ export function runSidebarRenderer(): void {
   }
 
   // ── search worker (docs/inbox.md, "Search and new session") ─────────────
-  // Search runs in its own process: loading the corpus would roughly triple
+  // Search runs in its own process: loading every session's entry would roughly triple
   // this daemon's RSS. Spawned on the first query; it exits by itself after
   // 10 min idle, and the next query spawns a fresh one.
   let worker: Subprocess<"pipe", "pipe", "inherit"> | null = null;
@@ -227,6 +227,7 @@ export function runSidebarRenderer(): void {
     win.modeLoading = false;
     win.hits = res?.hits ?? [];
     win.hitsTotal = res?.total ?? 0;
+    win.indexing = res?.indexing;
     win.modeCursor = 0;
     win.modeScrollTop = 0;
     if (!res) showFlash(win, "search unavailable");

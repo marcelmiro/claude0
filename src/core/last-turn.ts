@@ -100,9 +100,9 @@ export async function resolveTranscriptPath(
  * is unreadable or holds no timestamped turn (callers fall back to the file mtime).
  */
 /**
- * The record types that carry conversation. This is what "last turn" means here and what
- * the search corpus is built from (`core/search.ts`) — one definition, so a session's
- * age and its searchable content can never disagree about which records count.
+ * The record types that carry conversation. This is what "last turn" means here and in
+ * search's tail read (`core/search.ts`) — one definition, so a session's age can never
+ * differ between the inbox and search.
  */
 export function isConversationalRecord(rec: { type?: string }): boolean {
   return rec.type === "user" || rec.type === "assistant";

@@ -291,6 +291,24 @@ function recordToTurnBody(record: RawRecord): FoldableTurn | null {
 }
 
 /**
+ * The prose a record contributes to search (ADR 36): the text blocks of a user prompt
+ * (queued ones included) or an assistant reply, by the same visibility rules as the
+ * transcript — "" for tool traffic, thinking, commands, `!` bash, teammate deliveries
+ * and compaction summaries. Interrupt markers ("[Request interrupted by user…]") are
+ * events, not prose: indexed, they made "request" or "interrupted" match most sessions.
+ */
+export function recordProse(record: unknown): string {
+  if (!record || typeof record !== "object") return "";
+  const turn = recordToTurnBody(record as RawRecord);
+  if (!turn || turn.command || turn.bash || turn.bashOutput || turn.teammate || turn.compactSummary) return "";
+  return turn.content
+    .filter((b): b is Extract<TranscriptBlock, { type: "text" }> => b.type === "text")
+    .map((b) => b.text)
+    .filter((t) => !(turn.role === "user" && t.startsWith("[Request interrupted")))
+    .join("\n");
+}
+
+/**
  * Merge each bash output marker into its immediately-preceding bash command turn.
  * An orphan output (no preceding command — e.g. a branch walk clipped the input) is
  * dropped; a command with no following output keeps empty stdout/stderr (killed

@@ -115,8 +115,13 @@ export function renderMode(
   const count = search ? vs.hits.length : repos.length;
   const cursor = Math.max(0, Math.min(vs.modeCursor, count - 1));
 
-  // query line: mode glyph, the typed text, the caret; result count on the right
-  const right = vs.modeLoading ? "…" : String(search ? vs.hitsTotal : repos.length);
+  // query line: mode glyph, the typed text, the caret; result count on the right —
+  // or, while the first index build runs, how far it got (conversation hits fill in)
+  const right = vs.modeLoading
+    ? "…"
+    : search && vs.indexing !== undefined
+      ? `indexing ${vs.indexing}%`
+      : String(search ? vs.hitsTotal : repos.length);
   const sigil = fg(C.peach, search ? "/" : "+");
   const typed = tail(vs.query, width - 5 - plainLen(right));
   const queryPad = " ".repeat(Math.max(1, width - 4 - plainLen(typed) - plainLen(right)));

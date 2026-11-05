@@ -101,7 +101,7 @@ import { composeSessions, isWakePreset, presetWakeAt, type InboxSession } from "
 import { orderInboxRows, type DiscoverySeen } from "./inbox-payload";
 import { withDeadline } from "../core/deadline";
 import * as stream from "./stream";
-import { loadAllSessions, filterAndRankEntries, type SearchEntry } from "../core/search";
+import { loadAllSessions, filterAndRankEntries, addContentSnippets, type SearchEntry } from "../core/search";
 import { fixtureData } from "./fixtures";
 import { runShell, SHELL_HISTORY, type ShellRun } from "../core/shell-run";
 import { probe } from "../core/doctor";
@@ -651,9 +651,10 @@ async function sessionsPayload(): Promise<unknown> {
 // Backed by the global-search engine the sidebar's search also uses (core/search.ts): every transcript Claude
 // still retains, no 24h window. Browse (empty q) pages by recency via a `before`
 // timestamp cursor; a query returns one relevance-ranked page (rank order isn't
-// chronological, so no cursor). Entries are cached briefly — the corpus scan reads
-// head+tail of every transcript (~1s cold) and a debounced search keystroke shouldn't
-// re-pay it; archive/restore bust the cache so a just-archived session appears at once.
+// chronological, so no cursor). Entries are cached briefly — the scan reads the tail of
+// every transcript and a debounced search keystroke shouldn't re-pay it; archive/restore
+// bust the cache so a just-archived session appears at once. Conversation matches come
+// from the search index (ADR 36); their snippets are fetched for the returned page only.
 const HISTORY_PAGE = 50;
 const HISTORY_TTL_MS = 15_000;
 let historyCache: { ts: number; entries: SearchEntry[] } | null = null;
@@ -699,6 +700,7 @@ async function historyPayload(params: URLSearchParams): Promise<unknown> {
   let rows = repo ? matched.filter((e) => e.repo === repo) : matched;
   if (!q && Number.isFinite(before)) rows = rows.filter((e) => e.modified.getTime() < before);
   rows = rows.slice(0, HISTORY_PAGE);
+  if (q) addContentSnippets(rows);
 
   const payload = await Promise.all(
     rows.map(async (e) => ({
