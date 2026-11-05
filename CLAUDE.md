@@ -1,6 +1,6 @@
 # Claude0
 
-Terminal TUI (blessed) + phone web app ("portkey") for managing Claude Code sessions: live status detection, attention notifications, AI naming, an inbox lifecycle, and a mobile bridge. Runs on macOS (Ghostty + tmux) or a Linux VM host — per-machine roles: [ADR 22](docs/adr/0022-per-machine-roles.md).
+tmux inbox sidebar + phone web app ("portkey") for managing Claude Code sessions: live status detection, attention notifications, AI naming, an inbox lifecycle, and a mobile bridge. Runs on macOS (Ghostty + tmux) or a Linux VM host — per-machine roles: [ADR 22](docs/adr/0022-per-machine-roles.md).
 
 This file is the map. Vocabulary lives in [GLOSSARY.md](GLOSSARY.md).
 
@@ -11,15 +11,13 @@ This file is the map. Vocabulary lives in [GLOSSARY.md](GLOSSARY.md).
 ## Commands
 
 ```sh
-bun run start             # Run TUI
-bun run dev               # Watch mode (--watch)
 bun run status            # Tmux status-right monitor
 bun test                  # Run tests (bun:test)
 bun run typecheck         # tsc --noEmit (bun runs no type checks itself)
 bun run bin/claude0.ts <cmd>   # Test any subcommand without installing (e.g. `list`)
 ```
 
-Entry: `bin/claude0.ts` (CLI router) → `src/index.ts` (TUI) or `src/cli.ts` (subcommands). `claude0 --help` lists all subcommands; `claude0` and `c0` are the same installed entry.
+Entry: `bin/claude0.ts` (CLI router) → `src/cli.ts` (subcommands), `src/sidebar/` and `src/preview/` (internal routes the daemon spawns). `claude0 --help` lists all subcommands; `claude0` and `c0` are the same installed entry.
 
 ## Ops duties (do them directly)
 
@@ -31,21 +29,21 @@ These are routine, durably-authorized actions — **do them yourself, don't just
 
 ## Orientation
 
-- `src/core/` — pure/IO logic shared by all processes (discovery, tmux, status, git, inbox, transcripts). `src/ui/` — blessed TUI. `src/bridge/` — phone HTTP server + `public/` client. `src/sidebar/` — inbox sidebar renderer. `src/monitor.ts` — status-right poller. Types in `src/types.ts`.
-- Four long-lived processes share state through `~/.config/claude0/` (config.json, state.json, panes/, verdicts/, …): TUI (fresh per popup), monitor (fresh per tick), daemon, bridge.
+- `src/core/` — pure/IO logic shared by all processes (discovery, tmux, status, git, inbox, transcripts). `src/bridge/` — phone HTTP server + `public/` client. `src/sidebar/` — inbox sidebar renderer and its search worker. `src/preview/` — the transcript preview popup. `src/monitor.ts` — status-right poller. Types in `src/types.ts`.
+- Processes share state through `~/.config/claude0/` (config.json, state.json, panes/, verdicts/, …): monitor (fresh per tick), daemon (sidebar renderer, plus its search worker and preview popups), bridge.
 - Session discovery correlates Claude process TTYs with tmux pane TTYs, plus per-pane files under `panes/` written by the SessionStart hook (`claude0 setup` installs it). Session data: `~/.claude/projects/*/{sessions-index.json,<id>.jsonl}`.
 - Driving portkey in a real browser (fixtures bridge + inspect-ui): [docs/portkey-design-loop.md](docs/portkey-design-loop.md). Backlog: `ideas.txt`.
 
 ## Conventions
 
-- **Bun only** — `Bun.$` for shell, `Bun.file()` for IO, `Bun.Glob` for scanning. No external deps beyond `blessed`.
+- **Bun only** — `Bun.$` for shell, `Bun.file()` for IO, `Bun.Glob` for scanning. No runtime dependencies.
 - **No migration/back-compat shims.** The installed base is ~one user: when a config/cache/file format changes, delete the old path and reset to defaults — never write legacy-key handling or migration code.
 - **config.json holds user-taste knobs only** (abbreviations, keys, roots, notification prefs, snooze presets). Internal timings, TTLs, and heuristics stay hardcoded — being tunable isn't qualification ([ADR 20](docs/adr/0020-config-defaults-live-in-code-setup-materializes.md)).
 - **Intertwine only with tmux and mosh.** Any terminal (Ghostty), notifier, or host tool is a configurable default, never a hard dependency ([ADR 19](docs/adr/0019-presence-is-client-activity-everywhere.md)/[23](docs/adr/0023-dotfiles-independence.md)).
 - Multiple agents (and the user) often work uncommitted in this same checkout on `main` — before diagnosing a test failure or "fixing" an unfamiliar diff, check it isn't someone's live work; re-run first.
 - **Vibe mode**: single-dev repo — work directly in this base checkout on `main`, commit and push to `main` when asked, no Linear, no plan docs. Exception: if `git status` shows uncommitted changes in files your task will touch, create a worktree per the global rule.
 - **No Codex**: the Codex GitHub connector isn't installed for this repo — `pr-triage` skips the Codex trigger and confirm (record `confirm=unavailable`); review is Claude-only, so say so in the handback.
-- All shell/IO in try/catch returning empty defaults — never crash the TUI.
+- All shell/IO in try/catch returning empty defaults — never crash the daemon or the bridge.
 - Stream transcript IO in long-lived processes (`jsonlLines()` or windowed byte reads) — one `.text()` of a multi-MB JSONL permanently ratchets RSS (freed malloc pages don't return to the OS; the bridge hit a ~1GB plateau on a 3MB heap).
 - Dates and times render through hard-coded English formats (`shared/wake-abs.js`), never locale-sensitive `Intl` — Bun ignores `LANG` for its default locale and ICU builds disagree on locale data.
 - Vesper palette: `bg=#101010 fg=#FFFFFF muted=#A0A0A0 dim=#505050 surface=#1C1C1C peach=#FFC799 mint=#99FFE4 red=#FF8080`. Status colors: waiting/ready=peach, running=mint, idle=dim.
@@ -99,8 +97,7 @@ Processes & caches:
 | Model/effort switcher | [4](docs/adr/0004-model-effort-switcher-scope.md) | [model-effort-switcher](docs/model-effort-switcher.md) | `core/session-api.ts` |
 | systemd units, tmux-resurrect pairing, restore-path resolution | [16](docs/adr/0016-systemd-units-replace-launchd.md), [23](docs/adr/0023-dotfiles-independence.md) | [deploy/README.md](deploy/README.md) | `deploy/`, `core/resurrect.ts` |
 | Setup roles, config defaults, VM layout | [22](docs/adr/0022-per-machine-roles.md), [20](docs/adr/0020-config-defaults-live-in-code-setup-materializes.md), [17](docs/adr/0017-user-centric-development-layout.md), [15](docs/adr/0015-vm-home-is-users-throxy.md) |  | `src/cli.ts` (setup/doctor) |
-| TUI requires a TTY | [3](docs/adr/0003-tui-requires-a-tty.md) |  | `src/index.ts` |
-| Sidebar is the only desk surface: search and new-session modes, preview popup; TUI retired | [34](docs/adr/0034-sidebar-is-the-only-desk-surface.md), [35](docs/adr/0035-enter-never-refiles-a-parked-or-recent-row.md) | [inbox](docs/inbox.md), [preview](docs/preview.md) | `src/sidebar/`, `src/preview/` |
+| Sidebar is the only desk surface: search and new-session modes, preview popup; TUI retired | [34](docs/adr/0034-sidebar-is-the-only-desk-surface.md) (supersedes [3](docs/adr/0003-tui-requires-a-tty.md)), [35](docs/adr/0035-enter-never-refiles-a-parked-or-recent-row.md) | [inbox](docs/inbox.md), [preview](docs/preview.md) | `src/sidebar/`, `src/preview/` |
 | Offline app shell | [21](docs/adr/0021-offline-app-shell.md) | [portkey](docs/portkey.md) (iOS status bar) | `bridge/public/sw.js` |
 | History depth | [7](docs/adr/0007-history-depth-is-claudes-retention.md) |  | `core/transcript.ts` |
 | Search: conversation prose through an FTS5 index | [36](docs/adr/0036-search-matches-prose-through-an-fts5-index.md) |  | `core/search.ts` |

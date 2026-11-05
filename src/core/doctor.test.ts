@@ -173,7 +173,7 @@ test("fragments: forward-rendered template matches; layered imports accepted on 
 });
 
 test("fragments: a fragment rendered with custom keys is fresh iff config still holds those keys", async () => {
-  const config: Config = { ...DEFAULT_CONFIG, tmux: { keys: { popup: "M-a" } } };
+  const config: Config = { ...DEFAULT_CONFIG, tmux: { keys: { next: "M-a" } } };
   await installFragments(tmuxKeys(config));
   expect((await check("fragments", ctx({ config })))[0].status).toBe("ok");
 
@@ -193,12 +193,11 @@ test("fragments: unrendered {{...}} tokens, a stale fragment, or a missing impor
 });
 
 test("renderTmuxFragment renders binds per table and both resurrect outcomes", () => {
-  const keys = { ...tmuxKeys(null), popup: "prefix a", next: "M-n" };
-  const template = "{{BIND_POPUP}} x\n{{BIND_NEXT}} y\n{{RESURRECT_LOAD}}\n";
-  expect(renderTmuxFragment(template, keys, "/h/plugins/tmux-resurrect")).toBe(
-    "bind-key a x\nbind-key -n M-n y\nrun-shell '/h/plugins/tmux-resurrect/resurrect.tmux'\n",
+  const template = "{{BIND_NEXT}} y\n{{RESURRECT_LOAD}}\n";
+  expect(renderTmuxFragment(template, tmuxKeys(null), "/h/plugins/tmux-resurrect")).toBe(
+    "bind-key a y\nrun-shell '/h/plugins/tmux-resurrect/resurrect.tmux'\n",
   );
-  expect(renderTmuxFragment(template, keys, null)).toBe("bind-key a x\nbind-key -n M-n y\n");
+  expect(renderTmuxFragment(template, { ...tmuxKeys(null), next: "M-n" }, null)).toBe("bind-key -n M-n y\n");
 });
 
 test("renderTerminalLauncher quotes every value; null remoteHost renders ''", () => {

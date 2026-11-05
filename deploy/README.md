@@ -49,7 +49,7 @@ templated.
 ## Clipboard between Mac and VM
 
 Paste into the VM is terminal input: `Cmd+V` in Ghostty, no remote clipboard
-service involved. Copy out of the VM (including Claude0's Space→c) uses
+service involved. Copy out of the VM uses
 OSC 52, which needs Ghostty's `clipboard-read = allow` and
 `clipboard-write = allow`. When the chain is healthy, tmux advertises both the
 `clipboard` and `bpaste` client features.

@@ -3,7 +3,7 @@
  * so an iPhone (over Tailscale) can see sessions, read transcripts, approve tools,
  * answer questions, and send messages. Adds NO Claude-wrapping logic: every route
  * delegates to an existing `core/` function. Headless like `monitor.ts` — imports
- * `core/*` only, never `ui/`/`blessed`.
+ * `core/*` only.
  *
  * Security posture: bind fail-closed (loopback / tailnet only), and no token —
  * `request-guard.ts` admits the bind address and the node owner's tailnet identity,
@@ -648,7 +648,7 @@ async function sessionsPayload(): Promise<unknown> {
 }
 
 // --- History: the windowless archive (browse + search) ------------------------
-// Backed by the TUI's global-search engine (core/search.ts): every transcript Claude
+// Backed by the global-search engine the sidebar's search also uses (core/search.ts): every transcript Claude
 // still retains, no 24h window. Browse (empty q) pages by recency via a `before`
 // timestamp cursor; a query returns one relevance-ranked page (rank order isn't
 // chronological, so no cursor). Entries are cached briefly — the corpus scan reads
@@ -1764,7 +1764,7 @@ async function route(req: Request): Promise<Response> {
       basePath = entry.baseRepoPath;
     }
     // Relocate to the base repo if the session's worktree was deleted, so the resume lands
-    // (and doesn't fail `restoreSession`'s isDirectory guard). Mirrors the TUI resume path.
+    // (and doesn't fail `restoreSession`'s isDirectory guard). Mirrors the sidebar's resume path.
     const effectivePath = await recoverWorktreeTranscript(id, repoPath!, basePath!);
     const result = await restoreSession(id, effectivePath);
     // Restoring is an explicit way back in (ADR 35): clear the parked/archived fact —

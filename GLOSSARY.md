@@ -1,6 +1,6 @@
 # Claude0
 
-Terminal TUI + mobile bridge ("portkey") for managing Claude Code sessions. This glossary pins the canonical terms; `CLAUDE.md` is the map (commands, conventions, gotchas).
+tmux inbox sidebar + mobile bridge ("portkey") for managing Claude Code sessions. This glossary pins the canonical terms; `CLAUDE.md` is the map (commands, conventions, gotchas).
 
 **Decisions (`docs/adr/`).** Record one as `docs/adr/NNNN-slug.md` only when it's hard to reverse, surprising without context, and the result of a real trade-off. Sections: Context, Decision, Consequences, plus a `Status:` line (accepted / amended by ADR N / superseded by ADR N, dated). ADRs hold the decision; how a feature works goes in `docs/<area>.md`. When a later change reverses part of an ADR, update its Status line instead of appending a changelog. Before changing an area, read its ADRs; if your change contradicts one, say so and ask.
 
@@ -10,9 +10,9 @@ Terminal TUI + mobile bridge ("portkey") for managing Claude Code sessions. This
 The product. Formerly named CSM ("Claude Session Manager", rebranded 2026-08) — the old name persists in user speech, old commits, and stale unit names; always write Claude0.
 _Avoid_: CSM, Claude Session Manager
 
-**TUI**:
-The full-screen blessed terminal app (`claude0 tui`, opened via tmux popup) — the desk surface.
-_Avoid_: app, desktop UI, terminal client
+**Sidebar**:
+The inbox pane at the left of every tmux window — the desk surface. It also searches every session, starts new ones, and opens previews.
+_Avoid_: TUI (the retired full-screen app), panel
 
 **Portkey**:
 The phone web app (installed PWA) served by the bridge. Portkey is the client surface; the *bridge* is the HTTP server process behind it — a change can touch one without the other.

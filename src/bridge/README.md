@@ -33,7 +33,7 @@ It refuses to start bound to a non-loopback / non-tailnet address.
 - **Approve / answer / send** — a docked bottom bar swaps by state: a tool prompt
   shows Allow/Deny, an open `AskUserQuestion` shows answer chips, otherwise a
   free-text composer. The result (`✓` / `✗ reason`) is shown inline. All three need a
-  **live tmux pane on the Mac**; free-text send works in any state (TUI parity — keys
+  **live tmux pane on the Mac**; free-text send works in any state (keys
   go to the pane, and Claude queues input while running), shown immediately as an
   optimistic bubble until the transcript catches up.
 - **Names** — each session shows its tmux-style AI name (shared `names.json` cache).

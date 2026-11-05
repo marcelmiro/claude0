@@ -1,5 +1,5 @@
 /**
- * Claude0 CLI subcommands — lightweight commands that don't require the full TUI.
+ * Claude0 CLI subcommands.
  *
  * claude0 next              — switch to the next session needing attention
  * claude0 reset             — reset all window names back to repo names
@@ -821,10 +821,8 @@ async function installTerminalIntegration(home: string, resurrectDir: string | n
       // previously installed binds so the live server can drop any that changed.
       // (sidebarFocus/sidebarToggle stale binds are handled by the renderer's
       // sidebar-keys.json marker instead — those binds have no template to diff.)
-      for (const marker of ["tmux set-environment CLAUDE0_FOCUS_PANE", "claude0 next"]) {
-        const old = existing.match(new RegExp(`^bind-key (?:(-n) )?(\\S+) run-shell '${marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "m"));
-        if (old && !wanted.includes(old[0])) staleBinds.push(old[1] ? ["-n", old[2]!] : [old[2]!]);
-      }
+      const old = existing.match(/^bind-key (?:(-n) )?(\S+) run-shell 'claude0 next/m);
+      if (old && !wanted.includes(old[0])) staleBinds.push(old[1] ? ["-n", old[2]!] : [old[2]!]);
     }
     if (existing !== wanted) {
       const slash = file.target.lastIndexOf("/");

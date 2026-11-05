@@ -1,7 +1,7 @@
 # 3. The TUI refuses to run without a TTY
 
 Date: 2026-07-20 (documenting an earlier decision)
-Status: accepted
+Status: superseded by ADR 34 (2026-11-05) — the TUI is deleted
 
 ## Context
 

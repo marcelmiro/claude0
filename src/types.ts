@@ -43,12 +43,6 @@ export interface Session {
  */
 export type RestoreState = "yes" | "relocated" | "no";
 
-export interface RepoGroup {
-  name: string;
-  path: string;
-  sessions: Session[];
-}
-
 export interface SessionIndexEntry {
   sessionId: string;
   fullPath: string;
@@ -86,13 +80,6 @@ export interface ClaudeProcess {
    *  id read from Claude's per-pid native file, NOT the parent the hook records. */
   isFork: boolean;
 }
-
-export type DisplayRow =
-  | { type: "repo-header"; name: string; path: string }
-  | { type: "separator" }
-  | { type: "session"; session: Session }
-  | { type: "session-detail"; session: Session }
-  | { type: "archive-collapsed"; repoName: string; count: number; sessions: Session[] };
 
 // --- Notification system types ---
 
@@ -170,7 +157,7 @@ export interface EncryptSeams {
   senderKeys?: CryptoKeyPair; // ECDH P-256 — the "ephemeral" application-server pair
 }
 
-// --- New Session Wizard types ---
+// --- Repo discovery types ---
 
 export interface WizardRepo {
   name: string;           // base repo name (last path component; worktrees inherit their base's name)
@@ -182,70 +169,8 @@ export interface WizardRepo {
   worktreeCount?: number; // linked worktrees under this base (from git worktree list); drives the collapsed-row badge
 }
 
-export interface WizardBranch {
-  name: string;        // local name (remotes/origin/ stripped)
-  isRemote: boolean;   // remote-only branch
-  isCurrent: boolean;  // repo's current branch
-  fullRef: string;     // original ref
-}
-
-export type WizardStep = "repo" | "branch" | "worktree-choice" | "worktree";
-
-/** How a launched session sets up its working tree. */
-export type WorktreeMode = "new-branch" | "reuse" | "checkout" | "current";
-
-export interface WizardState {
-  step: WizardStep;
-  repos: WizardRepo[];          // all rows (bases + nested worktrees) in discovery order
-  filteredRepos: WizardRepo[];  // currently-visible rows the cursor indexes into: bases-only when repoFilter is empty, scored flat matches otherwise
-  repoIndex: number;            // index into filteredRepos
-  repoFilter: string;           // repo-step type-to-filter query
-  repoFilterCursor: number;
-  expandedRepos: string[];      // base repo paths whose worktrees are expanded inline (empty-filter browse view)
-  selectedRepo: WizardRepo | null;
-  branches: WizardBranch[];
-  filteredBranches: WizardBranch[];
-  branchIndex: number;
-  branchFilter: string;
-  branchFilterCursor: number;
-  branchFilterActive: boolean;
-  selectedBranch: WizardBranch | null;
-  defaultBranch: string;       // repo trunk (from origin/HEAD); drives the worktree-choice default cursor
-  worktreeChoiceIndex: number; // 0 = new worktree + new branch, 1 = new worktree (reuse branch), 2 = checkout
-  worktreeMode: "new-branch" | "reuse"; // what the worktree step's text field edits: a new branch name, or a dir name
-  worktreeName: string;        // text input: new branch name (new-branch) or dir name (reuse)
-  worktreeNameCursor: number;
-  enterDebounceUntil: number;  // timestamp (ms) — ignore Enter until this time (prevents double-fire on step transition)
-  fetchState: "idle" | "fetching" | "done"; // background `git fetch` status for the branch step
-}
-
-export type WizardAction =
-  | { type: "noop" }
-  | { type: "render" }
-  | { type: "preview" }
-  | { type: "cancel" }
-  | { type: "loadBranches" }
-  | { type: "fetch" }
-  | { type: "launch"; repo: WizardRepo; branch: WizardBranch; mode: WorktreeMode; text: string; shellOnly: boolean };
-
-// --- Global search types ---
-
-export interface GlobalSearchState {
-  query: string;
-  cursor: number;
-  entries: SearchEntryRef[];  // all loaded entries (cached for search session)
-  results: SearchEntryRef[];  // filtered/ranked subset (max 50)
-  total: number;              // full match count before the 50-row cap
-  selectedIndex: number;
-  loading: boolean;
-}
-
-// Forward ref — actual type lives in core/search.ts to avoid circular deps
-export type SearchEntryRef = import("./core/search").SearchEntry;
-
-/** The four configurable tmux bindings, resolved (defaults filled) by `tmuxKeys()`. */
+/** The three configurable tmux bindings, resolved (defaults filled) by `tmuxKeys()`. */
 export interface TmuxKeys {
-  popup: string;
   next: string;
   sidebarFocus: string;
   sidebarToggle: string;

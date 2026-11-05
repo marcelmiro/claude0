@@ -469,8 +469,8 @@ export async function generateAIName(ctx: NamingContext): Promise<string> {
 const NAMING_LOG = `${CLAUDE0_ROOT}/.config/claude0/naming.log`;
 const NAMING_LOG_MAX = 256 * 1024;
 
-/** A file, not stderr: the monitor's tmux `#()` stderr is discarded and the TUI's
- *  stderr is the blessed screen. Rotates to `.1` past NAMING_LOG_MAX. */
+/** A file, not stderr: the monitor's tmux `#()` stderr is discarded. Rotates to `.1`
+ *  past NAMING_LOG_MAX. */
 async function logNamingFailure(line: string): Promise<void> {
   try {
     const { appendFile, rename, stat } = await import("fs/promises");

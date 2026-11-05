@@ -1,7 +1,6 @@
 import { homedir } from "os";
 import type {
   Session,
-  RepoGroup,
   SessionIndex,
   PaneInfo,
 } from "../types";
@@ -29,18 +28,6 @@ export function repoNameFromPath(p: string): string {
 // Populated by hook events, --resume flag, or JSONL mtime heuristic (best-guess).
 // Once set, prevents re-running the expensive heuristic every 3s.
 const paneSessionCache = new Map<string, string>();
-
-/** Seed the in-memory pane→sessionId cache from persisted data (avoids lsof cold start). */
-export function seedPaneSessionCache(entries: Record<string, string>): void {
-  for (const [k, v] of Object.entries(entries)) {
-    paneSessionCache.set(k, v);
-  }
-}
-
-/** Export current cache contents for persistence. */
-export function exportPaneSessionCache(): Record<string, string> {
-  return Object.fromEntries(paneSessionCache);
-}
 
 /**
  * Resolve a pane's CURRENT session id. The SessionStart hook is authoritative — it fires
@@ -169,7 +156,7 @@ export async function discoverSessions(opts?: { skipArchivedSummaries?: boolean;
   // always-on bridge) keeps `resolveSessionPane` current — capturing window-name/mtime fallback
   // resolutions the hook never wrote. Prune files for panes that have left tmux entirely (the
   // full pane set, not just claude panes, so a transient miss can't drop a live mapping).
-  await savePaneSessions(exportPaneSessionCache());
+  await savePaneSessions(Object.fromEntries(paneSessionCache));
   await reconcilePaneFiles(new Set(panes.map((p) => p.paneId)));
 
   // Phase B: Discover archived sessions from index files. With `archivedTtlMs` (bridge
@@ -1091,82 +1078,6 @@ async function getGitBranch(projectPath: string): Promise<string> {
   }
   gitBranchCache.set(projectPath, { ts: Date.now(), branch });
   return branch;
-}
-
-/**
- * Group sessions by repo name, priority repos first then alphabetical.
- * Sessions within each group mirror portkey's list order (`compareSessions` in
- * bridge/public/app.js): attention (⚡) first, then status priority, then
- * last-activity recency desc.
- */
-export function groupSessions(
-  sessions: Session[],
-  priorityRepos: string[],
-  attentionKeys: Set<string> = new Set(),
-): RepoGroup[] {
-  const statusPriority: Record<Session["status"], number> = {
-    waiting: 0,
-    running: 1,
-    ready: 2,
-    idle: 3,
-    archived: 4,
-  };
-
-  // Group by repo name
-  const groupMap = new Map<string, Session[]>();
-
-  for (const session of sessions) {
-    const existing = groupMap.get(session.repo);
-    if (existing) {
-      existing.push(session);
-    } else {
-      groupMap.set(session.repo, [session]);
-    }
-  }
-
-  // Build RepoGroup array
-  const groups: RepoGroup[] = [];
-
-  // Recency uses lastTurnAt — a stable transcript timestamp — never a live session's
-  // `modified` fallback, which is stamped new Date() each refresh and would shuffle
-  // same-status sessions between cycles. Archived mtimes are stable, so they stand in.
-  const activityMs = (s: Session): number =>
-    s.lastTurnAt?.getTime() ?? (s.status === "archived" ? s.modified.getTime() : 0);
-
-  for (const [name, groupSessions] of groupMap) {
-    // Portkey's compareSessions: attention first, then status rank, then recency desc.
-    // Stable pane-id/id tiebreak so exact ties keep a fixed order across refreshes.
-    groupSessions.sort((a, b) => {
-      const attnDiff =
-        (attentionKeys.has(a.tmuxPane?.paneId ?? "") ? 0 : 1) -
-        (attentionKeys.has(b.tmuxPane?.paneId ?? "") ? 0 : 1);
-      if (attnDiff !== 0) return attnDiff;
-      const statusDiff = statusPriority[a.status] - statusPriority[b.status];
-      if (statusDiff !== 0) return statusDiff;
-      const recency = activityMs(b) - activityMs(a);
-      if (recency !== 0) return recency;
-      const aKey = a.tmuxPane?.paneId ?? a.id;
-      const bKey = b.tmuxPane?.paneId ?? b.id;
-      return aKey.localeCompare(bKey);
-    });
-
-    // Use the baseRepoPath from the first session as the group path
-    const path = groupSessions[0].baseRepoPath;
-
-    groups.push({ name, path, sessions: groupSessions });
-  }
-
-  // Sort groups: priority repos first (in array order), then alphabetical
-  groups.sort((a, b) => {
-    const aPriority = priorityRepos.indexOf(a.name.toLowerCase());
-    const bPriority = priorityRepos.indexOf(b.name.toLowerCase());
-    if (aPriority !== -1 && bPriority !== -1) return aPriority - bPriority;
-    if (aPriority !== -1) return -1;
-    if (bPriority !== -1) return 1;
-    return a.name.localeCompare(b.name);
-  });
-
-  return groups;
 }
 
 interface JsonlMetadata {

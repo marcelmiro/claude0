@@ -8,8 +8,7 @@
  *    with `liveScripts`, which has tasks but no session id.
  *
  * Both are on disk because none of the callers outlive the work: the monitor is a
- * fresh process per tmux status tick, and the TUI is a fresh process per
- * `display-popup` open. Steady-state cost per call is one stat per candidate session,
+ * fresh process per tmux status tick. Steady-state cost per call is one stat per candidate session,
  * and one `lsof` for all genuinely-live runners every ~15s.
  *
  * Note the two use different concurrency strategies, deliberately. Verdicts get one

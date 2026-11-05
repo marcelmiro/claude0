@@ -6,9 +6,8 @@
  *
  * 1. It is a fact about OTHER processes, so it is inherently cross-process and its
  *    natural home is disk. An in-memory verdict cache only helps a process that
- *    outlives the probe — and the TUI does not: launched via `tmux display-popup`
- *    it is a fresh process on every open, so it re-proved the same permanently-dead
- *    verdicts on every launch.
+ *    outlives the probe — and the monitor does not: it is a fresh process per tmux
+ *    status tick, so it would re-prove the same permanently-dead verdicts every tick.
  * 2. Death is terminal — a runner never revives. So a dead verdict is written once
  *    and never probed again by anyone. An alive verdict re-probes after a short TTL
  *    to notice the runner exiting.

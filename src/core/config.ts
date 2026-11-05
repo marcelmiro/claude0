@@ -49,8 +49,7 @@ export const DEFAULT_CONFIG = {
   },
   tmux: {
     keys: {
-      popup: "prefix a",
-      next: "prefix C-a",
+      next: "prefix a",
       sidebarFocus: "M-s",
       sidebarToggle: "M-S",
     },
@@ -171,7 +170,7 @@ export function validateConfig(value: unknown): Config {
     onlyKeys(value.tmux, ["keys"], "tmux");
     if (value.tmux.keys !== undefined) {
       if (!isObject(value.tmux.keys)) throw new Error("tmux.keys must be an object");
-      const names = ["popup", "next", "sidebarFocus", "sidebarToggle"];
+      const names = ["next", "sidebarFocus", "sidebarToggle"];
       onlyKeys(value.tmux.keys, names, "tmux.keys");
       for (const name of names) {
         const spec = value.tmux.keys[name];
@@ -187,7 +186,7 @@ export function validateConfig(value: unknown): Config {
   }
   if (tmux?.keys) {
     // Collisions are checked on the RESOLVED set: a user key can also collide with
-    // another binding's default (e.g. popup "M-s" vs sidebarFocus's default "M-s").
+    // another binding's default (e.g. next "M-s" vs sidebarFocus's default "M-s").
     // tmux keeps only the last bind for a table+key, so a collision would silently
     // disable one of the two actions.
     const resolved = tmuxKeys({ ...DEFAULT_CONFIG, tmux });
@@ -292,7 +291,6 @@ export function tmuxKeys(config: Config | null): TmuxKeys {
   const defaults = DEFAULT_CONFIG.tmux.keys;
   const user = config?.tmux?.keys ?? {};
   return {
-    popup: user.popup ?? defaults.popup,
     next: user.next ?? defaults.next,
     sidebarFocus: user.sidebarFocus ?? defaults.sidebarFocus,
     sidebarToggle: user.sidebarToggle ?? defaults.sidebarToggle,

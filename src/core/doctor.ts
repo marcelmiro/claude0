@@ -107,7 +107,6 @@ export function renderTmuxFragment(template: string, keys: TmuxKeys, resurrectDi
     return parsed.table === "prefix" ? `bind-key ${parsed.key}` : `bind-key -n ${parsed.key}`;
   };
   return template
-    .replace("{{BIND_POPUP}}", bindFor(keys.popup))
     .replace("{{BIND_NEXT}}", bindFor(keys.next))
     .replace("{{RESURRECT_LOAD}}\n", resurrectDir === null ? "" : `run-shell '${resurrectDir}/resurrect.tmux'\n`);
 }
@@ -393,17 +392,17 @@ function tmuxCheck(): DoctorCheck {
       const status = (await probe(["tmux", "show-options", "-gqv", "@claude0_status"])).out;
       results.push(status.includes("claude0 status") ? ok("Claude0 status segment is active") : fail("@claude0_status is missing or inactive"));
 
-      const spec = tmuxKeys(ctx.config).popup;
+      const spec = tmuxKeys(ctx.config).next;
       try {
         const { table, key } = parseTmuxKey(spec);
         const bound = (await probe(["tmux", "list-keys", "-T", table, key])).out;
         results.push(
-          bound.includes("display-popup") && bound.includes("claude0")
-            ? ok("Claude0 popup binding is active")
-            : fail(`${spec} is not bound to the Claude0 popup`),
+          bound.includes("claude0 next")
+            ? ok("Claude0 next binding is active")
+            : fail(`${spec} is not bound to claude0 next`),
         );
       } catch {
-        results.push(fail(`tmux.keys.popup is invalid: ${spec}`));
+        results.push(fail(`tmux.keys.next is invalid: ${spec}`));
       }
       return results;
     },

@@ -59,16 +59,18 @@ daemon. It never replaces personal dotfiles. Update later with
 
 Everything is keyboard-driven from inside tmux. `prefix` is tmux's prefix
 key, `ctrl+b` unless you changed it. Press it, release, then type the rest,
-so `prefix ctrl+a` means `ctrl+b`, release, `ctrl+a`.
+so `prefix a` means `ctrl+b`, release, `a`.
 
 ```text
 alt+s           focus the inbox sidebar, from any window
 alt+shift+s     show or hide the inbox sidebar
-prefix a        open the full session manager in a popup
-prefix ctrl+a   jump to the next session that needs you
+prefix a        jump to the next session that needs you
 ```
 
-The whole workflow is that last key. A session needs you, `prefix ctrl+a`
+In the focused sidebar, `/` searches every session, `n` starts one in a repo
+you pick, and `?` lists the rest.
+
+The whole workflow is `prefix a`. A session needs you, `prefix a`
 jumps to it, you act, you jump again. When Needs you is empty, you're done.
 
 ```sh

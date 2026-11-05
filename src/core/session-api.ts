@@ -3,7 +3,7 @@
  * consumes so it stays a thin transport/presentation layer with no new
  * Claude-wrapping logic. All additive, read-only over existing on-disk artifacts
  * (per-pane files under `panes/`, `events/<id>.jsonl`, transcript JSONL); the senders reuse
- * the existing `send-keys` path. Headless: no blessed/ui imports (boundary.test.ts).
+ * the existing `send-keys` path.
  *
  * `SessionTranscript`/`SendResult` are co-located here (not in `types.ts`) because
  * they reference `PendingToolCall`/`PendingQuestion`, which live in `jsonl-reader.ts`

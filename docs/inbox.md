@@ -164,9 +164,7 @@ Enter arrives as CR in the raw-mode stub, so LF is free to be `^j` (`input.ts`).
   peach marks only signal (reason glyphs, ⚡, stale ages). Rows are two-line (name + dim
   repo/PR) in Needs You and Running, one-line elsewhere.
 - Emoji are allowed in the sidebar: the renderer writes raw SGR and clears each line before
-  repainting, and tmux 3.4 and `Bun.stringWidth` both measure them as two cells. The TUI
-  (blessed) avoids them — emoji are double-width in tmux but single-width to blessed, so
-  repaints corrupt.
+  repainting, and tmux 3.4 and `Bun.stringWidth` both measure them as two cells.
 - **Right slot.** `⚡` = unread (the monitor's `needsAttention` flag for the row's pane —
   the same flag behind the window prefix and portkey's row glow, so all three clear
   together; overlaid per paint by `overlayAttention`). Then the reply due: `❓` question,

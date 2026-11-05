@@ -91,7 +91,6 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "popup": { "type": "string", "pattern": "^(prefix ([MCS]-)*[A-Za-z0-9]+|([MCS]-)+[A-Za-z0-9]+|[Ff][0-9]{1,2})$", "description": "Opens the Claude0 popup. tmux notation: \"prefix a\" = prefix table; bare \"M-x\" = no-prefix (root) table, modifier required. Key tokens are letters/digits only (named keys like Up/BSpace/F5 included). Changes apply on the next `claude0 setup` run." },
             "next": { "type": "string", "pattern": "^(prefix ([MCS]-)*[A-Za-z0-9]+|([MCS]-)+[A-Za-z0-9]+|[Ff][0-9]{1,2})$", "description": "Switches to the next attention session (claude0 next). Changes apply on the next `claude0 setup` run." },
             "sidebarFocus": { "type": "string", "pattern": "^(prefix ([MCS]-)*[A-Za-z0-9]+|([MCS]-)+[A-Za-z0-9]+|[Ff][0-9]{1,2})$", "description": "Focuses the inbox sidebar pane. Changes apply after a `claude0 daemon` restart." },
             "sidebarToggle": { "type": "string", "pattern": "^(prefix ([MCS]-)*[A-Za-z0-9]+|([MCS]-)+[A-Za-z0-9]+|[Ff][0-9]{1,2})$", "description": "Shows/hides the inbox sidebar. Changes apply after a `claude0 daemon` restart." }

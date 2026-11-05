@@ -35,22 +35,24 @@ describe("notifications.pushContact validation", () => {
 describe("tmux.keys", () => {
   test("accepts prefix and modified root-table specs", () => {
     const cfg = base();
-    cfg.tmux = { keys: { popup: "prefix p", sidebarFocus: "C-M-s" } };
-    expect(validateConfig(cfg).tmux?.keys).toEqual({ popup: "prefix p", sidebarFocus: "C-M-s" });
+    cfg.tmux = { keys: { next: "prefix p", sidebarFocus: "C-M-s" } };
+    expect(validateConfig(cfg).tmux?.keys).toEqual({ next: "prefix p", sidebarFocus: "C-M-s" });
   });
 
   test("rejects an unmodified bare key in the root table", () => {
     const cfg = base();
-    cfg.tmux = { keys: { popup: "a" } };
-    expect(() => validateConfig(cfg)).toThrow("tmux.keys.popup");
+    cfg.tmux = { keys: { next: "a" } };
+    expect(() => validateConfig(cfg)).toThrow("tmux.keys.next");
   });
 
   test("rejects unknown key names and malformed specs", () => {
     const cfg = base() as unknown as { tmux: unknown };
     cfg.tmux = { keys: { bogus: "M-x" } };
     expect(() => validateConfig(cfg)).toThrow("tmux.keys");
-    cfg.tmux = { keys: { popup: "prefix" } };
-    expect(() => validateConfig(cfg)).toThrow("tmux.keys.popup");
+    cfg.tmux = { keys: { popup: "prefix a" } }; // the retired TUI popup key
+    expect(() => validateConfig(cfg)).toThrow("unknown key: popup");
+    cfg.tmux = { keys: { next: "prefix" } };
+    expect(() => validateConfig(cfg)).toThrow("tmux.keys.next");
   });
 
   test("tmuxKeyProblem allows F-keys and layered modifiers", () => {
@@ -76,14 +78,14 @@ describe("tmux.keys", () => {
 
   test("rejects two bindings colliding on the same table+key, defaults included", () => {
     const cfg = base();
-    cfg.tmux = { keys: { popup: "prefix a", next: "prefix a" } };
-    expect(() => validateConfig(cfg)).toThrow('popup and next both bind "prefix a"');
+    cfg.tmux = { keys: { next: "M-x", sidebarFocus: "M-x" } };
+    expect(() => validateConfig(cfg)).toThrow('next and sidebarFocus both bind "M-x"');
     // A user key colliding with another binding's DEFAULT is also a collision.
-    cfg.tmux = { keys: { popup: "M-s" } };
+    cfg.tmux = { keys: { next: "M-s" } };
     expect(() => validateConfig(cfg)).toThrow("sidebarFocus");
     // Same key in different tables is fine.
-    cfg.tmux = { keys: { popup: "prefix s", sidebarFocus: "M-s" } };
-    expect(validateConfig(cfg).tmux?.keys).toEqual({ popup: "prefix s", sidebarFocus: "M-s" });
+    cfg.tmux = { keys: { next: "prefix s", sidebarFocus: "M-s" } };
+    expect(validateConfig(cfg).tmux?.keys).toEqual({ next: "prefix s", sidebarFocus: "M-s" });
   });
 
   test("parseTmuxKey splits table and key", () => {
@@ -93,12 +95,11 @@ describe("tmux.keys", () => {
 
   test("tmuxKeys fills defaults per key", () => {
     const cfg = base();
-    cfg.tmux = { keys: { popup: "M-p" } };
+    cfg.tmux = { keys: { sidebarFocus: "M-f" } };
     const keys = tmuxKeys(cfg);
-    expect(keys.popup).toBe("M-p");
-    expect(keys.next).toBe("prefix C-a");
-    expect(keys.sidebarFocus).toBe("M-s");
-    expect(tmuxKeys(null).popup).toBe("prefix a");
+    expect(keys.sidebarFocus).toBe("M-f");
+    expect(keys.next).toBe("prefix a");
+    expect(tmuxKeys(null)).toEqual({ next: "prefix a", sidebarFocus: "M-s", sidebarToggle: "M-S" });
   });
 });
 

@@ -25,9 +25,7 @@ cut), used only on tmux windows, where `reverseNameMap` resolves panes back to s
   naming time (`readNamingExtras`), never on discovery sweeps.
 - **Branch comes from the transcript** (the mode of the session's own `gitBranch` entries,
   `scanTranscriptForNaming`, ignoring main/master): `git branch` in a base checkout shared
-  by several agents returns whoever checked out last. The TUI's `r` rename is the
-  exception — it passes the checkout's branch, no siblings and no anchor (a user-forced
-  rename must be free to change).
+  by several agents returns whoever checked out last.
 - **Noise filters**: mid-session samples skip relays, scaffolding, answer keys and short
   commands (`isNamingNoise`); the first prompt skips skill scaffolding
   (`getFirstUserPrompt`).
@@ -57,10 +55,10 @@ cut), used only on tmux windows, where `reverseNameMap` resolves panes back to s
 
 ## Forks
 
-Every fork path — portkey's `forkSession`, the TUI's fork key, the sidebar's `f` — copies
+Every fork path — portkey's `forkSession`, the sidebar's `f` — copies
 the parent's name onto the fork before launching it (`seedForkName` → `inheritName`).
 Collisions resolve by naming order (`disambiguateNames`): a newcomer takes " 2", an
-existing session is never renamed under you. The monitor, sidebar, TUI and bridge all run it.
+existing session is never renamed under you. The monitor, sidebar and bridge all run it.
 
 ## Resolution
 

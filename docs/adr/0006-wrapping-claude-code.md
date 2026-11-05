@@ -40,9 +40,8 @@ gives up the interactive session, and that trade is refused.
 - **`--session-id` dictation.** Sessions Claude0 launches get a UUID we mint, so the id is known
   before the process starts. This removed a launch→hook race and fixed forks, whose
   `SessionStart` hook records the *parent's* id. Live for the bridge (`tmux.ts`) and forks
-  (`index.ts`). **Not yet on the TUI wizard's own launch path** — `buildLaunchCommand`
-  (`core/launch-command.ts`) still emits a bare `claude`, so a session started with `n` still
-  learns its id from the hook. `nativeSessionIdByPid` (`core/session-state.ts`) therefore
+  (`index.ts`). **Not on the sidebar's `n`/`N` launch path**, which runs a bare `claude`, so a
+  session started there learns its id from the hook. `nativeSessionIdByPid` (`core/session-state.ts`) therefore
   remains load-bearing for externally-created forks; `dictatedSessionId` is tried first
   (`core/process.ts`).
 - **Answering `AskUserQuestion` through the blocking `PreToolUse` hook**, via
@@ -113,7 +112,7 @@ is a supply-chain risk that breaks every release.
 - The version coupling on the write path is accepted, not solved. `updatedInput` for
   `AskUserQuestion` is undocumented, and the keystroke sequences are calibrated to a specific
   Claude release. The mitigation is the capture-verify-abort guard, not avoidance.
-- The TUI wizard's launch path is asymmetric with the bridge's. Anyone touching
-  `buildLaunchCommand` should know dictation was intended there too.
+- The sidebar's new-session launch is asymmetric with the bridge's. Anyone touching
+  `startClaude` (`src/sidebar/renderer.ts`) should know dictation was intended there too.
 - Competitor claims here are frozen at 2026-07-16 and were not re-verified. Treat them as the
   reason a decision was made, not as current fact about another project.

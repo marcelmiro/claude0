@@ -44,7 +44,7 @@ forever. Real data had a 3-day-old wait on a live pane.
   without that, no notification will ever come (it was denied, or ran synchronously). Every pending task is then checked against reality: the
   runner holds an open fd on its output file for its whole life, so one `lsof` per probe
   round separates a live wait from an orphan.
-- **Liveness verdicts are one file per task.** The TUI, monitor and bridge probe
+- **Liveness verdicts are one file per task.** The monitor, daemon and bridge probe
   overlapping task sets at the same time. A shared file loses a writer's slice, and with
   it a terminal dead verdict.
 

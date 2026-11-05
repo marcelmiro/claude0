@@ -19,8 +19,7 @@
  * Claude's, not Claude0's. A future CLAUDE0_HOME-based integration test will NOT reach
  * `nativeStatus()` — that's expected, point it at `dir` instead.
  *
- * Headless: no blessed/ui imports (enforced by boundary.test.ts). All IO in
- * try/catch returning empty defaults — never crash the TUI.
+ * All IO in try/catch returning empty defaults.
  */
 
 import { homedir } from "os";

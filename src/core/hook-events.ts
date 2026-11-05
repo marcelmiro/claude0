@@ -16,10 +16,9 @@
 import { readFileSync } from "node:fs";
 import { PATHS } from "./config";
 import { deriveStatus } from "./event-status";
-import { parseTranscript } from "./transcript";
 import type { PendingToolCall } from "./jsonl-reader";
 import { toPendingQuestion } from "./jsonl-reader";
-import type { HookEvent, TranscriptTurn } from "../types";
+import type { HookEvent } from "../types";
 import type { SessionStatus } from "./status";
 
 export const EVENTS_DIR = `${PATHS.dir}/events`;
@@ -142,19 +141,4 @@ export function pendingToolCall(sessionId: string): PendingToolCall | null {
     call.question = questions[0];
   }
   return call;
-}
-
-/** Tail-read + parse a transcript (tolerant of the truncated first line). */
-export async function readTranscriptTurns(path: string): Promise<TranscriptTurn[]> {
-  try {
-    const file = Bun.file(path);
-    const stat = await file.stat();
-    if (!stat) return [];
-    const TAIL = 64 * 1024;
-    const offset = Math.max(0, stat.size - TAIL);
-    const chunk = await file.slice(offset, stat.size).text();
-    return parseTranscript(chunk);
-  } catch {
-    return [];
-  }
 }

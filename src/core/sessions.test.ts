@@ -10,8 +10,7 @@
 import { test, expect } from "bun:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { slashCommandIntent, resolvePaneSessionId, resolveActiveId, pickRepoPath, groupSessions, getLatestUserPrompt } from "./sessions";
-import type { Session } from "../types";
+import { slashCommandIntent, resolvePaneSessionId, resolveActiveId, pickRepoPath, getLatestUserPrompt } from "./sessions";
 
 test("extracts /implement-plan with its plan path", () => {
   const msg =
@@ -116,69 +115,6 @@ test("pickRepoPath: a normal pane keeps its own cwd even when the transcript /cd
   expect(pickRepoPath(`${HOME}/Documents/repo`, `${HOME}/Documents/other`, HOME)).toBe(
     `${HOME}/Documents/repo`,
   );
-});
-
-// --- groupSessions: within-group order mirrors portkey's compareSessions --------
-// attention (⚡) first → status rank → last-turn recency desc → stable key.
-
-function makeSession(over: Partial<Session> & { id: string }): Session {
-  return {
-    repo: "claude0",
-    repoPath: "/repo",
-    baseRepoPath: "/repo",
-    branch: "main",
-    status: "ready",
-    messageCount: 0,
-    summary: "",
-    modified: new Date("2026-01-01T00:00:00Z"),
-    firstPrompt: "",
-    lastPrompt: "",
-    name: "",
-    tmuxPane: { paneId: `%${over.id}`, windowIndex: 0, sessionName: "main", windowName: "claude0" },
-    ...over,
-  };
-}
-
-test("groupSessions: attention sorts first, even ahead of a waiting session", () => {
-  const waiting = makeSession({ id: "a", status: "waiting" });
-  const readyAttn = makeSession({ id: "b", status: "ready" });
-  const [g] = groupSessions([waiting, readyAttn], [], new Set(["%b"]));
-  expect(g.sessions.map((s) => s.id)).toEqual(["b", "a"]);
-});
-
-test("groupSessions: same status orders by lastTurnAt desc, unknown recency sinks", () => {
-  const old = makeSession({ id: "a", lastTurnAt: new Date("2026-01-01T00:00:00Z") });
-  const fresh = makeSession({ id: "b", lastTurnAt: new Date("2026-01-02T00:00:00Z") });
-  const unknown = makeSession({ id: "c" });
-  const [g] = groupSessions([old, unknown, fresh], []);
-  expect(g.sessions.map((s) => s.id)).toEqual(["b", "a", "c"]);
-});
-
-test("groupSessions: status rank still separates non-attention sessions", () => {
-  const ready = makeSession({ id: "a", status: "ready" });
-  const running = makeSession({ id: "b", status: "running" });
-  const waiting = makeSession({ id: "c", status: "waiting" });
-  const [g] = groupSessions([ready, running, waiting], []);
-  expect(g.sessions.map((s) => s.id)).toEqual(["c", "b", "a"]);
-});
-
-test("groupSessions: archived without lastTurnAt falls back to its stable mtime", () => {
-  const older = makeSession({ id: "a", status: "archived", modified: new Date("2026-01-01T00:00:00Z"), tmuxPane: undefined });
-  const newer = makeSession({ id: "b", status: "archived", modified: new Date("2026-01-02T00:00:00Z"), tmuxPane: undefined });
-  const [g] = groupSessions([older, newer], []);
-  expect(g.sessions.map((s) => s.id)).toEqual(["b", "a"]);
-});
-
-test("groupSessions: priority repos pin group order ahead of alphabetical", () => {
-  const groups = groupSessions(
-    [
-      makeSession({ id: "a", repo: "alpha", repoPath: "/alpha", baseRepoPath: "/alpha" }),
-      makeSession({ id: "b", repo: "claude0" }),
-      makeSession({ id: "c", repo: "throxy", repoPath: "/throxy", baseRepoPath: "/throxy" }),
-    ],
-    ["throxy", "customeros", "~", "claude0"],
-  );
-  expect(groups.map((g) => g.name)).toEqual(["throxy", "claude0", "alpha"]);
 });
 
 // --- getLatestUserPrompt: backward doubling-window scan over the transcript tail ---

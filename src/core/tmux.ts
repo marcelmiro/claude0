@@ -17,7 +17,7 @@ export const SHELL_NAMES = ["zsh", "bash", "fish", "sh"];
  * most-recently-active session — non-deterministic, and not necessarily the one
  * the user is sitting in. Targeting the attached client keeps phone-created
  * sessions landing where the user actually works. Falls back to the current
- * session when nothing is attached (e.g. the TUI popup, which shares context).
+ * session when nothing is attached.
  */
 export async function getMainSession(): Promise<string | null> {
   try {
@@ -26,7 +26,6 @@ export async function getMainSession(): Promise<string | null> {
       .trim()
       .split("\n")
       .filter(Boolean)[0];
-    // Popup runs in the same session context (tmux 3.3+), so current IS the main session
     const session = attached || (await Bun.$`tmux display-message -p '#S'`.quiet().text()).trim();
     if (!session) return null;
     // Return session:windowId so new-window -a inserts after the active window
