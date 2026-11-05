@@ -17,12 +17,11 @@
  * Self-installs its tmux wiring and repaints per-line on its own 1s loop.
  * Stands down while `M-S` hides sidebars or autostart is off.
  */
-import { openSync, writeSync, closeSync, statSync } from "node:fs";
+import { openSync, writeSync, closeSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import type { Subprocess } from "bun";
 import { InboxStore } from "../core/inbox-store";
-import { composeSessions, overlayAttention, peekEngaged, peekVerdict, sectionOf, wakeAt, type InboxSession } from "../core/inbox-model";
+import { composeSessions, overlayAttention, sectionOf, wakeAt, type InboxSession } from "../core/inbox-model";
 import { loadState } from "../core/state";
-import { readLastPromptAt, resolveTranscriptPath } from "../core/last-turn";
 import { resolveRestoreTarget } from "../core/resurrect";
 import { seedForkName } from "../core/session-api";
 import { PATHS, configCache, parseTmuxKey, tmuxKeys } from "../core/config";
@@ -33,7 +32,8 @@ import { parseInput, type InputEvent } from "./input";
 import { renderView, SNOOZE_UNITS, type ViewState, type VisibleRow } from "./rows";
 import { filterRepos, type Mode } from "./modes";
 import type { SearchHit, SearchRequest, SearchResponse } from "./search-worker";
-import { fmtWakeAbs } from "./ansi";
+import { C, fmtWakeAbs } from "./ansi";
+import { popupGeometry, previewPath, type PreviewFile } from "../preview/viewer";
 
 const SHELL_RE = new RegExp(`^(${SHELL_NAMES.join("|")})$`);
 
@@ -138,8 +138,6 @@ export function runSidebarRenderer(): void {
   // tmux server start time from the last tick — a change means every window id
   // the daemon remembers may now name an unrelated window (see the tick)
   let tmuxEpoch: string | null = null;
-  // peeked sessionId → when its window was last the viewed one (grace anchor)
-  const peekLastActive = new Map<string, number>();
   let standing = false; // currently active (markers allow)
   let lastMinute = -1;
 
@@ -541,9 +539,8 @@ export function runSidebarRenderer(): void {
   // (`focusPane` — a double-click means "take me there", and the mouse can
   // re-enter the sidebar in one click, no M-s round trip). A row in THIS
   // window commits — focus drops into the session pane itself. A row whose
-  // pane died resumes on demand as
-  // a PEEK when it's parked/done: the disposition/archive stays, engagement
-  // (a new prompt) is what graduates it. The window comes from the live
+  // pane died resumes (callers route parked/done rows to the preview first —
+  // ADR 35). The window comes from the live
   // pane's ACTUAL location, never the row's recorded session:index — indexes
   // get reused, and a stale one lands anywhere.
   async function switchTo(win: WinState, s: InboxSession, focusPane = false): Promise<void> {
@@ -599,9 +596,7 @@ export function runSidebarRenderer(): void {
   // First Enter on a pane-less row spawns its window and lands in its claude
   // pane; a second Enter — before discovery has stamped the new pane onto the
   // row — commits into the spawned window's work pane instead of
-  // double-spawning. Parked/done rows resume as a PEEK (recorded for the
-  // engagement gate + reaper); their overlay is untouched, so the row keeps
-  // filing under Parked/Recent until a prompt graduates it.
+  // double-spawning.
   async function resumeOrRevisit(
     win: WinState,
     id: string,
@@ -624,23 +619,8 @@ export function runSidebarRenderer(): void {
     if (!spawned) return;
     resumedWindows.set(id, spawned);
     // a caller's explicit state clear runs only now that the window exists —
-    // a failed spawn keeps the snooze or block (ADR 35) — and before the peek
-    // decision below, so a cleared row resumes plainly
+    // a failed spawn keeps the snooze or block (ADR 35)
     const cleared = onSpawned?.() ?? null;
-    // the CURRENT overlay decides peek vs plain resume — the caller's row can
-    // predate a just-applied verb (b-unpark clears the disposition first)
-    const fresh = findSession(id);
-    const section = fresh ? sectionOf(fresh, Date.now()) : null;
-    const peeked = section === "parked" || section === "done";
-    if (peeked) {
-      applyVerb(() => {
-        store.setPeek(id, spawned, Date.now());
-        return true;
-      });
-      // fresh grace anchor: a re-peek must not inherit the previous peek's
-      // (possibly hours-old) last-active time and get reaped on first sight
-      peekLastActive.set(id, Date.now());
-    }
     // Focus stays in the new window's claude pane (resumeSession selected the
     // window while claude was its only pane): reopening a session means typing
     // in it next. Split its sidebar now — `ensure` splits detached — with the
@@ -658,8 +638,7 @@ export function runSidebarRenderer(): void {
       if (target?.stubPane) {
         // selection set explicitly — seedSelection can't find it, `real` lags discovery
         target.selectedId = id;
-        const msg = peeked ? (section === "parked" ? "peek — stays parked" : "peek — stays in recent") : cleared;
-        if (msg) showFlash(target, msg);
+        if (cleared) showFlash(target, cleared);
         paint(target);
       }
     } catch {}
@@ -694,14 +673,12 @@ export function runSidebarRenderer(): void {
     }
   }
 
-  // Search's Enter opens whatever the state (ADR 35): live → its pane;
-  // parked → unparked; recent or older → unarchived. Each clear happens once
-  // the window exists, and the flash names what was cleared.
-  async function openHit(win: WinState): Promise<void> {
-    const h = win.hits[Math.min(win.modeCursor, win.hits.length - 1)];
-    if (!h) return;
+  // The preview's Enter opens whatever the state (ADR 35):
+  // live → its pane; parked → unparked; recent or older → unarchived. Each
+  // clear happens once the window exists, and the flash names what was cleared.
+  async function openSession(win: WinState, id: string, fallbackPath: string | undefined): Promise<void> {
     exitMode(win);
-    const s = findSession(h.sessionId);
+    const s = findSession(id);
     if (s?.real) {
       await switchTo(win, s, true);
       paint(win);
@@ -709,21 +686,77 @@ export function runSidebarRenderer(): void {
     }
     const opened = Date.now();
     const d = s && sectionOf(s, opened) === "parked" ? s.disposition : undefined;
-    await resumeOrRevisit(win, h.sessionId, s?.repoPath ?? h.projectPath, () => {
+    await resumeOrRevisit(win, id, s?.repoPath ?? fallbackPath, () => {
       if (d) {
-        applyVerb(() => store.clearDisposition(h.sessionId, Date.now(), "manual") !== null);
+        applyVerb(() => store.clearDisposition(id, Date.now(), "manual") !== null);
         return d.kind === "snoozed" ? `unparked — was snoozed until ${fmtWakeAbs(d.until, opened)}` : `unblocked — was: ${d.note}`;
       }
       // an archive older than RECENT still hides a live session (composeSessions
       // re-applies archivedAt) — clear it explicitly, never via discovery
       let archived = false;
       try {
-        archived = store.isArchived(h.sessionId);
+        archived = store.isArchived(id);
       } catch {}
-      if (archived && applyVerb(() => store.unarchive(h.sessionId, Date.now()))) return "restored";
+      if (archived && applyVerb(() => store.unarchive(id, Date.now()))) return "restored";
       return null;
     });
     paint(win);
+  }
+
+  // ── preview popup (docs/preview.md) ──────────────────────────────────────
+
+  // The viewer runs in a tmux popup over the work pane, right of the sidebar.
+  // display-popup blocks until the popup closes, so it's spawned and never
+  // awaited (and not via Bun.$, which never starts unless awaited). Popups
+  // send no focus events: the sidebar keeps its focus and its search.
+  async function openPreview(win: WinState, file: PreviewFile): Promise<void> {
+    try {
+      mkdirSync(`${PATHS.dir}/preview`, { recursive: true });
+      writeFileSync(previewPath(win.windowId), JSON.stringify(file));
+      const F = ["#{client_name}", "#{client_activity}", "#{window_id}", "#{client_width}", "#{client_height}", "#{status}", "#{status-position}"].join(SEP);
+      const clients = (await Bun.$`tmux list-clients -F ${F}`.quiet().text())
+        .trim()
+        .split("\n")
+        .map((l) => l.split(SEP))
+        .filter((c) => c[2] === win.windowId)
+        .sort((a, b) => Number(b[1]) - Number(a[1]));
+      const c = clients[0];
+      if (!c) throw new Error("no client on this window");
+      const [name, , , cw, ch, status, position] = c as [string, string, string, string, string, string, string];
+      const statusLines = status === "off" ? 0 : status === "on" ? 1 : Number(status) || 1;
+      const geometry = popupGeometry({ sidebar: win.width, width: Number(cw), height: Number(ch), statusLines, statusTop: position === "top" });
+      const cmd = `${process.execPath} ${process.argv[1]} preview ${win.windowId}`;
+      Bun.spawn(["tmux", "display-popup", "-c", name, "-b", "rounded", "-S", `fg=${C.dim}`, ...geometry, "-E", cmd], {
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+      console.error(`[sidebar] preview window=${win.windowId} items=${file.ids.length} index=${file.index}`);
+    } catch (e) {
+      console.error(`[sidebar] preview failed: ${e instanceof Error ? e.message : e}`);
+      showFlash(win, "preview failed");
+      paint(win);
+    }
+  }
+
+  function previewSearch(win: WinState): Promise<void> {
+    const ids = win.hits.map((h) => h.sessionId);
+    return openPreview(win, { ids, index: Math.min(win.modeCursor, ids.length - 1), query: win.query });
+  }
+
+  // Enter on a pane-less PARKED or RECENT row previews it — reopening is b / e
+  // (ADR 35). J/K in the popup flip through those two sections' rows.
+  function previewInbox(win: WinState, id: string): Promise<void> {
+    const rows = win.visible.filter((v) => v.section === "parked" || v.section === "done");
+    const ids = rows.map((v) => v.id);
+    return openPreview(win, { ids, index: Math.max(0, ids.indexOf(id)), query: "" });
+  }
+
+  /** Enter / double-click on an inbox row: live → switch, pane-less parked/recent → preview. */
+  async function enterRow(win: WinState, s: InboxSession, focusPane = false): Promise<void> {
+    const section = win.visible.find((v) => v.id === s.id)?.section;
+    if (!s.real && (section === "parked" || section === "done")) await previewInbox(win, s.id);
+    else await switchTo(win, s, focusPane);
   }
 
   // `n` / `N`: plain `claude` in a new window right of this one, focus in it.
@@ -773,7 +806,10 @@ export function runSidebarRenderer(): void {
       exitMode(win);
       paint(win);
     } else if (ev.name === "enter") {
-      if (search) await openHit(win);
+      // search's Enter previews; the preview's Enter opens (ADR 35)
+      if (search) {
+        if (win.hits.length) await previewSearch(win);
+      }
       else {
         const r = filterRepos(win.repos, win.query)[Math.min(win.modeCursor, count - 1)];
         if (!r) return;
@@ -1010,7 +1046,7 @@ export function runSidebarRenderer(): void {
       }
       case "enter": {
         const s = findSession(row?.id);
-        if (s) await switchTo(win, s);
+        if (s) await enterRow(win, s);
         paint(win);
         break;
       }
@@ -1190,7 +1226,7 @@ export function runSidebarRenderer(): void {
       }
       const s = findSession(id);
       if (!s) return;
-      if (win.selectedId === s.id) await switchTo(win, s, true);
+      if (win.selectedId === s.id) await enterRow(win, s, true);
       else win.selectedId = s.id;
       paint(win);
       return;
@@ -1505,108 +1541,6 @@ export function runSidebarRenderer(): void {
     }
   }
 
-  // ── peek reaping ─────────────────────────────────────────────────────────
-
-  // A peek window is provisional: if its row is still parked/done and nobody
-  // has looked at the window for the grace period, kill it. Engagement is
-  // normally cleared by discovery's gate; the transcript re-check here covers
-  // a prompt whose whole turn fit inside one discovery tick.
-  async function reapPeeks(panes: PaneRow[]): Promise<void> {
-    let peeks: Map<string, { windowId: string; openedAt: number }>;
-    try {
-      peeks = store.peeks();
-    } catch {
-      return;
-    }
-    if (!peeks.size) {
-      peekLastActive.clear();
-      return;
-    }
-    // anchors for records other writers cleared (discovery graduation) must
-    // not survive to poison a later re-peek of the same session
-    for (const id of peekLastActive.keys()) {
-      if (!peeks.has(id)) peekLastActive.delete(id);
-    }
-    const now = Date.now();
-    const windows = new Set(panes.map((p) => p.windowId));
-    const viewed = new Set(panes.filter((p) => p.windowActive && p.attached).map((p) => p.windowId));
-    for (const [id, peek] of peeks) {
-      const s = findSession(id);
-      // section, not overlay-presence: a DUE snooze files under needs-you —
-      // a window demanding attention must not be reaped out from under it
-      const sec = s ? sectionOf(s, now) : null;
-      const verdict = peekVerdict({
-        parkedOrDone: sec === "parked" || sec === "done",
-        windowAlive: windows.has(peek.windowId),
-        viewed: viewed.has(peek.windowId),
-        lastActiveAt: peekLastActive.get(id) ?? now, // first sight arms the grace
-        now,
-      });
-      if (!peekLastActive.has(id) || viewed.has(peek.windowId)) peekLastActive.set(id, now);
-      if (verdict === "keep") continue;
-      if (verdict === "drop") {
-        applyVerb(() => {
-          store.clearPeek(id);
-          return true;
-        });
-        peekLastActive.delete(id);
-        continue;
-      }
-      // A turn in flight must never be reaped: answering an approval or an
-      // AskUserQuestion is a single keystroke that writes no prompt record, so
-      // the transcript re-check below is blind to that engagement — but the
-      // discovery snapshot sees the running turn it started. Keep and re-arm;
-      // the window becomes reapable again once the turn ends.
-      if (s?.running && s.running.finishAt > now) {
-        peekLastActive.set(id, now);
-        continue;
-      }
-      let engaged = false;
-      try {
-        const path = await resolveTranscriptPath(id);
-        engaged = peekEngaged(peek.openedAt, path ? await readLastPromptAt(path) : null);
-      } catch {}
-      if (engaged) {
-        applyVerb(() => {
-          store.replyObserved(id, now);
-          return true;
-        });
-      } else {
-        // tmux reassigns @N ids after a server restart, so a durable peek
-        // record can name an unrelated window that inherited the id. Kill only
-        // a window still hosting this session's `claude -r`; any other
-        // occupant means the peek window itself is gone — drop the record.
-        let hostsSession = false;
-        try {
-          const cmds =
-            await Bun.$`tmux list-panes -t ${peek.windowId} -F ${"#{pane_start_command}"}`.quiet().text();
-          hostsSession = cmds.includes(id);
-        } catch {}
-        if (!hostsSession) {
-          applyVerb(() => {
-            store.clearPeek(id);
-            return true;
-          });
-          peekLastActive.delete(id);
-          continue;
-        }
-        const win = wins.get(peek.windowId);
-        if (win?.stubPane) paneToWin.delete(win.stubPane);
-        wins.delete(peek.windowId);
-        try {
-          console.error(`[sidebar] kill-window ${peek.windowId} reason=peek-unengaged session=${id}`);
-          await Bun.$`tmux kill-window -t ${peek.windowId}`.quiet();
-        } catch {}
-        applyVerb(() => {
-          store.clearPeek(id);
-          return true;
-        });
-      }
-      peekLastActive.delete(id);
-      paintAll();
-    }
-  }
-
   // ── input socket ─────────────────────────────────────────────────────────
 
   try {
@@ -1615,12 +1549,32 @@ export function runSidebarRenderer(): void {
   // Protocol: one greeting line, then raw bytes. A stub sends `hello <pane>`
   // and every subsequent byte is that pane's stdin verbatim (nc can't frame);
   // `claude0 sidebar-ctl` connections send a single `focus <pane>` / `toggle
-  // <pane>` line and close.
+  // <pane>` line and close; the preview popup sends `preview-cursor` /
+  // `preview-open <window> <session>` the same way, one per connection.
   function feedInput(paneId: string, bytes: string): void {
     const winId = paneToWin.get(paneId);
     const win = winId ? wins.get(winId) : undefined;
     if (!win) return;
     for (const ev of parseInput(bytes)) void handleEvent(win, ev);
+  }
+
+  // J/K in the popup: the sidebar's highlight follows the previewed row
+  function previewCursor(windowId: string, id: string): void {
+    const win = wins.get(windowId);
+    if (!win) return;
+    if (win.mode === "search") {
+      const i = win.hits.findIndex((h) => h.sessionId === id);
+      if (i !== -1) win.modeCursor = i;
+    } else win.selectedId = id;
+    paint(win);
+  }
+
+  async function previewOpen(windowId: string, id: string): Promise<void> {
+    const win = wins.get(windowId);
+    if (!win) return;
+    const hit = win.hits.find((h) => h.sessionId === id);
+    await openSession(win, id, hit?.projectPath);
+    paint(win);
   }
 
   Bun.listen<{ paneId?: string; buf: string; greeted: boolean }>({
@@ -1641,7 +1595,7 @@ export function runSidebarRenderer(): void {
         const rest = sock.data.buf.slice(nl + 1);
         sock.data.buf = "";
         sock.data.greeted = true;
-        const [cmd, arg] = line.split(" ");
+        const [cmd, arg, arg2] = line.split(" ");
         if (cmd === "hello" && arg) {
           sock.data.paneId = arg;
           if (rest) feedInput(arg, rest);
@@ -1649,6 +1603,10 @@ export function runSidebarRenderer(): void {
           void ctlFocus(arg);
         } else if (cmd === "toggle" && arg) {
           void ctlToggle(arg);
+        } else if (cmd === "preview-cursor" && arg && arg2) {
+          previewCursor(arg, arg2);
+        } else if (cmd === "preview-open" && arg && arg2) {
+          void previewOpen(arg, arg2);
         }
       },
       error() {},
@@ -1757,8 +1715,6 @@ export function runSidebarRenderer(): void {
     phase = "topology";
     const panes = await listAllPanes();
     syncTopology(panes);
-    phase = "peeks";
-    await reapPeeks(panes);
 
     phase = "store";
     try {

@@ -198,41 +198,6 @@ describe("deriveSections", () => {
   });
 });
 
-// ── peek (provisional resume) math ─────────────────────────────────────────
-
-import { PEEK_GRACE_MS, peekEngaged, peekVerdict } from "./inbox-model";
-
-describe("peekEngaged", () => {
-  test("only a prompt strictly newer than the peek counts", () => {
-    expect(peekEngaged(NOW, NOW + 1)).toBe(true);
-    expect(peekEngaged(NOW, NOW)).toBe(false); // boot replays the old prompt
-    expect(peekEngaged(NOW, NOW - H)).toBe(false);
-    expect(peekEngaged(NOW, null)).toBe(false); // unresolvable → stay parked
-  });
-});
-
-describe("peekVerdict", () => {
-  const base = { parkedOrDone: true, windowAlive: true, viewed: false, lastActiveAt: NOW - 2 * PEEK_GRACE_MS, now: NOW };
-
-  test("graduated or disposed row drops the record, never kills", () => {
-    expect(peekVerdict({ ...base, parkedOrDone: false })).toBe("drop");
-  });
-
-  test("dead window drops the record", () => {
-    expect(peekVerdict({ ...base, windowAlive: false })).toBe("drop");
-  });
-
-  test("viewed, or within the grace, keeps", () => {
-    expect(peekVerdict({ ...base, viewed: true })).toBe("keep");
-    expect(peekVerdict({ ...base, lastActiveAt: NOW - PEEK_GRACE_MS + 1 })).toBe("keep");
-  });
-
-  test("unviewed past the grace is a reap candidate", () => {
-    expect(peekVerdict(base)).toBe("reap-candidate");
-    expect(peekVerdict({ ...base, lastActiveAt: NOW - PEEK_GRACE_MS })).toBe("reap-candidate");
-  });
-});
-
 describe("prompt-sitters file under needs-you", () => {
   test("any live session at a prompt is needs-you, whatever the reason", () => {
     expect(sectionOf(sess({}), NOW)).toBe("needs-you");

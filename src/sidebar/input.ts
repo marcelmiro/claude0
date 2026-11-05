@@ -14,6 +14,7 @@ export type InputEvent =
   | { type: "focus"; in: boolean };
 
 const CTRL_KEYS: Record<string, string> = {
+  "\x04": "d",
   "\n": "j",
   "\x0b": "k",
   "\x15": "u",
@@ -39,6 +40,8 @@ export function parseInput(data: string): InputEvent[] {
         // which the renderer maps to section jump (parity with the TUI's S-j/S-k).
         else if (final === "A") events.push({ type: "key", name: "up", ...(body === "1;2" ? { shift: true } : {}) });
         else if (final === "B") events.push({ type: "key", name: "down", ...(body === "1;2" ? { shift: true } : {}) });
+        else if (final === "~" && body === "5") events.push({ type: "key", name: "pageup" });
+        else if (final === "~" && body === "6") events.push({ type: "key", name: "pagedown" });
         else if ((final === "M" || final === "m") && body.startsWith("<")) {
           const [b, x, y] = body.slice(1).split(";").map(Number);
           if (b !== undefined && x !== undefined && y !== undefined) {
@@ -61,7 +64,7 @@ export function parseInput(data: string): InputEvent[] {
     else if (c === "\x7f" || c === "\b") events.push({ type: "key", name: "backspace" });
     else if (c === "\x03") events.push({ type: "key", name: "c", ctrl: true });
     // line editing in the search / new-session modes: ^U clear, ^W delete word,
-    // ^J/^K move (j/k are text there). Named explicitly, not a blanket ctrl
+    // ^J/^K move (j/k are text there); ^D/^U half-page in the preview. Named explicitly, not a blanket ctrl
     // decode — handlers match bare names, so ^G must never arrive as `g`.
     else if (c in CTRL_KEYS) events.push({ type: "key", name: CTRL_KEYS[c]!, ctrl: true });
     else if (c === "\t") events.push({ type: "key", name: "tab" });

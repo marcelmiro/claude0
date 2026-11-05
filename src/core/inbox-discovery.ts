@@ -20,7 +20,7 @@ import { readLastPromptAt, resolveTranscriptPath } from "./last-turn";
 import { pendingToolCall } from "./hook-events";
 import { loadState } from "./state";
 import type { InboxStore } from "./inbox-store";
-import { peekEngaged, stripOverlay, type InboxSession } from "./inbox-model";
+import { stripOverlay, type InboxSession } from "./inbox-model";
 
 // A wait that outlives this is almost surely a service `isServiceScript` missed, or a
 // hung wait — either way the session should surface. 99% of completed background
@@ -43,7 +43,6 @@ export async function discoveryTick(store: InboxStore): Promise<void> {
   const state = await loadState();
   const disp = store.dispositions();
   const arch = store.archivedAt();
-  const peeks = store.peeks();
   const prevRows: InboxSession[] = [];
   for (const r of store.loadSnapshot()) {
     try {
@@ -127,16 +126,8 @@ export async function discoveryTick(store: InboxStore): Promise<void> {
     if (waitSince !== undefined) row.scriptSince = waitSince;
     // it started working again — you clearly went back to it, so the parked/
     // archived overlay no longer describes reality (reply observed, per ADR).
-    // Exception: a PEEKED row's pane is provisional — its `claude -r` boot
-    // reads as running (and a preserved row's real is undefined, so first
-    // sight always counts as a status change), which is exactly the false
-    // reply this gate exists to reject. Engagement is a prompt NEWER than the
-    // peek; only that graduates the row out of parked/recent.
     if (statusChanged && eff === "running") {
-      const peek = peeks.get(s.id);
-      if (!peek || peekEngaged(peek.openedAt, promptAt)) {
-        row.fromSnooze = store.replyObserved(s.id, now) === "snoozed";
-      }
+      row.fromSnooze = store.replyObserved(s.id, now) === "snoozed";
     }
     // An OBSERVED transition into ready/waiting goes to the event log to keep
     // a history of when sessions handed back.

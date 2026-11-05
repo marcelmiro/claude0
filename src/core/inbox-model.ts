@@ -195,38 +195,6 @@ export function deriveSections(sessions: InboxSession[], now: number): InboxSect
   };
 }
 
-// ── peek (provisional resume) math ────────────────────────────────────────
-
-/** How long an unengaged peek window survives after the user looks away. */
-export const PEEK_GRACE_MS = 60_000;
-
-/**
- * A prompt typed after the peek opened is engagement — the parked/archived
- * overlay no longer describes reality. A resume's boot activity is not: the
- * transcript's newest prompt still predates the peek.
- */
-export function peekEngaged(openedAt: number, promptAt: number | null): boolean {
-  return promptAt !== null && promptAt > openedAt;
-}
-
-/**
- * Per-tick fate of a peek record. "drop" = the record is obsolete (session
- * engaged or disposed elsewhere, or the window already died) — never kill;
- * "reap-candidate" = unviewed past the grace, the caller re-checks the
- * transcript for a late prompt before actually killing the window.
- */
-export function peekVerdict(o: {
-  parkedOrDone: boolean;
-  windowAlive: boolean;
-  viewed: boolean;
-  lastActiveAt: number;
-  now: number;
-}): "keep" | "drop" | "reap-candidate" {
-  if (!o.parkedOrDone || !o.windowAlive) return "drop";
-  if (o.viewed || o.now - o.lastActiveAt < PEEK_GRACE_MS) return "keep";
-  return "reap-candidate";
-}
-
 // ── store composition ─────────────────────────────────────────────────────
 
 import type { InboxStore } from "./inbox-store";

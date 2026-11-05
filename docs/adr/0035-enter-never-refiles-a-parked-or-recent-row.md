@@ -1,7 +1,7 @@
 # 35. Enter never re-files a parked or recent row; peek is removed
 
 Date: 2026-11-05
-Status: accepted
+Status: accepted; amended 2026-11-05 — search's Enter previews, the preview's Enter opens
 
 ## Context
 
@@ -25,11 +25,13 @@ You row to archive again by hand. It would also wipe a snooze's wake time on a s
 - **Looking is preview; re-entering is a deliberate verb.** Enter (and double-click) on a PARKED
   or RECENT row opens the read-only preview (ADR 34), with no process and no state change. `b`
   (unpark) and `e` (restore) are the only ways back in. Live rows keep Enter = switch.
-- **Search's Enter opens whatever the state.** Search is a deliberate act. The result row shows
-  the state, and a flash names what was cleared, for example "unparked, was snoozed until Fri".
+- **Search's Enter previews; the preview's Enter opens whatever the state.** Search is a
+  deliberate act, and the preview confirms it found the right session before anything spawns.
+  The result row shows the state, and a flash names what was cleared, for example "unparked,
+  was snoozed until Fri".
 - **Every path back in clears inbox state explicitly:**
   - sidebar `b` (unpark) and `e` (restore; it spawns nothing);
-  - search's Enter, once its window has spawned;
+  - the preview's Enter, once its window has spawned;
   - portkey's Restore, once `restoreSession` succeeds.
   Clearing only after a successful spawn means a failed open keeps the snooze or block. None of
   them relies on discovery reading a `claude -r` boot spinner as a reply. That side

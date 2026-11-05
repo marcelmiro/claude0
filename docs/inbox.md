@@ -8,7 +8,7 @@ docblocks carry the implementation detail. Decisions:
 ## Store and sections
 
 - **Store.** `inbox.db` (SQLite) under `~/.config/claude0/` holds the authored facts
-  (`dispositions`, `archived`, `peeks`, provenance `links`), an `events` log, and the
+  (`dispositions`, `archived`, provenance `links`), an `events` log, and the
   daemon's activity `snapshot`. Verbs write facts; discovery owns the snapshot (the bridge
   may only seed an absent row, `seedSnapshotRow`).
 - **Sections** (`sectionOf` → `deriveSections`, `core/inbox-model.ts`). Every
@@ -52,7 +52,7 @@ tmux calls follow CLAUDE.md's "tmux, from a tty-less process" gotchas.
 | The wake's ⚡ waits for status `ready` (the boot spinner reads as running) | `stampWakeAttention` (`core/inbox-wake.ts`) |
 | Wake alert: push to the device that set the snooze; Mac-set → banner on darwin, broadcast push elsewhere | `core/inbox-wake.ts` |
 | A verb landing mid-tick survives the snapshot replace; a bridge seed can't mask a dead daemon | `saveSnapshot`, `seedSnapshotRow` (`core/inbox-store.ts`) |
-| Reply observed: peek + disposition + archive cleared in one transaction | `replyObserved` (`core/inbox-store.ts`) |
+| Reply observed: disposition + archive cleared in one transaction | `replyObserved` (`core/inbox-store.ts`) |
 | Pane-less rows resume via the restore target (deleted worktrees land in the base repo) | `resolveRestoreTarget` (`core/resurrect.ts`) |
 
 Moving hosts: `inbox.db` rides the state copy (WAL checkpointed, daemon stopped) so a
@@ -93,6 +93,7 @@ no hide marker does.
   row moves the highlight; a click on the highlighted row navigates. Enter on a row in
   another window shows that window and lands focused in *its* sidebar with the row
   selected; Enter on the current window's row commits into the session pane. A pane-less
+  Parked or Recent row opens the [preview](preview.md) instead; any other pane-less
   row resumes into a new window beside this one with focus in its claude pane — reopening
   means typing next — and the new window's sidebar shows the row selected, unfocused; a
   second Enter before discovery stamps the pane commits into the spawned window
@@ -106,13 +107,11 @@ no hide marker does.
   (else above) the disposed one. When the disposed session lived in the window you're
   viewing, the display also switches to the next session's window, focused in its
   sidebar, before the old window dies. Un-archive never walks.
-- **Peek.** Enter on Parked/Recent opens the session without re-entering it: the
-  disposition stays, and a `peeks` record marks the window provisional. Engagement is a
-  prompt newer than the peek (`peekEngaged`); discovery's reply-observed clear is gated on
-  it (a `claude -r` boot spinner reads as running and would otherwise unpark the row within
-  a tick). An unviewed peek window is reaped after `PEEK_GRACE_MS` (60s), after a final
-  transcript check. A due snooze files under Needs You, so the reaper drops the record and
-  keeps the window. Explicit re-entry is `b` (unpark); restore is `e` on Recent.
+- **Preview, not peek** ([ADR 35](adr/0035-enter-never-refiles-a-parked-or-recent-row.md)).
+  Enter or a double-click on a pane-less Parked/Recent row opens the read-only
+  [preview popup](preview.md); `J`/`K` there flip through the Parked and Recent rows and
+  the selector follows. Reopening is always explicit: `b` unparks, `e` on Recent restores,
+  and Enter inside the preview opens the session the way search's Enter does.
 - **Fork** (`f`) places the new window beside the parent (`new-window -a`).
 
 ### Search and new session
@@ -127,10 +126,12 @@ Enter arrives as CR in the raw-mode stub, so LF is free to be `^j` (`input.ts`).
   lists them newest first. The list stops at 50 rows with a "+N more — keep typing" line
   (past ~20 rows typing narrows faster than scrolling). Rows show a state glyph (● needs you / running, ☾ snoozed with
   its wake, ✗ blocked, ✓ recent), and the match snippet when the match was in the
-  conversation, else `repo/branch`. **Enter opens whatever the state**
+  conversation, else `repo/branch`. **Enter previews** the selected result
+  ([preview](preview.md)) with find seeded from the query; the search stays as it was
+  when the popup closes. **Enter in the preview opens whatever the state**
   ([ADR 35](adr/0035-enter-never-refiles-a-parked-or-recent-row.md)): a live session's
   pane; a parked one is unparked, an archived one unarchived — each clear written only once
-  the new window exists (`openHit`'s callback into `resumeOrRevisit`), so a failed spawn
+  the new window exists (`openSession`'s callback into `resumeOrRevisit`), so a failed spawn
   keeps the snooze or block, and the new window's sidebar flashes what was cleared. The
   explicit unarchive matters: an archive older than RECENT would otherwise keep the
   restored session off the sidebar.

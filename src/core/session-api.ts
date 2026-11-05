@@ -1126,6 +1126,14 @@ const branchCache = new Map<
   }
 >();
 
+/**
+ * Drop every cached parse. For a reader that keeps its own slimmed copy (the preview
+ * popup flipping through search results) — the cache holds the unslimmed turns.
+ */
+export function forgetTranscripts(): void {
+  branchCache.clear();
+}
+
 /** The newest record's `cwd` — scan a few lines from the tail (nearly every record has one). */
 function lastCwd(lines: string[]): string | null {
   for (let i = lines.length - 1; i >= 0 && i >= lines.length - 20; i--) {

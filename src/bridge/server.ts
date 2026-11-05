@@ -1767,6 +1767,16 @@ async function route(req: Request): Promise<Response> {
     // (and doesn't fail `restoreSession`'s isDirectory guard). Mirrors the TUI resume path.
     const effectivePath = await recoverWorktreeTranscript(id, repoPath!, basePath!);
     const result = await restoreSession(id, effectivePath);
+    // Restoring is an explicit way back in (ADR 35): clear the parked/archived fact —
+    // only once the window exists, so a failed restore keeps the snooze or block.
+    const store = result.ok ? getInboxStore() : null;
+    if (store) {
+      try {
+        const now = Date.now();
+        store.clearDisposition(id, now, "manual");
+        store.unarchive(id, now);
+      } catch {}
+    }
     historyCache = null; // the row's isActive/restorable just changed
     kickSessionsPush(id); // re-derive + push the now-live status
     return sendResult(result);

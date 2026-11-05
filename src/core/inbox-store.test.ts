@@ -162,50 +162,25 @@ describe("snapshot + kv", () => {
   });
 });
 
-describe("peeks", () => {
-  test("set / read / clear; re-peeking replaces the record", () => {
-    const s = fresh();
-    expect(s.peeks().size).toBe(0);
-    s.setPeek("a", "@1", 10);
-    s.setPeek("b", "@2", 20);
-    s.setPeek("a", "@3", 30); // re-peek → new window + timestamp
-    expect(s.peeks().get("a")).toEqual({ windowId: "@3", openedAt: 30 });
-    expect(s.peeks().get("b")).toEqual({ windowId: "@2", openedAt: 20 });
-    s.clearPeek("a");
-    expect(s.peeks().has("a")).toBe(false);
-    expect(s.peeks().has("b")).toBe(true);
-  });
-
-  test("a peek leaves an event; clearing does not", () => {
-    const s = fresh();
-    s.setPeek("a", "@1", 10);
-    s.clearPeek("a");
-    expect(s.events("a").map((e) => e.type)).toEqual(["peek"]);
-  });
-
-  test("replyObserved drops peek + disposition + archive in one verb, reports the kind", () => {
+describe("replyObserved", () => {
+  test("drops disposition + archive in one verb, reports the kind", () => {
     const s = fresh();
     s.snooze("a", 1000, 1);
-    s.setPeek("a", "@1", 2);
     expect(s.replyObserved("a", 3)).toBe("snoozed");
-    expect(s.peeks().has("a")).toBe(false);
     expect(s.dispositions().has("a")).toBe(false);
     s.archive("b", 1);
-    s.setPeek("b", "@2", 2);
     expect(s.replyObserved("b", 3)).toBeNull(); // archived, no disposition
     expect(s.archivedAt().has("b")).toBe(false);
     expect(s.replyObserved("c", 4)).toBeNull(); // nothing to clear — no-op
   });
 
-  test("schema is upgrade-safe: reopening an existing db keeps data and gains peeks", async () => {
+  test("schema is upgrade-safe: reopening an existing db keeps data", async () => {
     const path = `${process.env.TMPDIR ?? "/tmp"}/inbox-store-upgrade-${process.pid}.db`;
     const a = new InboxStore(path);
     a.snooze("a", 1000, 1);
-    a.setPeek("a", "@1", 2);
     a.close();
     const b = new InboxStore(path); // schema exec runs again on open
     expect(b.dispositions().get("a")!.until).toBe(1000);
-    expect(b.peeks().get("a")).toEqual({ windowId: "@1", openedAt: 2 });
     b.close();
     await Bun.$`rm -f ${path} ${path}-wal ${path}-shm`.quiet();
   });

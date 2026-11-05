@@ -60,7 +60,7 @@ describe("search mode", () => {
     expect(view.rows[0]).toContain("/");
     expect(view.rows[0]).toContain("auth");
     expect(view.rows[0]).toContain("40");
-    expect(view.rows[DIMS.height - 1]).toContain("open");
+    expect(view.rows[DIMS.height - 1]).toContain("↵ preview");
   });
 
   test("the cursor row stays in view and rowAtLine maps screen lines to hit ids", () => {

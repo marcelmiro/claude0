@@ -29,6 +29,10 @@ _Avoid_: closed, dead, old session
 The archive surface: every archived session Claude still retains, browsable by recency and searchable. Not time-windowed. The sidebar's search mode (`/`) searches the same set plus the live sessions.
 _Avoid_: archived list, archive view
 
+**Preview**:
+A read-only look at a session's conversation from the sidebar, without resuming it or changing its inbox state. Opening the session from a preview is a separate, explicit act.
+_Avoid_: peek (the retired provisional resume)
+
 **Restore**:
 Resuming an archived session in a new tmux window (`claude --resume`), waking it back to live.
 _Avoid_: resume (reserved for Claude's own CLI flag), reopen

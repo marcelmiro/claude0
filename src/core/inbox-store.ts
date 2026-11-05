@@ -40,12 +40,6 @@ export interface DispositionRow {
   deviceId: string | null;
 }
 
-/** A provisional resume of a parked/done row (see setPeek). */
-export interface Peek {
-  windowId: string;
-  openedAt: number;
-}
-
 export interface InboxEvent {
   id: number;
   sessionId: string;
@@ -86,11 +80,6 @@ CREATE TABLE IF NOT EXISTS snapshot(
   session_id TEXT PRIMARY KEY,
   data       TEXT NOT NULL,
   updated_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS peeks(
-  session_id TEXT PRIMARY KEY,
-  window_id  TEXT NOT NULL,
-  opened_at  INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `;
@@ -300,49 +289,17 @@ export class InboxStore {
   }
 
   /**
-   * Reply observed (organically, or a peek that engaged): the parked/archived
-   * overlay no longer describes reality. Drops any peek record, disposition,
-   * and archive in one transaction — the single implementation of the
-   * "reply observed" rule for discovery's gate and the renderer's reaper.
+   * Reply observed: the parked/archived overlay no longer describes reality.
+   * Drops any disposition and archive in one transaction — the single
+   * implementation of the "reply observed" rule for discovery's gate.
    * Returns the disposition kind cleared (drives the ↺ marker), null if none.
    */
   replyObserved(sessionId: string, now: number): DispositionKind | null {
     return this.db.transaction(() => {
-      this.clearPeek(sessionId);
       const was = this.clearDisposition(sessionId, now, "reply");
       this.unarchive(sessionId, now);
       return was;
     })();
-  }
-
-  // ── peeks (provisional resumes of parked/done rows) ──────────────────────
-
-  /**
-   * Record a provisional resume: the row's disposition/archive stays intact,
-   * discovery treats the pane's boot as noise (not a reply), and the reaper
-   * kills the window if no prompt arrives. Re-peeking replaces the record.
-   */
-  setPeek(sessionId: string, windowId: string, now: number): void {
-    this.db
-      .query(
-        `INSERT INTO peeks(session_id, window_id, opened_at) VALUES (?, ?, ?)
-         ON CONFLICT(session_id) DO UPDATE SET window_id=excluded.window_id, opened_at=excluded.opened_at`,
-      )
-      .run(sessionId, windowId, now);
-    this.event(sessionId, now, "peek", { windowId });
-  }
-
-  peeks(): Map<string, Peek> {
-    const rows = this.db.query("SELECT session_id, window_id, opened_at FROM peeks").all() as Array<{
-      session_id: string;
-      window_id: string;
-      opened_at: number;
-    }>;
-    return new Map(rows.map((r) => [r.session_id, { windowId: r.window_id, openedAt: r.opened_at }]));
-  }
-
-  clearPeek(sessionId: string): void {
-    this.db.query("DELETE FROM peeks WHERE session_id = ?").run(sessionId);
   }
 
   // ── provenance (forward-compat, ADR 0013 follow-up) ──────────────────────
@@ -430,6 +387,6 @@ export class InboxStore {
 
   /** Wipe everything — seed/test helper, never called in normal operation. */
   reset(): void {
-    this.db.exec("DELETE FROM dispositions; DELETE FROM archived; DELETE FROM events; DELETE FROM snapshot; DELETE FROM kv; DELETE FROM peeks;");
+    this.db.exec("DELETE FROM dispositions; DELETE FROM archived; DELETE FROM events; DELETE FROM snapshot; DELETE FROM kv;");
   }
 }

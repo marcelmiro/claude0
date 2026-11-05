@@ -20,6 +20,7 @@ describe("parseInput", () => {
     expect(parseInput("\x17")).toEqual([{ type: "key", name: "w", ctrl: true }]);
     expect(parseInput("\n")).toEqual([{ type: "key", name: "j", ctrl: true }]); // LF is ^J, not Enter
     expect(parseInput("\x0b")).toEqual([{ type: "key", name: "k", ctrl: true }]);
+    expect(parseInput("\x04")).toEqual([{ type: "key", name: "d", ctrl: true }]); // preview half-page
     expect(parseInput("\x07")).toEqual([]); // ^G must never act as g
     expect(parseInput("\x0e")).toEqual([]); // nor ^N as n
   });
@@ -28,6 +29,8 @@ describe("parseInput", () => {
     expect(parseInput("\x1b")).toEqual([{ type: "key", name: "escape" }]);
     expect(parseInput("\x1b[A")).toEqual([{ type: "key", name: "up" }]);
     expect(parseInput("\x1b[B")).toEqual([{ type: "key", name: "down" }]);
+    expect(parseInput("\x1b[5~")).toEqual([{ type: "key", name: "pageup" }]);
+    expect(parseInput("\x1b[6~")).toEqual([{ type: "key", name: "pagedown" }]);
   });
 
   test("shift+arrows (CSI 1;2) carry the shift flag; other modifiers don't", () => {

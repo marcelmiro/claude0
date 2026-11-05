@@ -187,6 +187,10 @@ switch (cmd) {
     // Internal — the sidebar renderer's search process (stdio JSON lines).
     await import("../src/sidebar/search-worker").then((m) => m.searchWorker());
     break;
+  case "preview":
+    // Internal — the sidebar's transcript preview, run inside a tmux popup.
+    await import("../src/preview/viewer").then((m) => m.runPreview(process.argv[3]));
+    break;
   case "sidebar-ctl":
     // Internal — M-s/M-S bindings send focus/toggle to the renderer.
     await import("../src/cli").then((m) => m.sidebarCtl(process.argv[3], process.argv[4]));

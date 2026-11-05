@@ -163,7 +163,7 @@ export function renderMode(
   const chrome =
     vs.flash && now < vs.flashUntil
       ? ` ${fg(C.mint, truncate(vs.flash, dims.width - 2))}`
-      : ` ${fg(C.dim, search ? "↵ open  ^j/^k  ⎋ back" : "↵ start  ^j/^k  ⎋ back")}`;
+      : ` ${fg(C.dim, search ? "↵ preview  ^j/^k  ⎋ back" : "↵ start  ^j/^k  ⎋ back")}`;
 
   // rowAtLine is content-relative like the inbox's, offset by the two header lines
   const shifted: (string | undefined)[] = [undefined, undefined];

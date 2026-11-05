@@ -1,7 +1,7 @@
 # 13. Inbox: sessions carry a lifecycle, panes exist only for active work
 
 Date: 2026-08-06
-Status: accepted; amended 2026-09-08 (lived-with revisions, see Rejected); unit ownership amended by ADR 22 (2026-08-23)
+Status: accepted; amended 2026-09-08 (lived-with revisions, see Rejected); unit ownership amended by ADR 22 (2026-08-23); re-entering a pane-less row amended by ADR 35 (2026-11-05)
 
 How the inbox works — store, daemon, sidebar grammar, glyphs, the snooze form, freshness,
 process shape (formerly this ADR's addenda) — is in [docs/inbox.md](../inbox.md).
@@ -19,7 +19,7 @@ The aim is inbox zero for agent sessions — where the name **Claude0** comes fr
 The load-bearing rules, each a real trade-off:
 
 - **"Done" is not a state.** Archiving (kill the pane) is the done verb and History is the done pile; "Recently done" is just the derived 24h archived window, and done toggles back from there. An authored `done` would duplicate History and rot.
-- **Every disposition and done kills the pane, no keep-the-pane option.** A live pane exists only for sessions actively working. What makes this safe for the most common verb is that **a snooze wake auto-reopens the pane** (detached `claude -r`, no focus steal) — snooze means "it literally comes back." Letting snooze keep its pane was tried and reverted. Rows outlive panes; re-engaging a pane-less row resumes it on demand. This is what shrinks the window bar; an opt-out would split the model in half.
+- **Every disposition and done kills the pane, no keep-the-pane option.** A live pane exists only for sessions actively working. What makes this safe for the most common verb is that **a snooze wake auto-reopens the pane** (detached `claude -r`, no focus steal) — snooze means "it literally comes back." Letting snooze keep its pane was tried and reverted. Rows outlive panes; a pane-less row is reopened on demand by an explicit verb (ADR 35). This is what shrinks the window bar; an opt-out would split the model in half.
 - **Nothing leaves "Needs you" by being looked at.** Only a reply (observed as the session running again), snooze/blocked, or archive dispose an item — never focus, glance, or notification tap. A `ready` session with no reply nags indefinitely; no silent decay. A notification may still quiet on focus (bell ≠ list).
 - **Every live session sitting at a prompt is Needs You.** A prompt-sitter is unfinished business.
 - **A snooze wake is a full attention event** — it re-enters Needs you and rides the notification tiers (push to the portkey device that set the snooze; a Mac-set snooze gets the native banner where one exists, broadcast push elsewhere). A wake that only mutates a list recreates the original forgetting.

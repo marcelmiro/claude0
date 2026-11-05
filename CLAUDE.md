@@ -100,7 +100,7 @@ Processes & caches:
 | systemd units, tmux-resurrect pairing, restore-path resolution | [16](docs/adr/0016-systemd-units-replace-launchd.md), [23](docs/adr/0023-dotfiles-independence.md) | [deploy/README.md](deploy/README.md) | `deploy/`, `core/resurrect.ts` |
 | Setup roles, config defaults, VM layout | [22](docs/adr/0022-per-machine-roles.md), [20](docs/adr/0020-config-defaults-live-in-code-setup-materializes.md), [17](docs/adr/0017-user-centric-development-layout.md), [15](docs/adr/0015-vm-home-is-users-throxy.md) |  | `src/cli.ts` (setup/doctor) |
 | TUI requires a TTY | [3](docs/adr/0003-tui-requires-a-tty.md) |  | `src/index.ts` |
-| Sidebar is the only desk surface: search and new-session modes, preview popup; TUI retired | [34](docs/adr/0034-sidebar-is-the-only-desk-surface.md) | [inbox](docs/inbox.md) | `src/sidebar/` |
+| Sidebar is the only desk surface: search and new-session modes, preview popup; TUI retired | [34](docs/adr/0034-sidebar-is-the-only-desk-surface.md), [35](docs/adr/0035-enter-never-refiles-a-parked-or-recent-row.md) | [inbox](docs/inbox.md), [preview](docs/preview.md) | `src/sidebar/`, `src/preview/` |
 | Offline app shell | [21](docs/adr/0021-offline-app-shell.md) | [portkey](docs/portkey.md) (iOS status bar) | `bridge/public/sw.js` |
 | History depth | [7](docs/adr/0007-history-depth-is-claudes-retention.md) |  | `core/transcript.ts` |
 | Search: conversation prose through an FTS5 index | [36](docs/adr/0036-search-matches-prose-through-an-fts5-index.md) |  | `core/search.ts` |
