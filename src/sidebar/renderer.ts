@@ -17,7 +17,8 @@
  * Self-installs its tmux wiring and repaints per-line on its own 1s loop.
  * Stands down while `M-S` hides sidebars or autostart is off.
  */
-import { openSync, writeSync, closeSync } from "node:fs";
+import { openSync, writeSync, closeSync, statSync } from "node:fs";
+import type { Subprocess } from "bun";
 import { InboxStore } from "../core/inbox-store";
 import { composeSessions, overlayAttention, peekEngaged, peekVerdict, sectionOf, wakeAt, type InboxSession } from "../core/inbox-model";
 import { loadState } from "../core/state";
@@ -27,8 +28,11 @@ import { seedForkName } from "../core/session-api";
 import { PATHS, configCache, parseTmuxKey, tmuxKeys } from "../core/config";
 import { SHELL_NAMES } from "../core/tmux";
 import { USER_SHELL } from "../core/launch-command";
+import { discoverRepos } from "../core/git";
 import { parseInput, type InputEvent } from "./input";
 import { renderView, SNOOZE_UNITS, type ViewState, type VisibleRow } from "./rows";
+import { filterRepos, type Mode } from "./modes";
+import type { SearchHit, SearchRequest, SearchResponse } from "./search-worker";
 import { fmtWakeAbs } from "./ansi";
 
 const SHELL_RE = new RegExp(`^(${SHELL_NAMES.join("|")})$`);
@@ -74,6 +78,8 @@ interface WinState extends ViewState {
   visible: VisibleRow[];
   rowAtLine: (string | undefined)[];
   focusPending: ReturnType<typeof setTimeout> | null;
+  /** Latest search request sent for this window — older responses are dropped. */
+  searchSeq: number;
 }
 
 function freshWin(windowId: string): WinState {
@@ -103,8 +109,20 @@ function freshWin(windowId: string): WinState {
     visible: [],
     rowAtLine: [],
     focusPending: null,
+    mode: "inbox",
+    query: "",
+    modeCursor: 0,
+    modeScrollTop: 0,
+    modeLoading: false,
+    hits: [],
+    hitsTotal: 0,
+    repos: [],
+    searchSeq: 0,
   };
 }
+
+/** Rows a search shows: the pane fits ~20, and past that typing narrows faster than scrolling. */
+const SEARCH_LIMIT = 50;
 
 export function runSidebarRenderer(): void {
   console.error(`[sidebar] renderer starting (pid ${process.pid})`);
@@ -136,6 +154,127 @@ export function runSidebarRenderer(): void {
     return id ? sessions.find((s) => s.id === id) : undefined;
   }
 
+  // ── search worker (docs/inbox.md, "Search and new session") ─────────────
+  // Search runs in its own process: loading the corpus would roughly triple
+  // this daemon's RSS. Spawned on the first query; it exits by itself after
+  // 10 min idle, and the next query spawns a fresh one.
+  let worker: Subprocess<"pipe", "pipe", "inherit"> | null = null;
+  const waiting = new Map<number, (res: SearchResponse | null) => void>();
+  let nextSeq = 0;
+
+  function startWorker(): Subprocess<"pipe", "pipe", "inherit"> | null {
+    try {
+      const proc = Bun.spawn([process.execPath, process.argv[1]!, "search-worker"], {
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "inherit",
+      });
+      void (async () => {
+        const decoder = new TextDecoder();
+        let buf = "";
+        try {
+          for await (const chunk of proc.stdout) {
+            buf += decoder.decode(chunk, { stream: true });
+            let nl: number;
+            while ((nl = buf.indexOf("\n")) !== -1) {
+              const line = buf.slice(0, nl);
+              buf = buf.slice(nl + 1);
+              try {
+                const res: SearchResponse = JSON.parse(line);
+                // the worker answers only the newest request of a burst —
+                // everything older is settled empty-handed
+                for (const [seq, resolve] of waiting) {
+                  if (seq > res.seq) continue;
+                  waiting.delete(seq);
+                  resolve(seq === res.seq ? res : null);
+                }
+              } catch {}
+            }
+          }
+        } catch {}
+        if (worker === proc) worker = null;
+        for (const resolve of waiting.values()) resolve(null);
+        waiting.clear();
+      })();
+      return proc;
+    } catch {
+      return null;
+    }
+  }
+
+  function querySearch(q: string): Promise<SearchResponse | null> {
+    worker ??= startWorker();
+    const proc = worker;
+    if (!proc) return Promise.resolve(null);
+    const seq = ++nextSeq;
+    const req: SearchRequest = { seq, q, limit: SEARCH_LIMIT };
+    return new Promise((resolve) => {
+      waiting.set(seq, resolve);
+      try {
+        proc.stdin.write(`${JSON.stringify(req)}\n`);
+        proc.stdin.flush();
+      } catch {
+        waiting.delete(seq);
+        resolve(null);
+      }
+    });
+  }
+
+  async function runSearch(win: WinState): Promise<void> {
+    const mine = ++win.searchSeq;
+    let res = await querySearch(win.query);
+    // the worker idled out under this request: one retry spawns a fresh one
+    if (!res && mine === win.searchSeq && win.mode === "search") res = await querySearch(win.query);
+    if (mine !== win.searchSeq || win.mode !== "search") return; // superseded by a newer keystroke
+    win.modeLoading = false;
+    win.hits = res?.hits ?? [];
+    win.hitsTotal = res?.total ?? 0;
+    win.modeCursor = 0;
+    win.modeScrollTop = 0;
+    if (!res) showFlash(win, "search unavailable");
+    paint(win);
+  }
+
+  async function loadRepos(win: WinState): Promise<void> {
+    const cfg = configCache();
+    const sessionRepos = sessions.flatMap((s) => (s.repoPath ? [{ name: s.repo, path: s.repoPath }] : []));
+    let repos: WinState["repos"] = [];
+    try {
+      repos = (await discoverRepos(sessionRepos, cfg.repositories.roots, cfg.repositories.priority)).map((r) => ({
+        name: r.name,
+        path: r.path,
+        branch: r.currentBranch,
+        worktree: !!r.isWorktree,
+      }));
+    } catch {}
+    if (win.mode !== "new") return;
+    win.repos = repos;
+    win.modeLoading = false;
+    paint(win);
+  }
+
+  function enterMode(win: WinState, mode: Mode): void {
+    win.mode = mode;
+    win.query = "";
+    win.modeCursor = 0;
+    win.modeScrollTop = 0;
+    win.modeLoading = true;
+    win.hits = [];
+    win.hitsTotal = 0;
+    win.repos = [];
+    paint(win);
+    void (mode === "search" ? runSearch(win) : loadRepos(win));
+  }
+
+  function exitMode(win: WinState): void {
+    win.mode = "inbox";
+    win.query = "";
+    win.hits = [];
+    win.repos = [];
+    win.modeLoading = false;
+    win.searchSeq++; // drop any in-flight response
+  }
+
   // ── painting ─────────────────────────────────────────────────────────────
 
   function paint(win: WinState): void {
@@ -144,6 +283,7 @@ export function runSidebarRenderer(): void {
     win.scrollTop = view.scrollTop;
     win.visible = view.visible;
     win.rowAtLine = view.rowAtLine;
+    if (view.modeScrollTop !== undefined) win.modeScrollTop = view.modeScrollTop;
     const full = !win.modesWritten;
     let out = "";
     if (full) {
@@ -437,7 +577,7 @@ export function runSidebarRenderer(): void {
         return;
       }
     }
-    await resumeOrRevisit(win, s);
+    await resumeOrRevisit(win, s.id, s.repoPath);
   }
 
   /** The window's first non-stub pane, or null when the window is gone. */
@@ -456,14 +596,19 @@ export function runSidebarRenderer(): void {
     return null;
   }
 
-  // First Enter on a pane-less row spawns its window and lands in THAT
-  // window's sidebar; a second Enter — before discovery has stamped the new
-  // pane onto the row — commits into the spawned window's work pane instead
-  // of double-spawning. Parked/done rows resume as a PEEK (recorded for the
+  // First Enter on a pane-less row spawns its window and lands in its claude
+  // pane; a second Enter — before discovery has stamped the new pane onto the
+  // row — commits into the spawned window's work pane instead of
+  // double-spawning. Parked/done rows resume as a PEEK (recorded for the
   // engagement gate + reaper); their overlay is untouched, so the row keeps
   // filing under Parked/Recent until a prompt graduates it.
-  async function resumeOrRevisit(win: WinState, s: InboxSession): Promise<void> {
-    const prior = resumedWindows.get(s.id);
+  async function resumeOrRevisit(
+    win: WinState,
+    id: string,
+    repoPath: string | undefined,
+    onSpawned?: () => string | null,
+  ): Promise<void> {
+    const prior = resumedWindows.get(id);
     if (prior) {
       const work = await workPaneOf(prior);
       if (work) {
@@ -473,43 +618,57 @@ export function runSidebarRenderer(): void {
           return;
         } catch {}
       }
-      resumedWindows.delete(s.id);
+      resumedWindows.delete(id);
     }
-    const spawned = await resumeSession(win, s);
+    const spawned = await resumeSession(win, id, repoPath);
     if (!spawned) return;
-    resumedWindows.set(s.id, spawned);
+    resumedWindows.set(id, spawned);
+    // a caller's explicit state clear runs only now that the window exists —
+    // a failed spawn keeps the snooze or block (ADR 35) — and before the peek
+    // decision below, so a cleared row resumes plainly
+    const cleared = onSpawned?.() ?? null;
     // the CURRENT overlay decides peek vs plain resume — the caller's row can
     // predate a just-applied verb (b-unpark clears the disposition first)
-    const fresh = findSession(s.id) ?? s;
-    const section = sectionOf(fresh, Date.now());
+    const fresh = findSession(id);
+    const section = fresh ? sectionOf(fresh, Date.now()) : null;
     const peeked = section === "parked" || section === "done";
     if (peeked) {
       applyVerb(() => {
-        store.setPeek(s.id, spawned, Date.now());
+        store.setPeek(id, spawned, Date.now());
         return true;
       });
       // fresh grace anchor: a re-peek must not inherit the previous peek's
       // (possibly hours-old) last-active time and get reaped on first sight
-      peekLastActive.set(s.id, Date.now());
+      peekLastActive.set(id, Date.now());
     }
-    // land in the new window's sidebar NOW instead of waiting for a tick to
-    // split it (ctlToggle's sequence: ensure → sync → select stub → paint)
+    // Focus stays in the new window's claude pane (resumeSession selected the
+    // window while claude was its only pane): reopening a session means typing
+    // in it next. Split its sidebar now — `ensure` splits detached — with the
+    // row selected but unfocused, and drop this sidebar's chrome (its focus-out
+    // escape can lag a tick).
     try {
+      if (win.focused) {
+        win.focused = false;
+        win.clickArmed = false;
+        paint(win);
+      }
       await ensure(spawned);
       syncTopology(await listAllPanes());
       const target = wins.get(spawned);
       if (target?.stubPane) {
         // selection set explicitly — seedSelection can't find it, `real` lags discovery
-        if (peeked) showFlash(target, section === "parked" ? "peek — stays parked" : "peek — stays in recent");
-        await landInSidebar(win, target, s.id);
+        target.selectedId = id;
+        const msg = peeked ? (section === "parked" ? "peek — stays parked" : "peek — stays in recent") : cleared;
+        if (msg) showFlash(target, msg);
+        paint(target);
       }
     } catch {}
   }
 
-  async function resumeSession(win: WinState, s: InboxSession): Promise<string | null> {
+  async function resumeSession(win: WinState, id: string, repoPath: string | undefined): Promise<string | null> {
     try {
       const home = process.env.HOME ?? "/";
-      const dir = (await resolveRestoreTarget(s.id, s.repoPath ?? home)) ?? s.repoPath ?? home;
+      const dir = (await resolveRestoreTarget(id, repoPath ?? home)) ?? repoPath ?? home;
       // -d is load-bearing: a NON-detached new-window from the tty-less
       // daemon never returns (verified live — the Bun.$ promise just hangs),
       // so spawn detached and select the window explicitly. -a beside the
@@ -523,16 +682,118 @@ export function runSidebarRenderer(): void {
       // single string goes through `$SHELL -c`, where zshenv restores PATH
       // No `exec`: the trailing login shell keeps the window alive after claude
       // exits, so /exit lands on a prompt instead of closing the pane.
-      const cmd = `claude -r ${s.id}; exec ${USER_SHELL} -l`;
+      const cmd = `claude -r ${id}; exec ${USER_SHELL} -l`;
       const spawned = (
         await Bun.$`tmux new-window -d -a -P -F ${"#{window_id}"} -t ${win.windowId} -c ${dir} ${cmd}`.quiet().text()
       ).trim();
       if (spawned) await Bun.$`tmux select-window -t ${spawned}`.quiet();
-      showFlash(win, "pane gone — resuming in new window");
       return spawned || null;
     } catch {
       showFlash(win, "resume failed");
       return null;
+    }
+  }
+
+  // Search's Enter opens whatever the state (ADR 35): live → its pane;
+  // parked → unparked; recent or older → unarchived. Each clear happens once
+  // the window exists, and the flash names what was cleared.
+  async function openHit(win: WinState): Promise<void> {
+    const h = win.hits[Math.min(win.modeCursor, win.hits.length - 1)];
+    if (!h) return;
+    exitMode(win);
+    const s = findSession(h.sessionId);
+    if (s?.real) {
+      await switchTo(win, s, true);
+      paint(win);
+      return;
+    }
+    const opened = Date.now();
+    const d = s && sectionOf(s, opened) === "parked" ? s.disposition : undefined;
+    await resumeOrRevisit(win, h.sessionId, s?.repoPath ?? h.projectPath, () => {
+      if (d) {
+        applyVerb(() => store.clearDisposition(h.sessionId, Date.now(), "manual") !== null);
+        return d.kind === "snoozed" ? `unparked — was snoozed until ${fmtWakeAbs(d.until, opened)}` : `unblocked — was: ${d.note}`;
+      }
+      // an archive older than RECENT still hides a live session (composeSessions
+      // re-applies archivedAt) — clear it explicitly, never via discovery
+      let archived = false;
+      try {
+        archived = store.isArchived(h.sessionId);
+      } catch {}
+      if (archived && applyVerb(() => store.unarchive(h.sessionId, Date.now()))) return "restored";
+      return null;
+    });
+    paint(win);
+  }
+
+  // `n` / `N`: plain `claude` in a new window right of this one, focus in it.
+  async function startClaude(win: WinState, dir: string | undefined): Promise<void> {
+    let isDir = false;
+    try {
+      isDir = !!dir && statSync(dir).isDirectory();
+    } catch {}
+    if (!dir || !isDir) {
+      showFlash(win, dir ? "directory gone" : "no directory here");
+      paint(win);
+      return;
+    }
+    try {
+      // -d, one string, beside this window: resumeSession's rules and reasons
+      const cmd = `claude; exec ${USER_SHELL} -l`;
+      const spawned = (
+        await Bun.$`tmux new-window -d -a -P -F ${"#{window_id}"} -t ${win.windowId} -c ${dir} ${cmd}`.quiet().text()
+      ).trim();
+      if (spawned) await Bun.$`tmux select-window -t ${spawned}`.quiet();
+      // focus is in the new claude pane; drop this sidebar's chrome now
+      win.focused = false;
+      win.clickArmed = false;
+    } catch {
+      showFlash(win, "new session failed");
+    }
+    paint(win);
+  }
+
+  type KeyEv = { name: string; ch?: string; shift?: boolean; ctrl?: boolean };
+
+  async function handleModeKey(win: WinState, ev: KeyEv): Promise<void> {
+    const search = win.mode === "search";
+    const count = search ? win.hits.length : filterRepos(win.repos, win.query).length;
+    const edit = (q: string) => {
+      win.query = q;
+      if (search) {
+        paint(win); // the typed character shows now; results follow
+        void runSearch(win);
+      } else {
+        win.modeCursor = 0;
+        win.modeScrollTop = 0;
+        paint(win);
+      }
+    };
+    if (ev.name === "escape" || (ev.ctrl && ev.name === "c")) {
+      exitMode(win);
+      paint(win);
+    } else if (ev.name === "enter") {
+      if (search) await openHit(win);
+      else {
+        const r = filterRepos(win.repos, win.query)[Math.min(win.modeCursor, count - 1)];
+        if (!r) return;
+        exitMode(win);
+        await startClaude(win, r.path);
+      }
+    } else if (ev.name === "up" || (ev.ctrl && ev.name === "k")) {
+      win.modeCursor = Math.max(0, win.modeCursor - 1);
+      paint(win);
+    } else if (ev.name === "down" || (ev.ctrl && ev.name === "j")) {
+      win.modeCursor = Math.max(0, Math.min(count - 1, win.modeCursor + 1));
+      paint(win);
+    } else if (ev.name === "backspace") {
+      if (win.query) edit(win.query.slice(0, -1));
+    } else if (ev.ctrl && ev.name === "u") {
+      if (win.query) edit("");
+    } else if (ev.ctrl && ev.name === "w") {
+      if (win.query) edit(win.query.replace(/\S+\s*$/, ""));
+    } else if (ev.ch && !ev.ctrl && ev.ch.length === 1 && ev.ch >= " ") {
+      edit(win.query + ev.ch);
     }
   }
 
@@ -541,6 +802,7 @@ export function runSidebarRenderer(): void {
     win.focused = false;
     win.clickArmed = false;
     win.helpVisible = false;
+    exitMode(win);
     paint(win);
     try {
       if (win.stubPane) await Bun.$`tmux select-pane -l -t ${win.stubPane}`.quiet();
@@ -577,7 +839,7 @@ export function runSidebarRenderer(): void {
     done: ["e"],
   };
 
-  async function handleKey(win: WinState, ev: { name: string; ch?: string; shift?: boolean; ctrl?: boolean }): Promise<void> {
+  async function handleKey(win: WinState, ev: KeyEv): Promise<void> {
     win.clickArmed = true;
 
     // first key after regaining focus only reveals the cursor — a blind
@@ -591,6 +853,12 @@ export function runSidebarRenderer(): void {
     }
 
     if (ev.name !== "e") win.confirmKillId = null;
+
+    // a mode owns every key — letters are query text there, `?` included
+    if (win.mode !== "inbox") {
+      await handleModeKey(win, ev);
+      return;
+    }
 
     // inline block-note input: free typing until ↵ commits / esc cancels
     if (win.blockNoteFor) {
@@ -849,6 +1117,18 @@ export function runSidebarRenderer(): void {
         paint(win);
         break;
       }
+      case "/":
+        enterMode(win, "search");
+        break;
+      case "n": {
+        if (!ev.shift) {
+          enterMode(win, "new");
+          break;
+        }
+        // N: a new session where the cursor row's session works (its worktree, if any)
+        await startClaude(win, findSession(row?.id)?.repoPath);
+        break;
+      }
       case "q":
       case "escape":
         await unfocusToPane(win);
@@ -867,14 +1147,31 @@ export function runSidebarRenderer(): void {
         win.blockNoteFor = null;
         win.snoozeMenuFor = null;
         win.snoozeDigits = "";
+        exitMode(win);
         // selection deliberately kept — invisible unfocused, re-seeded on gain
         paint(win);
       }
       return;
     }
     if (ev.type === "wheel") {
-      win.scrollTop = Math.max(0, win.scrollTop + ev.dir * 2);
+      if (win.mode !== "inbox" && win.focused) win.modeCursor = Math.max(0, win.modeCursor + ev.dir);
+      else win.scrollTop = Math.max(0, win.scrollTop + ev.dir * 2);
       paint(win);
+      return;
+    }
+    if (ev.type === "click" && win.mode !== "inbox" && win.focused) {
+      // a mode's rowAtLine is screen-relative: click selects, a click on the
+      // selected row opens (the inbox's select-then-commit)
+      const key = win.rowAtLine[ev.y - 1];
+      if (!key) return;
+      const keys = win.mode === "search" ? win.hits.map((h) => h.sessionId) : filterRepos(win.repos, win.query).map((r) => r.path);
+      const i = keys.indexOf(key);
+      if (i === -1) return;
+      if (i === win.modeCursor) await handleModeKey(win, { name: "enter" });
+      else {
+        win.modeCursor = i;
+        paint(win);
+      }
       return;
     }
     if (ev.type === "click") {
@@ -903,7 +1200,14 @@ export function runSidebarRenderer(): void {
 
   // ── control (M-s / M-S via `claude0 sidebar-ctl`) ───────────────────────────
 
-  async function ctlFocus(invokerPane: string): Promise<void> {
+  // M-s on a hidden sidebar shows it first — with the TUI gone it's the only
+  // way into search and new session (ADR 34). `showHidden` is false when
+  // ctlToggle calls back in, so a failed un-hide can't recurse.
+  async function ctlFocus(invokerPane: string, showHidden = true): Promise<void> {
+    if (showHidden && (await Bun.file(HIDDEN).exists())) {
+      await ctlToggle(invokerPane);
+      return;
+    }
     const winId = await windowOf(invokerPane);
     const win = wins.get(winId);
     if (!win?.stubPane) return;
@@ -945,7 +1249,7 @@ export function runSidebarRenderer(): void {
       const win = wins.get(winId);
       if (win?.stubPane) {
         paint(win);
-        await ctlFocus(invokerPane);
+        await ctlFocus(invokerPane, false);
       }
     } else {
       await Bun.write(HIDDEN, "");
@@ -1188,6 +1492,7 @@ export function runSidebarRenderer(): void {
         win.clickArmed = false;
         win.helpVisible = false;
         win.blockNoteFor = null;
+        exitMode(win);
       } else if (!win.focused && nowFocused) {
         gainFocusSoon(win);
       }
@@ -1411,7 +1716,7 @@ export function runSidebarRenderer(): void {
 
   async function tick(): Promise<void> {
     tickCount++;
-    // Wiring installs BEFORE the stand-down gate: M-S is the only way back
+    // Wiring installs BEFORE the stand-down gate: M-s / M-S are the way back
     // from hidden, so a hidden sidebar must still get its bindings on a fresh
     // tmux server (or after this entry script's path changes) — behind the
     // gate, the un-hide key itself would be the thing that's missing.

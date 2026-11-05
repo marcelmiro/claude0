@@ -21,6 +21,8 @@ import {
   type Section,
 } from "../core/inbox-model";
 import { C, bg, bold, displayName, fg, fmtAge, fmtWake, fmtWakeAbs, plainLen, truncate } from "./ansi";
+import { renderMode, type Mode, type RepoRow } from "./modes";
+import type { SearchHit } from "./search-worker";
 
 export interface VisibleRow {
   id: string;
@@ -49,6 +51,16 @@ export interface ViewState {
   flash: string;
   flashUntil: number;
   scrollTop: number;
+  /** `/` search and `n` new-session take over the pane (modes.ts); inbox = the lifecycle list. */
+  mode: Mode;
+  query: string;
+  modeCursor: number;
+  modeScrollTop: number;
+  /** A search or repo listing is in flight (query line shows …). */
+  modeLoading: boolean;
+  hits: SearchHit[];
+  hitsTotal: number;
+  repos: RepoRow[];
 }
 
 export interface RenderedView {
@@ -59,6 +71,8 @@ export interface RenderedView {
   rowAtLine: (string | undefined)[];
   /** Clamped/adjusted scroll — the renderer writes it back to the state. */
   scrollTop: number;
+  /** Same, for a mode's list. */
+  modeScrollTop?: number;
 }
 
 // keys only — what they do lives behind ?
@@ -87,6 +101,11 @@ function helpLines(): string[] {
     ` ${fg(C.fg, "e")}       ${fg(C.muted, "done + close pane")}`,
     `         ${fg(C.dim, "recent: undo")}`,
     ` ${fg(C.fg, "f")}       ${fg(C.muted, "fork, new window")}`,
+    "",
+    ` ${bold(fg(C.dim, "open"))}`,
+    ` ${fg(C.fg, "/")}       ${fg(C.muted, "search all sessions")}`,
+    ` ${fg(C.fg, "n")}       ${fg(C.muted, "new session, pick repo")}`,
+    ` ${fg(C.fg, "N")}       ${fg(C.muted, "new session here")}`,
     "",
     ` ${bold(fg(C.dim, "leave"))}`,
     ` ${fg(C.fg, "q ⎋")}    ${fg(C.muted, "back to work pane")}`,
@@ -173,6 +192,8 @@ export function renderView(
     content.push(` ${fg(C.dim, "? q ⎋ close")}`);
     return { rows: content, visible: [], rowAtLine: [], scrollTop: 0 };
   }
+
+  if (vs.mode !== "inbox" && vs.focused) return renderMode(sessions, vs, dims, now);
 
   const sections = deriveSections(sessions, now);
   const { needsYou, running, parked, done } = sections;
@@ -290,7 +311,9 @@ export function renderView(
   if (detail) rows.push(` ${fg(C.muted, truncate(detail, dims.width - 2))}`);
 
   if (!vs.focused) {
-    rows.push("");
+    // a flash still shows: opening a session moves focus to its pane, and the
+    // flash naming what was cleared ("unparked — was snoozed …") must be seen
+    rows.push(vs.flash && now < vs.flashUntil ? ` ${fg(C.mint, truncate(vs.flash, dims.width - 2))}` : "");
   } else if (vs.blockNoteFor) {
     const w = dims.width - 12;
     rows.push(` ${fg(C.peach, "✗")} ${truncate(vs.blockNote, Math.max(4, w))}${fg(C.peach, "▏")} ${fg(C.dim, "↵ ⎋")}`);

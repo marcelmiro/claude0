@@ -26,7 +26,7 @@ A session with no live Claude process; its transcript remains on disk and it can
 _Avoid_: closed, dead, old session
 
 **History**:
-The archive surface: every archived session Claude still retains, browsable by recency and searchable. Not time-windowed.
+The archive surface: every archived session Claude still retains, browsable by recency and searchable. Not time-windowed. The sidebar's search mode (`/`) searches the same set plus the live sessions.
 _Avoid_: archived list, archive view
 
 **Restore**:

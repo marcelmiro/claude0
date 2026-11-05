@@ -15,6 +15,15 @@ describe("parseInput", () => {
     expect(parseInput("\t")).toEqual([{ type: "key", name: "tab" }]);
   });
 
+  test("line-editing ctrl keys decode by name; other control bytes stay dropped", () => {
+    expect(parseInput("\x15")).toEqual([{ type: "key", name: "u", ctrl: true }]);
+    expect(parseInput("\x17")).toEqual([{ type: "key", name: "w", ctrl: true }]);
+    expect(parseInput("\n")).toEqual([{ type: "key", name: "j", ctrl: true }]); // LF is ^J, not Enter
+    expect(parseInput("\x0b")).toEqual([{ type: "key", name: "k", ctrl: true }]);
+    expect(parseInput("\x07")).toEqual([]); // ^G must never act as g
+    expect(parseInput("\x0e")).toEqual([]); // nor ^N as n
+  });
+
   test("lone ESC is the escape key; arrows decode", () => {
     expect(parseInput("\x1b")).toEqual([{ type: "key", name: "escape" }]);
     expect(parseInput("\x1b[A")).toEqual([{ type: "key", name: "up" }]);

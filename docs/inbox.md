@@ -81,7 +81,9 @@ no hide marker does.
 
 - **Unfocused**, the sidebar is a glance surface (no chrome, pinned to top). **Focus**
   (`sidebarFocus`, default `M-s`) is instant: the toggle signals the renderer directly, and
-  the selector lands on the session of the pane you came from. **Visibility**
+  the selector lands on the session of the pane you came from; on a hidden sidebar it shows
+  it first (`ctlFocus` → `ctlToggle`), since the sidebar is the only way into search and
+  new session ([ADR 34](adr/0034-sidebar-is-the-only-desk-surface.md)). **Visibility**
   (`sidebarToggle`, default `M-S`) is global: hide kills every sidebar pane and stands
   down self-heal until shown; the state survives server restarts.
 - **Two marks.** The *pin* (`▎`, white — location, deliberately not a status color) on the
@@ -91,8 +93,10 @@ no hide marker does.
   row moves the highlight; a click on the highlighted row navigates. Enter on a row in
   another window shows that window and lands focused in *its* sidebar with the row
   selected; Enter on the current window's row commits into the session pane. A pane-less
-  row resumes into a new window; a second Enter before discovery stamps the pane commits
-  into the spawned window (`resumedWindows`) instead of double-spawning. A double-click
+  row resumes into a new window beside this one with focus in its claude pane — reopening
+  means typing next — and the new window's sidebar shows the row selected, unfocused; a
+  second Enter before discovery stamps the pane commits into the spawned window
+  (`resumedWindows`) instead of double-spawning. A double-click
   commits with the session *pane* focused (`switchTo`).
 - **Verbs** are section-scoped; `J`/`K` jump sections; Recent takes only `e`. `e` archives
   and, on a Recent row, un-archives back into Needs You (pane stays closed). Archiving a
@@ -110,6 +114,35 @@ no hide marker does.
   transcript check. A due snooze files under Needs You, so the reaper drops the record and
   keeps the window. Explicit re-entry is `b` (unpark); restore is `e` on Recent.
 - **Fork** (`f`) places the new window beside the parent (`new-window -a`).
+
+### Search and new session
+
+`/` and `n` turn the focused sidebar into a full-pane mode (`src/sidebar/modes.ts`): a
+query line on top, a cursor list, hints at the bottom. Letters are query text, so the
+list moves with `^j`/`^k` or ↑/↓; `^u` clears, `^w` deletes a word, Esc (or
+focus loss) returns to the inbox. A click selects, a click on the selected row opens.
+Enter arrives as CR in the raw-mode stub, so LF is free to be `^j` (`input.ts`).
+
+- **Search** (`/`) covers every session Claude retains, live ones included; an empty query
+  lists them newest first. The list stops at 50 rows with a "+N more — keep typing" line
+  (past ~20 rows typing narrows faster than scrolling). Rows show a state glyph (● needs you / running, ☾ snoozed with
+  its wake, ✗ blocked, ✓ recent), and the match snippet when the match was in the
+  conversation, else `repo/branch`. **Enter opens whatever the state**
+  ([ADR 35](adr/0035-enter-never-refiles-a-parked-or-recent-row.md)): a live session's
+  pane; a parked one is unparked, an archived one unarchived — each clear written only once
+  the new window exists (`openHit`'s callback into `resumeOrRevisit`), so a failed spawn
+  keeps the snooze or block, and the new window's sidebar flashes what was cleared. The
+  explicit unarchive matters: an archive older than RECENT would otherwise keep the
+  restored session off the sidebar.
+- **The engine runs in `claude0 search-worker`**, spawned on the first query and exiting
+  after 10 min idle (`search-worker.ts`): loading every transcript's search slices plateaus
+  near 240MB RSS, about three times the daemon's own. It answers from its current entries
+  and reloads after 15s in the background; only the newest request of a burst is answered,
+  and the renderer drops responses older than the window's latest (`searchSeq`).
+- **New session** (`n`) filters repos — `discoverRepos` order, worktrees under their base,
+  a matching worktree keeping its base row as context — and Enter starts plain `claude` in
+  a new window right of this one, focus in it. `N` does the same in the cursor row's
+  session directory. No branch or worktree creation: agents make their own worktrees.
 
 ### Snooze form
 

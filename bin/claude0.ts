@@ -183,6 +183,10 @@ switch (cmd) {
   case "daemon":
     await import("../src/cli").then((m) => m.daemon());
     break;
+  case "search-worker":
+    // Internal — the sidebar renderer's search process (stdio JSON lines).
+    await import("../src/sidebar/search-worker").then((m) => m.searchWorker());
+    break;
   case "sidebar-ctl":
     // Internal — M-s/M-S bindings send focus/toggle to the renderer.
     await import("../src/cli").then((m) => m.sidebarCtl(process.argv[3], process.argv[4]));

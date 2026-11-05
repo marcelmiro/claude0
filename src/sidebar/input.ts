@@ -13,6 +13,13 @@ export type InputEvent =
   | { type: "wheel"; dir: 1 | -1 }
   | { type: "focus"; in: boolean };
 
+const CTRL_KEYS: Record<string, string> = {
+  "\n": "j",
+  "\x0b": "k",
+  "\x15": "u",
+  "\x17": "w",
+};
+
 export function parseInput(data: string): InputEvent[] {
   const events: InputEvent[] = [];
   let i = 0;
@@ -49,9 +56,14 @@ export function parseInput(data: string): InputEvent[] {
       continue;
     }
     i++;
-    if (c === "\r" || c === "\n") events.push({ type: "key", name: "enter" });
+    // Enter is CR in a raw-mode tty; LF is ^J, a list move (the old TUI's ^J/^K)
+    if (c === "\r") events.push({ type: "key", name: "enter" });
     else if (c === "\x7f" || c === "\b") events.push({ type: "key", name: "backspace" });
     else if (c === "\x03") events.push({ type: "key", name: "c", ctrl: true });
+    // line editing in the search / new-session modes: ^U clear, ^W delete word,
+    // ^J/^K move (j/k are text there). Named explicitly, not a blanket ctrl
+    // decode — handlers match bare names, so ^G must never arrive as `g`.
+    else if (c in CTRL_KEYS) events.push({ type: "key", name: CTRL_KEYS[c]!, ctrl: true });
     else if (c === "\t") events.push({ type: "key", name: "tab" });
     else if (c >= " " && c !== "\x7f") {
       const lower = c.toLowerCase();

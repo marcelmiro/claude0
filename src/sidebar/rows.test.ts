@@ -25,6 +25,14 @@ function vs(over: Partial<ViewState> = {}): ViewState {
     flash: "",
     flashUntil: 0,
     scrollTop: 0,
+    mode: "inbox",
+    query: "",
+    modeCursor: 0,
+    modeScrollTop: 0,
+    modeLoading: false,
+    hits: [],
+    hitsTotal: 0,
+    repos: [],
     ...over,
   };
 }
@@ -119,6 +127,11 @@ describe("renderView", () => {
     const view = renderView(SAMPLE, vs({ selectedId: "n1" }), DIMS, NOW);
     expect(view.rows.join("")).not.toContain("\x1b[48;2;64;64;64m");
     expect(view.rows[view.rows.length - 1]).toBe("");
+  });
+
+  test("unfocused: a live flash still shows in the bottom row", () => {
+    const view = renderView(SAMPLE, vs({ flash: "unparked — was snoozed", flashUntil: NOW + 1000 }), DIMS, NOW);
+    expect(view.rows[view.rows.length - 1]).toContain("unparked — was snoozed");
   });
 
   test("focused: selection bg present, section hints in the bottom row", () => {
