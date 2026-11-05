@@ -83,7 +83,7 @@ Processes & caches:
 | Area | Decisions (ADRs) | Mechanism | Entry points |
 |---|---|---|---|
 | Wrapping Claude Code (structured channels vs guarded keystrokes) | [6](docs/adr/0006-wrapping-claude-code.md) | [pane-input](docs/pane-input.md) | `core/tmux.ts`, `core/session-api.ts` |
-| Inbox lifecycle, sidebar, daemon, snooze/wake, portkey Home | [13](docs/adr/0013-inbox-lifecycle-model.md) | [inbox](docs/inbox.md), [portkey](docs/portkey.md) | `core/inbox-*.ts`, `src/sidebar/` |
+| Inbox lifecycle, sidebar, daemon, snooze/wake, portkey Home; Enter on parked/recent previews, `b`/`e` re-enter | [13](docs/adr/0013-inbox-lifecycle-model.md), [35](docs/adr/0035-enter-never-refiles-a-parked-or-recent-row.md) | [inbox](docs/inbox.md), [portkey](docs/portkey.md) | `core/inbox-*.ts`, `src/sidebar/` |
 | Presence, notification tiers, window prefixes | [14](docs/adr/0014-presence-is-client-activity.md), [19](docs/adr/0019-presence-is-client-activity-everywhere.md) | [notifications](docs/notifications.md) | `core/presence.ts`, `core/notifications.ts` |
 | AI session naming (generation, cache, label resolution) | [28](docs/adr/0028-ai-only-session-naming.md) | [naming](docs/naming.md) | `core/names.ts`, `src/monitor.ts` |
 | Web Push, per-device routing, tap attribution | [24](docs/adr/0024-web-push-replaces-ntfy.md), [10](docs/adr/0010-notification-taps-attributed-server-side.md) | [notifications](docs/notifications.md) | `core/web-push.ts`, `shared/tap-target.js` |
@@ -100,8 +100,10 @@ Processes & caches:
 | systemd units, tmux-resurrect pairing, restore-path resolution | [16](docs/adr/0016-systemd-units-replace-launchd.md), [23](docs/adr/0023-dotfiles-independence.md) | [deploy/README.md](deploy/README.md) | `deploy/`, `core/resurrect.ts` |
 | Setup roles, config defaults, VM layout | [22](docs/adr/0022-per-machine-roles.md), [20](docs/adr/0020-config-defaults-live-in-code-setup-materializes.md), [17](docs/adr/0017-user-centric-development-layout.md), [15](docs/adr/0015-vm-home-is-users-throxy.md) |  | `src/cli.ts` (setup/doctor) |
 | TUI requires a TTY | [3](docs/adr/0003-tui-requires-a-tty.md) |  | `src/index.ts` |
+| Sidebar is the only desk surface: search and new-session modes, preview popup; TUI retired | [34](docs/adr/0034-sidebar-is-the-only-desk-surface.md) | [inbox](docs/inbox.md) | `src/sidebar/` |
 | Offline app shell | [21](docs/adr/0021-offline-app-shell.md) | [portkey](docs/portkey.md) (iOS status bar) | `bridge/public/sw.js` |
 | History depth | [7](docs/adr/0007-history-depth-is-claudes-retention.md) |  | `core/transcript.ts` |
+| Search: conversation prose through an FTS5 index | [36](docs/adr/0036-search-matches-prose-through-an-fts5-index.md) |  | `core/search.ts` |
 | Transcript stitching across project dirs, compact-link recovery | [29](docs/adr/0029-transcripts-span-project-dirs.md) |  | `core/last-turn.ts`, `core/transcript.ts`, `core/session-api.ts` |
 | Portkey shell (one-shot host command runner) | [30](docs/adr/0030-portkey-shell-is-a-one-shot-runner.md) | | `core/shell-run.ts`, `bridge/server.ts` |
 | Portkey served on its own port, not the host's bare URL | [32](docs/adr/0032-portkey-serves-on-its-own-port.md) | | `core/provision.ts`, `core/doctor.ts` |
