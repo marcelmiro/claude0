@@ -4,6 +4,8 @@ tmux inbox sidebar + phone web app ("portkey") for managing Claude Code sessions
 
 This file is the map. Vocabulary lives in [GLOSSARY.md](GLOSSARY.md).
 
+**AX** in the owner's speech is *agent experience*: how well something works for the AI agents that use it, the agent-side counterpart of UX and DX. It never means accessibility or Apple's `AX*` APIs.
+
 **Decisions (`docs/adr/`).** Record one as `docs/adr/NNNN-slug.md` only when it's hard to reverse, surprising without context, and the result of a real trade-off. Sections: Context, Decision, Consequences, plus a `Status:` line (accepted / amended by ADR N / superseded by ADR N, dated). ADRs hold the decision; how a feature works goes in `docs/<area>.md`. When a later change reverses part of an ADR, update its Status line instead of appending a changelog. Before changing an area, read its ADRs; if your change contradicts one, say so and ask.
 
 **Mechanism (`docs/<area>.md`).** The table at the end maps each area to its ADRs and doc. A change to how a feature works updates that doc in the same commit. Docs hold what no single file shows — cross-file order, Claude Code/tmux/platform facts, traps — and name the function whose docblock carries the detail rather than restating it. Code comments cite docs and ADRs by file and section.
