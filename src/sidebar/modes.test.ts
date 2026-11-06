@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { renderView, type ViewState } from "./rows";
-import { filterRepos, hitSection, type RepoRow } from "./modes";
+import { filterRepos, hitSection, jumpRepo, type RepoRow } from "./modes";
 import { plainLen } from "./ansi";
 import type { InboxSession } from "../core/inbox-model";
 import type { SearchHit } from "./search-worker";
@@ -145,6 +145,15 @@ describe("new-session mode", () => {
   test("every word must match", () => {
     expect(filterRepos(REPOS, "throxy main").map((r) => r.path)).toEqual(["/d/throxy"]);
     expect(filterRepos(REPOS, "throxy fts")).toEqual([]);
+  });
+
+  test("^J/^K jump over worktrees to repo base rows, staying put at either end", () => {
+    expect(jumpRepo(REPOS, 0, 1)).toBe(3);
+    expect(jumpRepo(REPOS, 1, 1)).toBe(3);
+    expect(jumpRepo(REPOS, 3, 1)).toBe(3);
+    expect(jumpRepo(REPOS, 3, -1)).toBe(0);
+    expect(jumpRepo(REPOS, 2, -1)).toBe(0); // from a worktree: its own base first
+    expect(jumpRepo(REPOS, 0, -1)).toBe(0);
   });
 
   test("renders the + sigil, the filtered count, and indented worktrees", () => {

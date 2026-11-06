@@ -21,6 +21,12 @@ const CTRL_KEYS: Record<string, string> = {
   "\x17": "w",
 };
 
+// Ctrl+Shift+J/K: legacy bytes can't tell them from ^J/^K, so they arrive only
+// as extended keys — tmux `extended-keys on` (config/tmux.conf) plus the
+// renderer's modifyOtherKeys request. Keyed by codepoint, shifted or not.
+const CTRL_SHIFT_KEYS: Record<number, string> = { 74: "j", 106: "j", 75: "k", 107: "k" };
+const CTRL_SHIFT = 6; // xterm modifier param: 1 + shift(1) + ctrl(4)
+
 export function parseInput(data: string): InputEvent[] {
   const events: InputEvent[] = [];
   let i = 0;
@@ -42,6 +48,13 @@ export function parseInput(data: string): InputEvent[] {
         else if (final === "B") events.push({ type: "key", name: "down", ...(body === "1;2" ? { shift: true } : {}) });
         else if (final === "~" && body === "5") events.push({ type: "key", name: "pageup" });
         else if (final === "~" && body === "6") events.push({ type: "key", name: "pagedown" });
+        // extended keys: CSI <code>;<mod>u (tmux ≤3.4, csi-u format) or CSI 27;<mod>;<code>~ (3.5+ xterm format)
+        else if (final === "u" || (final === "~" && body.startsWith("27;"))) {
+          const p = body.split(";").map(Number);
+          const [code, mod] = final === "u" ? [p[0], p[1]] : [p[2], p[1]];
+          const name = code !== undefined ? CTRL_SHIFT_KEYS[code] : undefined;
+          if (name && mod === CTRL_SHIFT) events.push({ type: "key", name, ctrl: true, shift: true });
+        }
         else if ((final === "M" || final === "m") && body.startsWith("<")) {
           const [b, x, y] = body.slice(1).split(";").map(Number);
           if (b !== undefined && x !== undefined && y !== undefined) {

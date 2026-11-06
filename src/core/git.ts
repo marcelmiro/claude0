@@ -110,7 +110,7 @@ export async function discoverRepos(
 
   // Base repos from current sessions (worktrees resolved to their base).
   for (const r of sessionRepos) {
-    const basePath = baseRepoCache.get(r.path) ?? r.path;
+    const basePath = await getBaseRepoPath(r.path);
     const baseName = basePath.split("/").filter(Boolean).pop() ?? r.name;
     const existing = bases.get(basePath);
     if (existing) existing.hasSession = true;

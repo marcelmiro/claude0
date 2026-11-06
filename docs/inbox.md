@@ -100,13 +100,15 @@ no hide marker does.
   (`resumedWindows`) instead of double-spawning. A double-click
   commits with the session *pane* focused (`switchTo`).
 - **Verbs** are section-scoped; `J`/`K` jump sections; Recent takes only `e`. `e` archives
-  and, on a Recent row, un-archives back into Needs You (pane stays closed). Archiving a
+  and, on a Recent row, un-archives back into Needs You. `b` on Parked and `e` on Recent
+  both reopen: the session resumes in a new window, shown with its sidebar focused on the
+  row (`reopenInSidebar`). Archiving a
   *running* session is a double-tap confirm (killing a mid-turn Claude throws away
   in-flight work). Snooze is hidden on Running rows.
 - **Dispositions walk the view.** Every disposition moves the selector to the row under
   (else above) the disposed one. When the disposed session lived in the window you're
   viewing, the display also switches to the next session's window, focused in its
-  sidebar, before the old window dies. Un-archive never walks.
+  sidebar, before the old window dies.
 - **Preview, not peek** ([ADR 35](adr/0035-enter-never-refiles-a-parked-or-recent-row.md)).
   Enter or a double-click on a pane-less Parked/Recent row opens the read-only
   [preview popup](preview.md); `J`/`K` there flip through the Parked and Recent rows and
@@ -120,7 +122,11 @@ no hide marker does.
 query line on top, a cursor list, hints at the bottom. Letters are query text, so the
 list moves with `^j`/`^k` or ↑/↓; `^u` clears, `^w` deletes a word, Esc (or
 focus loss) returns to the inbox. A click selects, a click on the selected row opens.
-Enter arrives as CR in the raw-mode stub, so LF is free to be `^j` (`input.ts`).
+Enter arrives as CR in the raw-mode stub, so LF is free to be `^j` (`input.ts`). In new
+session, Ctrl+Shift+J/K skips worktrees to the next / previous repo (`jumpRepo`). Legacy
+bytes can't tell it from `^j`/`^k`, so it needs tmux `extended-keys on` (claude0's
+`tmux.conf`), the sidebar's modifyOtherKeys request, and an outer terminal that sends the
+key as an extended sequence (CSI u); without that, it is a plain `^j`/`^k` move.
 
 - **Search** (`/`) covers every session Claude retains, live ones included; an empty query
   lists them newest first. Words match the name, summary, first prompt, branch and repo,

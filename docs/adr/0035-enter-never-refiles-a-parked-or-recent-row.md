@@ -1,7 +1,7 @@
 # 35. Enter never re-files a parked or recent row; peek is removed
 
 Date: 2026-11-05
-Status: accepted; amended 2026-11-05 — search's Enter previews, the preview's Enter opens
+Status: accepted; amended 2026-11-05 — search's Enter previews, the preview's Enter opens; amended 2026-11-06 — sidebar `e` on Recent reopens like `b`, landing in the new window's sidebar
 
 ## Context
 
@@ -30,7 +30,7 @@ You row to archive again by hand. It would also wipe a snooze's wake time on a s
   The result row shows the state, and a flash names what was cleared, for example "unparked,
   was snoozed until Fri".
 - **Every path back in clears inbox state explicitly:**
-  - sidebar `b` (unpark) and `e` (restore; it spawns nothing);
+  - sidebar `b` (unpark) and `e` (restore), both then resuming the session into a new window;
   - the preview's Enter, once its window has spawned;
   - portkey's Restore, once `restoreSession` succeeds.
   Clearing only after a successful spawn means a failed open keeps the snooze or block. None of

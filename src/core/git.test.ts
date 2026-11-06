@@ -60,3 +60,17 @@ describe("discoverRepos root entries", () => {
     }
   });
 });
+
+describe("discoverRepos session entries", () => {
+  test("a session in a worktree lists under its base repo, not as a repo of its own", async () => {
+    await initRepo();
+    const wt = `${dir}/.claude/worktrees/tf-1`;
+    await git("worktree", "add", wt, "-b", "tf-1");
+    const repos = await discoverRepos([{ name: "tf-1", path: wt }], [], []);
+    const name = dir.split("/").pop()!;
+    expect(repos.map((r) => [r.path, r.name, !!r.isWorktree])).toEqual([
+      [dir, name, false],
+      [wt, name, true],
+    ]);
+  });
+});

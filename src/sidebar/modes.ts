@@ -56,6 +56,19 @@ export function filterRepos(repos: RepoRow[], query: string): RepoRow[] {
   return out;
 }
 
+/**
+ * ^J/^K skipping worktrees (the inbox's J/K section jump): down to the next
+ * repo's base row; up to this repo's base, or the previous repo's from a base.
+ */
+export function jumpRepo(rows: RepoRow[], cursor: number, dir: 1 | -1): number {
+  if (dir === 1) {
+    const next = rows.findIndex((r, i) => i > cursor && !r.worktree);
+    return next === -1 ? cursor : next;
+  }
+  const bases = rows.flatMap((r, i) => (!r.worktree && i < cursor ? [i] : []));
+  return bases.at(-1) ?? cursor;
+}
+
 /** Show the END of an over-long query — that's where the typing happens. */
 function tail(s: string, width: number): string {
   let out = s;

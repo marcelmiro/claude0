@@ -40,6 +40,19 @@ describe("parseInput", () => {
     expect(parseInput("\x1b[1;5A")).toEqual([{ type: "key", name: "up" }]);
   });
 
+  test("ctrl+shift+j/k decode from both extended-key formats; other extended keys drop", () => {
+    const J = [{ type: "key" as const, name: "j", ctrl: true, shift: true }];
+    const K = [{ type: "key" as const, name: "k", ctrl: true, shift: true }];
+    expect(parseInput("\x1b[74;6u")).toEqual(J); // tmux 3.4, verified with send-keys C-S-j
+    expect(parseInput("\x1b[75;6u")).toEqual(K);
+    expect(parseInput("\x1b[106;6u")).toEqual(J);
+    expect(parseInput("\x1b[27;6;74~")).toEqual(J);
+    expect(parseInput("\x1b[27;6;107~")).toEqual(K);
+    expect(parseInput("\x1b[106;5u")).toEqual([]); // ctrl only: never a bare j
+    expect(parseInput("\x1b[13;2u")).toEqual([]);
+    expect(parseInput("\x1b[71;6u")).toEqual([]);
+  });
+
   test("SGR mouse: button-0 press = click, release ignored, wheel decodes", () => {
     expect(parseInput("\x1b[<0;12;5M")).toEqual([{ type: "click", x: 12, y: 5 }]);
     expect(parseInput("\x1b[<0;12;5m")).toEqual([]);

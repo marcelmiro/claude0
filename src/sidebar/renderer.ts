@@ -30,7 +30,7 @@ import { USER_SHELL } from "../core/launch-command";
 import { discoverRepos } from "../core/git";
 import { parseInput, type InputEvent } from "./input";
 import { renderView, SNOOZE_UNITS, type ViewState, type VisibleRow } from "./rows";
-import { filterRepos, type Mode } from "./modes";
+import { filterRepos, jumpRepo, type Mode } from "./modes";
 import type { SearchHit, SearchRequest, SearchResponse } from "./search-worker";
 import { C, fmtWakeAbs } from "./ansi";
 import { popupGeometry, previewPath, type PreviewFile } from "../preview/viewer";
@@ -290,8 +290,9 @@ export function runSidebarRenderer(): void {
       // (a stock-style DoubleClick1Pane binding drops a non-alternate pane
       // into copy-mode instead of forwarding the press — the second click
       // of a double-click would never reach us); then hide cursor, SGR
-      // mouse + focus reporting (arrive back via the relay)
-      out += "\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h\x1b[?1004h\x1b[2J";
+      // mouse + focus reporting (arrive back via the relay), and
+      // modifyOtherKeys 1 so tmux sends Ctrl+Shift+J/K as extended keys (input.ts)
+      out += "\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h\x1b[?1004h\x1b[>4;1m\x1b[2J";
     }
     for (let i = 0; i < view.rows.length; i++) {
       if (!full && win.lastRows[i] === view.rows[i]) continue;
@@ -597,12 +598,13 @@ export function runSidebarRenderer(): void {
   // First Enter on a pane-less row spawns its window and lands in its claude
   // pane; a second Enter — before discovery has stamped the new pane onto the
   // row — commits into the spawned window's work pane instead of
-  // double-spawning.
+  // double-spawning. `toSidebar` lands in the window's sidebar instead (b / e).
   async function resumeOrRevisit(
     win: WinState,
     id: string,
     repoPath: string | undefined,
     onSpawned?: () => string | null,
+    toSidebar = false,
   ): Promise<void> {
     const prior = resumedWindows.get(id);
     if (prior) {
@@ -610,7 +612,9 @@ export function runSidebarRenderer(): void {
       if (work) {
         try {
           await Bun.$`tmux select-window -t ${prior}`.quiet();
-          await Bun.$`tmux select-pane -t ${work}`.quiet();
+          const target = wins.get(prior);
+          if (toSidebar && target?.stubPane) await landInSidebar(win, target, id);
+          else await Bun.$`tmux select-pane -t ${work}`.quiet();
           return;
         } catch {}
       }
@@ -638,9 +642,12 @@ export function runSidebarRenderer(): void {
       const target = wins.get(spawned);
       if (target?.stubPane) {
         // selection set explicitly — seedSelection can't find it, `real` lags discovery
-        target.selectedId = id;
         if (cleared) showFlash(target, cleared);
-        paint(target);
+        if (toSidebar) await landInSidebar(win, target, id);
+        else {
+          target.selectedId = id;
+          paint(target);
+        }
       }
     } catch {}
   }
@@ -672,6 +679,14 @@ export function runSidebarRenderer(): void {
       showFlash(win, "resume failed");
       return null;
     }
+  }
+
+  // b on Parked / e on Recent, once the state is cleared: show the session's
+  // window with its sidebar focused on the row. The pane is usually dead
+  // (dispositions and archive kill it), so it resumes first.
+  async function reopenInSidebar(win: WinState, s: InboxSession, flash: string): Promise<void> {
+    if (s.real) await switchTo(win, s);
+    else await resumeOrRevisit(win, s.id, s.repoPath, () => flash, true);
   }
 
   // The preview's Enter opens whatever the state (ADR 35):
@@ -817,6 +832,10 @@ export function runSidebarRenderer(): void {
         exitMode(win);
         await startClaude(win, r.path);
       }
+    } else if (!search && ev.ctrl && ev.shift && (ev.name === "j" || ev.name === "k")) {
+      const cursor = Math.max(0, Math.min(win.modeCursor, count - 1));
+      win.modeCursor = jumpRepo(filterRepos(win.repos, win.query), cursor, ev.name === "j" ? 1 : -1);
+      paint(win);
     } else if (ev.name === "up" || (ev.ctrl && ev.name === "k")) {
       win.modeCursor = Math.max(0, win.modeCursor - 1);
       paint(win);
@@ -1097,7 +1116,7 @@ export function runSidebarRenderer(): void {
           const was = applyVerb(() => store.clearDisposition(row.id, Date.now(), "manual") !== null);
           if (was && s) {
             showFlash(win, "unparked — reopening");
-            await switchTo(win, s); // dead pane (dispositions kill) → resumes
+            await reopenInSidebar(win, s, "unparked");
           } else showFlash(win, "gone — nothing to unpark");
           paintAll();
           break;
@@ -1109,12 +1128,16 @@ export function runSidebarRenderer(): void {
       }
       case "e": {
         if (!row) break;
-        // RECENT: e toggles — undo done, back to Needs you
+        // RECENT: e toggles — undo done, back to Needs you, reopened
         if (row.section === "done") {
+          const s = findSession(row.id);
           const prev = win.selectedId;
           win.selectedId = nextSelectionAfterVerb(win, row.id);
           const ok = applyVerb(() => store.unarchive(row.id, Date.now()));
-          if (ok) showFlash(win, "restored — needs you");
+          if (ok && s) {
+            showFlash(win, "restored — reopening");
+            await reopenInSidebar(win, s, "restored");
+          } else if (ok) showFlash(win, "restored — needs you");
           else {
             win.selectedId = prev;
             showFlash(win, "gone — nothing to restore");
