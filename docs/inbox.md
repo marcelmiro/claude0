@@ -47,7 +47,9 @@ tmux calls follow CLAUDE.md's "tmux, from a tty-less process" gotchas.
 
 | Concern | Where |
 |---|---|
-| Discovery is a fresh child per 3s tick (an in-process loop leaked memory JSC never returned) | `core/inbox-discovery.ts` header, `claude0 daemon --discover-once` |
+| Discovery is a fresh child per pass (an in-process loop leaked memory JSC never returned) | `core/inbox-discovery.ts` header, `claude0 daemon --discover-once` |
+| A pass starts ~100ms after Claude rewrites a status file (`~/.claude/sessions/*.json`, watched), else 3s after the last one; passes start ≥500ms apart | `daemon` (`src/cli.ts`), `wakeLatch` (`core/wake-latch.ts`) |
+| The snapshot is saved before the PR refresh (`gh`, up to ~1s), and again after it | `discoveryTick` (`core/inbox-discovery.ts`) |
 | Due snooze → detached `claude -r` in a `⚡` window, claimed atomically so no double-spawn | `wakePass` (`core/inbox-wake.ts`), `markAutoResumed` (`core/inbox-store.ts`) |
 | The wake's ⚡ waits for status `ready` (the boot spinner reads as running) | `stampWakeAttention` (`core/inbox-wake.ts`) |
 | Wake alert: push to the device that set the snooze; Mac-set → banner on darwin, broadcast push elsewhere | `core/inbox-wake.ts` |
@@ -66,7 +68,9 @@ pending snooze wakes on the new host; the snapshot rebuilds on the first tick
 One renderer process inside the daemon writes ANSI to every sidebar pane's tty; the panes
 run shell-line stubs (`STUB_CMD`, ~1 MB each, versus ~30 MB for a bun process). The
 renderer's 1s tick stands sidebars up while `claude0 setup`'s autostart marker exists and
-no hide marker does.
+no hide marker does. A commit to `inbox.db` runs the tick early: a 150ms `data_version`
+poll wakes it rather than painting on its own, because only the tick re-reads topology
+before painting (a killed window's tty can be reused by a new pane at once).
 
 | Concern | Where (`src/sidebar/renderer.ts`) |
 |---|---|
@@ -198,7 +202,7 @@ key as an extended sequence (CSI u); without that, it is a plain `^j`/`^k` move.
   being pane-less per the bridge's own discovery (`/archive`, `bridge/server.ts`).
 - Recently done keeps its 24h window; the History screen is the windowless archive.
 
-### Freshness around the 3s snapshot
+### Freshness around the snapshot
 
 | Concern | Where |
 |---|---|

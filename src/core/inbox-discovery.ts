@@ -149,43 +149,6 @@ export async function discoveryTick(store: InboxStore): Promise<void> {
   );
   for (const r of byId.values()) r.name = dn.get(r.id) || r.name;
 
-  // PR numbers: `gh` per repo is slow (~0.5s), so refresh at most 5 stale rows
-  // per tick (oldest first, 60s TTL) — the store is the cache, since each
-  // tick is a fresh process. A "none" result is cached too (no re-hammering).
-  // A pane sitting in the base checkout is keyed on the checkout the session
-  // last EDITED in: a worktree created without cd'ing into it is invisible to
-  // cwd. A pane already inside a worktree is explicit intent and wins as-is.
-  // With that worktree gone (landed and cleaned up), the session's own PR (see
-  // workPullRequest) stands in — merged is the "clear me" cue, so it must outlive cleanup.
-  const pathsById = new Map(
-    sessions.filter((s) => byId.has(s.id)).map((s) => [s.id, { pane: s.repoPath, base: s.baseRepoPath }]),
-  );
-  const slugByBase = new Map<string, string>();
-  for (const { base } of pathsById.values()) if (!slugByBase.has(base)) slugByBase.set(base, await repoSlug(base));
-  const prStale = [...pathsById.keys()]
-    .filter((id) => now - (byId.get(id)!.pr?.fetchedAt ?? 0) > 60_000)
-    .sort((a, b) => (byId.get(a)!.pr?.fetchedAt ?? 0) - (byId.get(b)!.pr?.fetchedAt ?? 0))
-    .slice(0, 5);
-  await Promise.all(
-    prStale.map(async (id) => {
-      try {
-        const row = byId.get(id)!;
-        const { pane, base } = pathsById.get(id)!;
-        let pr;
-        if (pane === base) {
-          row.workScan = (await scanEditDir(id, { base, slug: slugByBase.get(base)! }, row.workScan)) ?? undefined;
-          pr = await workPullRequest(row.workScan, pane);
-        } else pr = await branchPullRequest(pane);
-        row.pr = {
-          number: "number" in pr ? pr.number : undefined,
-          state: pr.state,
-          branch: "branch" in pr ? pr.branch : undefined,
-          fetchedAt: now,
-        };
-      } catch {}
-    }),
-  );
-
   // a transient discovery hiccup (tmux/ps failing mid-call) yields zero rows;
   // writing that would wipe the activity snapshot — skip the tick instead
   // (the authored overlay is safe in its own tables regardless)
@@ -225,10 +188,52 @@ export async function discoveryTick(store: InboxStore): Promise<void> {
     }
   }
 
-  store.saveSnapshot(
-    rows.map((r) => ({ sessionId: r.id, data: JSON.stringify(stripOverlay(r)) })),
-    now,
+  // Saved before the PR refresh below, so its `gh` calls (up to ~1s) never hold
+  // back the status change this pass observed; refreshed rows save again after.
+  const save = () =>
+    store.saveSnapshot(
+      rows.map((r) => ({ sessionId: r.id, data: JSON.stringify(stripOverlay(r)) })),
+      now,
+    );
+  save();
+
+  // PR numbers: `gh` per repo is slow (~0.5s), so refresh at most 5 stale rows
+  // per tick (oldest first, 60s TTL) — the store is the cache, since each
+  // tick is a fresh process. A "none" result is cached too (no re-hammering).
+  // A pane sitting in the base checkout is keyed on the checkout the session
+  // last EDITED in: a worktree created without cd'ing into it is invisible to
+  // cwd. A pane already inside a worktree is explicit intent and wins as-is.
+  // With that worktree gone (landed and cleaned up), the session's own PR (see
+  // workPullRequest) stands in — merged is the "clear me" cue, so it must outlive cleanup.
+  const pathsById = new Map(
+    sessions.filter((s) => byId.has(s.id)).map((s) => [s.id, { pane: s.repoPath, base: s.baseRepoPath }]),
   );
+  const slugByBase = new Map<string, string>();
+  for (const { base } of pathsById.values()) if (!slugByBase.has(base)) slugByBase.set(base, await repoSlug(base));
+  const prStale = [...pathsById.keys()]
+    .filter((id) => now - (byId.get(id)!.pr?.fetchedAt ?? 0) > 60_000)
+    .sort((a, b) => (byId.get(a)!.pr?.fetchedAt ?? 0) - (byId.get(b)!.pr?.fetchedAt ?? 0))
+    .slice(0, 5);
+  await Promise.all(
+    prStale.map(async (id) => {
+      try {
+        const row = byId.get(id)!;
+        const { pane, base } = pathsById.get(id)!;
+        let pr;
+        if (pane === base) {
+          row.workScan = (await scanEditDir(id, { base, slug: slugByBase.get(base)! }, row.workScan)) ?? undefined;
+          pr = await workPullRequest(row.workScan, pane);
+        } else pr = await branchPullRequest(pane);
+        row.pr = {
+          number: "number" in pr ? pr.number : undefined,
+          state: pr.state,
+          branch: "branch" in pr ? pr.branch : undefined,
+          fetchedAt: now,
+        };
+      } catch {}
+    }),
+  );
+  if (prStale.length) save();
 }
 
 

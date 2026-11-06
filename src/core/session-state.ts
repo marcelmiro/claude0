@@ -27,7 +27,8 @@ import { Glob } from "bun";
 import type { SessionStatus } from "./status";
 import { questionHeld } from "./approval";
 
-const DEFAULT_DIR = `${homedir()}/.claude/sessions`;
+/** Where Claude writes `<pid>.json` status records — the daemon also watches it to wake discovery. */
+export const NATIVE_STATUS_DIR = `${homedir()}/.claude/sessions`;
 
 // Claude's `status` → Claude0's SessionStatus. Anything else → skip (null).
 function mapStatus(status: unknown): SessionStatus | null {
@@ -80,7 +81,7 @@ async function scanRecords(dir: string): Promise<Record<string, unknown>[]> {
  * duplicate sessionId, newest `updatedAt` wins. Pure on `dir` for tests.
  */
 export async function loadNativeStatuses(
-  dir: string = DEFAULT_DIR,
+  dir: string = NATIVE_STATUS_DIR,
 ): Promise<Map<string, SessionStatus>> {
   const result = new Map<string, SessionStatus>();
   const updatedAtBySession = new Map<string, number>();
@@ -117,7 +118,7 @@ export async function loadNativeStatuses(
  * pending entries are orphans that no notification will ever retire.
  */
 export async function parkedJobSessions(
-  dir: string = DEFAULT_DIR,
+  dir: string = NATIVE_STATUS_DIR,
 ): Promise<Map<string, string>> {
   const records = await scanRecords(dir);
   const jobSessions = new Map<string, string>();
@@ -152,7 +153,7 @@ export async function parkedJobSessions(
  */
 export async function nativeSessionIdByPid(
   pid: number,
-  dir: string = DEFAULT_DIR,
+  dir: string = NATIVE_STATUS_DIR,
 ): Promise<string | null> {
   try {
     const parsed = JSON.parse(await Bun.file(`${dir}/${pid}.json`).text());

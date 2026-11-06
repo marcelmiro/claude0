@@ -14,7 +14,8 @@
  * focus + SGR mouse through the same relay; a respawned pane gets a NEW tty
  * (EPERM/ENOENT on the old one ⇒ re-resolve and repaint).
  *
- * Self-installs its tmux wiring and repaints per-line on its own 1s loop.
+ * Self-installs its tmux wiring and repaints per-line on its own 1s loop, run
+ * early within ~150ms of any inbox.db commit.
  * Stands down while `M-S` hides sidebars or autostart is off.
  */
 import { openSync, writeSync, closeSync, mkdirSync, statSync, writeFileSync } from "node:fs";
@@ -34,6 +35,7 @@ import { filterRepos, jumpRepo, type Mode } from "./modes";
 import type { SearchHit, SearchRequest, SearchResponse } from "./search-worker";
 import { C, fmtWakeAbs } from "./ansi";
 import { popupGeometry, previewPath, type PreviewFile } from "../preview/viewer";
+import { wakeLatch } from "../core/wake-latch";
 
 const SHELL_RE = new RegExp(`^(${SHELL_NAMES.join("|")})$`);
 
@@ -1695,6 +1697,7 @@ export function runSidebarRenderer(): void {
   reloadSessions();
   let tickCount = 0;
   let phase = "idle"; // what the tick was doing — named by the watchdog on a hang
+  const tickWake = wakeLatch();
 
   async function tick(): Promise<void> {
     tickCount++;
@@ -1765,6 +1768,7 @@ export function runSidebarRenderer(): void {
   // every tick; a hang logs the phase it died in and the loop keeps going.
   (async () => {
     while (true) {
+      tickWake.clear(); // a commit from here on needs another tick
       try {
         await Promise.race([
           tick(),
@@ -1775,7 +1779,25 @@ export function runSidebarRenderer(): void {
       } catch (e) {
         console.error("[sidebar] tick failed:", e);
       }
-      await Bun.sleep(1000);
+      await tickWake.wait(1000);
+    }
+  })();
+
+  // Wake the tick within ~150ms of another connection's inbox.db commit (a discovery
+  // pass, a phone verb). Wake, never paint here: only the tick re-reads topology, and
+  // a killed window's tty may already belong to a new pane. Once per version, so a
+  // tick that fails before its reload (tmux down) falls back to 1s instead of spinning.
+  let wokeFor = -1;
+  (async () => {
+    while (true) {
+      await Bun.sleep(150);
+      try {
+        const dv = store.dataVersion();
+        if (standing && dv !== lastDataVersion && dv !== wokeFor) {
+          wokeFor = dv;
+          tickWake.wake();
+        }
+      } catch {}
     }
   })();
 }

@@ -31,7 +31,7 @@ import { pickRepoPath } from "./core/sessions";
 import { resolveTranscriptPath, latestTranscriptCwd } from "./core/last-turn";
 import { shellQuote } from "./core/launch-command";
 import { PENDING_DIR, DECISIONS_DIR, HOLD_WINDOW_MS, QUESTION_HOLD_MS, HOOK_KILL_GRACE_MS } from "./core/approval";
-import { mkdirSync, writeFileSync, readFileSync, readlinkSync, rmSync, symlinkSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, readlinkSync, rmSync, symlinkSync, existsSync, watch } from "node:fs";
 
 const home = homedir();
 
@@ -1890,10 +1890,37 @@ export async function daemon(): Promise<void> {
   }
   runSidebarRenderer();
 
-  let tick = 0;
+  // Discovery runs as soon as Claude rewrites a session's status file
+  // (`~/.claude/sessions/<pid>.json`, the primary status source — see
+  // core/session-state.ts), with the 3s sleep as the fallback for every other
+  // input. The debounce lets Claude's multi-event write settle; MIN_PASS_GAP_MS
+  // bounds the pass rate when status files churn.
+  const { wakeLatch } = await import("./core/wake-latch");
+  const { NATIVE_STATUS_DIR } = await import("./core/session-state");
+  const MIN_PASS_GAP_MS = 500;
+  const wakeup = wakeLatch();
+  try {
+    let debounce: ReturnType<typeof setTimeout> | null = null;
+    const watcher = watch(NATIVE_STATUS_DIR, (_event, filename) => {
+      if (!filename?.endsWith(".json")) return;
+      if (debounce) clearTimeout(debounce);
+      debounce = setTimeout(() => wakeup.wake(), 100);
+    });
+    watcher.on("error", (e) => {
+      console.error(`[daemon] status watch failed, polling only: ${e instanceof Error ? e.message : e}`);
+      watcher.close();
+    });
+  } catch (e) {
+    console.error(`[daemon] can't watch ${NATIVE_STATUS_DIR}, polling only: ${e instanceof Error ? e.message : e}`);
+  }
+
+  let lastWakePass = 0;
+  let lastIndex = 0;
   let lastResurrectSave = Date.now();
   let indexing = false;
   while (true) {
+    wakeup.clear(); // a status change from here on needs another pass
+    const passStart = Date.now();
     try {
       const child = Bun.spawn(
         [process.execPath, process.argv[1]!, "daemon", "--discover-once"],
@@ -1906,7 +1933,8 @@ export async function daemon(): Promise<void> {
     } catch {}
     // Not awaited: the first build takes ~25s and must not hold discovery behind it.
     // A killed pass loses only its open batch — the next one resumes from the offsets.
-    if (tick % 10 === 0 && !indexing) {
+    if (Date.now() - lastIndex >= 30_000 && !indexing) {
+      lastIndex = Date.now();
       try {
         const child = Bun.spawn([process.execPath, process.argv[1]!, "daemon", "--index-once"], {
           stdin: "ignore",
@@ -1921,7 +1949,8 @@ export async function daemon(): Promise<void> {
         });
       } catch {}
     }
-    if (tick % 5 === 0) {
+    if (Date.now() - lastWakePass >= 15_000) {
+      lastWakePass = Date.now();
       try {
         const store = new InboxStore();
         try {
@@ -1942,8 +1971,8 @@ export async function daemon(): Promise<void> {
       // not stall discovery and wake passes behind it
       void periodicResurrectSave();
     }
-    tick++;
-    await Bun.sleep(3_000);
+    await wakeup.wait(3_000);
+    await Bun.sleep(Math.max(0, passStart + MIN_PASS_GAP_MS - Date.now()));
   }
 }
 
