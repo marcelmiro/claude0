@@ -1,7 +1,7 @@
 # 26. Background work is one visibility-only surface
 
 Date: 2026-08-24 (records decisions made when the feature shipped, 2026-07-21 → 27)
-Status: accepted; amended 2026-10-24 (a script Claude waits on holds inbox placement)
+Status: accepted; amended 2026-10-24 (a script Claude waits on holds inbox placement), 2026-11-06 (the hold lasts 12h, not 2h)
 
 How detection, the runner-liveness probe, the caches and the phone sheet work:
 [docs/background-work.md](../background-work.md).
@@ -37,8 +37,11 @@ forever. Real data had a 3-day-old wait on a live pane.
   deploy, a review) doesn't need the user until it finishes, so the wait holds it in
   Running. A script that is a service (a dev server, a tunnel — judged by its label and
   command) never holds it: an endless server would hide a session that is asking
-  something. Because that judgement can miss, a wait holds for at most 2h. The
-  notifications and ⚡ above still fire at turn end either way.
+  something. Because that judgement can miss, a wait holds for at most 12h: long enough
+  for multi-hour rollouts and backfills (2h released 1.6% of real waits while they still
+  ran), short enough that a missed service or a hung wait surfaces the same day. The
+  notifications and ⚡ above still fire at turn end either way, so a long hold only costs
+  placement.
 - **A pending task counts only once the harness confirms it and a live runner backs it.**
   A Bash or Agent launch counts only when its `tool_result` confirms a task was created:
   without that, no notification will ever come (it was denied, or ran synchronously). Every pending task is then checked against reality: the

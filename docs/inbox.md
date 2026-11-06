@@ -28,7 +28,7 @@ docblocks carry the implementation detail. Decisions:
   review). When every live script is a service it merely started (a dev server, a tunnel,
   judged by label and command: `isServiceScript`), the session files under Needs You with
   `⏳`: an endless server must not hide a session that is asking you something. A wait
-  holds Running for at most 2h (`SCRIPT_WAIT_CAP_MS`, `core/inbox-discovery.ts`), which
+  holds Running for at most 12h (`SCRIPT_WAIT_CAP_MS`, `core/inbox-discovery.ts`), which
   catches a service the check misses; the released row ages from when the wait began.
 - **`/clear`** hands a pane to a new session id; the daemon tick archives the old one into
   Recent (`replacedInPane`, `core/inbox-discovery.ts`). A pane that is simply killed is

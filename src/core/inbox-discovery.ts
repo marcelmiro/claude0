@@ -23,9 +23,9 @@ import type { InboxStore } from "./inbox-store";
 import { stripOverlay, type InboxSession } from "./inbox-model";
 
 // A wait that outlives this is almost surely a service `isServiceScript` missed, or a
-// hung wait — either way the session should surface. 99% of completed background
-// scripts finish within ~2.3h.
-const SCRIPT_WAIT_CAP_MS = 2 * 60 * 60 * 1000;
+// hung wait — either way the session should surface. 99.86% of background scripts that
+// finished on their own did so within 12h of launch; 1.6% ran past 2h (rollouts, backfills).
+const SCRIPT_WAIT_CAP_MS = 12 * 60 * 60 * 1000;
 
 export async function discoveryTick(store: InboxStore): Promise<void> {
   const nameCache = await loadNameCache(); // AI names, same source as the TUI
