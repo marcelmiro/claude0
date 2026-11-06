@@ -364,6 +364,7 @@ test("isServiceScript: servers and tunnels are services, by label", () => {
     "Open the Maestro RDS tunnel in the background",
     "Run local production server on :3002 (background)",
     "Start embedded Postgres 18 on port 5439",
+    "Restart embedded Postgres for the test re-run",
   ]) expect(isServiceScript(label, "")).toBe(true);
 });
 
@@ -374,7 +375,26 @@ test("isServiceScript: a port-binding, tunnel or dev-server command is a service
     "aws ssm start-session --target i-0abc --document-name AWS-StartPortForwardingSession",
     "ssh -N -L 5432:db.internal:5432 bastion",
     "bunx vite --host",
+    "bun run convex:dev",
+    "ngrok http 3000",
+    'S=/tmp/lab; CLAUDE0_BRIDGE_HOST=127.0.0.3 CLAUDE0_BRIDGE_PORT=8482 exec bun run bin/claude0.ts bridge > $S/labbridge.log 2>&1',
   ]) expect(isServiceScript("Restart fixtures bridge for the prototype", command)).toBe(true);
+});
+
+test("isServiceScript: a client's port flag, an org named like a tool, or a hyphenated noun is not a service", () => {
+  expect(isServiceScript(
+    "Create tf738_parity DB and restore local schema",
+    "createdb -h 127.0.0.1 -p 54322 -U postgres tf738_parity; pg_dump -s -n public \"$L/postgres\" > $S/schema.sql",
+  )).toBe(false);
+  expect(isServiceScript(
+    "Push the Evos, Ngrok Core and Minitap lists with their wide country filters",
+    "awk -F'\\t' '$1 ~ /^(evos-7ed6|ngrok-61ef|minitap-e3b4)$/' all_apollo_lists.tsv > three_lists.tsv",
+  )).toBe(false);
+  expect(isServiceScript("Verify server-ledger fix on device", 'bash "$S/diagnose-insession.sh" 2>&1')).toBe(false);
+  expect(isServiceScript(
+    "Run a marker command through the live route",
+    "T=$(systemctl --user show -p EnvironmentFiles --value claude0-bridge | cut -d' ' -f1)",
+  )).toBe(false);
 });
 
 test("isServiceScript: waits stay waits, even when they name a service", () => {

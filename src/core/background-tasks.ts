@@ -235,8 +235,8 @@ export function pendingScripts(tasks: BackgroundTask[]): BackgroundTask[] {
 // on. The label (the model-written description) names it, or the command binds a port,
 // opens a tunnel or runs a dev server. A label that opens with a wait verb is a wait
 // even when it names a service ("Wait for the preview deploy").
-const SERVICE_NOUN = /\b(dev server|server|serve|tunnel|port[- ]forward|ssm|vite|next dev|localhost|ngrok|proxy|preview)\b|\bon port \d+/i;
-const SERVICE_COMMAND = /\b[A-Z_]*PORT=\d+|--port[ =]\d+|\s-p \d{2,5}\b|\bssm start-session\b|-L \d+:|\b(vite|next dev|serve)\b|\brun dev\b|\bbridge\s*$/;
+const SERVICE_NOUN = /\b(dev server|server(?!-)|serve|tunnel|port[- ]forward|ssm|vite|next dev|localhost|proxy|preview|embedded postgres)\b|\bon port \d+/i;
+const SERVICE_COMMAND = /\b[A-Z_]*PORT=\d+|--port[ =]\d+|\bssm start-session\b|-L \d+:|\b(vite|next dev|serve)\b|\bngrok (http|tcp|tls|start)\b|\brun dev\b|\bconvex[: ]dev\b|(?:^|\s)bridge\s*(?:$|[;&|>])/;
 const WAIT_VERB = /^\s*(background[- ])?(wait|poll|watch|monitor)\b/i;
 
 /**
