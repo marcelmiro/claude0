@@ -1,7 +1,7 @@
 # 26. Background work is one visibility-only surface
 
 Date: 2026-08-24 (records decisions made when the feature shipped, 2026-07-21 → 27)
-Status: accepted; amended 2026-10-24 (a script Claude waits on holds inbox placement), 2026-11-06 (the hold lasts 12h, not 2h)
+Status: accepted; amended 2026-10-24 (a script Claude waits on holds inbox placement), 2026-11-06 (the hold lasts 12h, not 2h), 2026-11-08 (a Monitor is a script, live until its deadline)
 
 How detection, the runner-liveness probe, the caches and the phone sheet work:
 [docs/background-work.md](../background-work.md).
@@ -46,7 +46,12 @@ forever. Real data had a 3-day-old wait on a live pane.
   A Bash or Agent launch counts only when its `tool_result` confirms a task was created:
   without that, no notification will ever come (it was denied, or ran synchronously). Every pending task is then checked against reality: the
   runner holds an open fd on its output file for its whole life, so one `lsof` per probe
-  round separates a live wait from an orphan.
+  round separates a live wait from an orphan. The exception is a `Monitor`: it streams to
+  the harness over a socket and its output file appears only with its first event, so no
+  fd marks it alive. Its launch record carries its `timeoutMs` (capped at 30m), and it
+  counts as live until then or until its end record (a `<status>` notice, an expiry event,
+  a `TaskStop`), so a missed end record costs at most 30m. Work a Monitor watches but the
+  harness didn't launch (`setsid -f`) is visible only through that Monitor.
 - **Liveness verdicts are one file per task.** The monitor, daemon and bridge probe
   overlapping task sets at the same time. A shared file loses a writer's slice, and with
   it a terminal dead verdict.

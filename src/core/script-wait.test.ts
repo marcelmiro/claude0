@@ -64,6 +64,12 @@ test("unprobeable task (no outputPath) stays visible", () => {
   expect(keys(entry([{ key: "t1" }]), new Map())).toEqual(["t1"]);
 });
 
+test("a Monitor (deadline, no outputPath) is live only before its deadline", () => {
+  const e = entry([{ key: "m1", deadline: 1000 }]);
+  expect(liveTasks(e, new Map(), 999).map((t) => t.key)).toEqual(["m1"]);
+  expect(liveTasks(e, new Map(), 1000)).toEqual([]);
+});
+
 test("one live among dead is enough", () => {
   const e = entry([
     { key: "dead", outputPath: "/tmp/dead.output" },

@@ -17,7 +17,7 @@
  * last-write-wins: it is a pure memo of the transcript, so the worst a lost entry can
  * do is force one re-read that reproduces exactly the same answer.
  */
-import { parseBackgroundTasksFile, pendingScripts, taskKey } from "./background-tasks";
+import { parseBackgroundTasksFile, pendingScripts, taskKey, taskLive } from "./background-tasks";
 import { resolveVerdicts, runnersAlive, type ProbeTarget, type RunnerProbe } from "./runner-verdicts";
 import { resolveTranscriptPath } from "./last-turn";
 import { parkedJobSessions } from "./session-state";
@@ -37,7 +37,7 @@ export interface ScriptWaitEntry {
   size: number;
   mtimeMs: number;
   /** Pending scripts per the transcript: identity, probe target, and whether it's a service (`isServiceScript`). */
-  pending: Array<{ key: string; outputPath?: string; service?: boolean }>;
+  pending: Array<{ key: string; outputPath?: string; service?: boolean; deadline?: number }>;
   /** Last time a caller looked this session up — drives age-based pruning. */
   seenAt: number;
 }
@@ -64,12 +64,15 @@ function probeTargets(entries: ScriptWaitEntry[]): ProbeTarget[] {
 }
 
 /**
- * An entry's pending scripts that are still running, given already-resolved verdicts.
- * A task without an outputPath can't be probed and counts as live (same posture as
- * `liveScripts`).
+ * An entry's pending scripts that are still running, given already-resolved verdicts
+ * (`taskLive`).
  */
-export function liveTasks(entry: ScriptWaitEntry, verdicts: Map<string, boolean>): ScriptWaitEntry["pending"] {
-  return entry.pending.filter((t) => !t.outputPath || verdicts.get(t.key) === true);
+export function liveTasks(
+  entry: ScriptWaitEntry,
+  verdicts: Map<string, boolean>,
+  now = Date.now(),
+): ScriptWaitEntry["pending"] {
+  return entry.pending.filter((t) => taskLive(t, verdicts.get(t.key), now));
 }
 
 /** `wait` = the session waits on a live script; `service` = every live script is a service. */
@@ -126,6 +129,7 @@ export async function detectScriptWaits(
             key: taskKey(t),
             outputPath: t.outputPath,
             ...(t.service && { service: true }),
+            ...(t.deadline !== undefined && { deadline: t.deadline }),
           })),
           seenAt: now,
         };
@@ -145,7 +149,7 @@ export async function detectScriptWaits(
   for (const id of sessionIds) {
     const job = jobBySession.get(id);
     const entries = [current.get(id), job ? current.get(job) : undefined];
-    const kind = waitKind(entries.flatMap((e) => (e ? liveTasks(e, verdicts) : [])));
+    const kind = waitKind(entries.flatMap((e) => (e ? liveTasks(e, verdicts, now) : [])));
     if (kind) out.set(id, kind);
   }
 
