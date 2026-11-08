@@ -291,10 +291,9 @@ export function taskKey(task: BackgroundTask): string {
 
 /**
  * `pendingScripts` filtered to tasks whose runner is actually alive — what every
- * rendering surface uses. A Monitor is live until its deadline; any other task
- * without an outputPath can't be probed and stays visible. Note the flip side of
- * trusting the probe: an intentionally-infinite background daemon shows for as long
- * as it truly runs — a true statement.
+ * rendering surface uses (the rule is `taskLive`). Note the flip side of trusting
+ * the probe: an intentionally-infinite background daemon shows for as long as it
+ * truly runs — a true statement.
  *
  * Verdicts come from the shared persisted store, so a task already known to be dead
  * costs no probe here no matter which process asks (see `runner-verdicts.ts`).
@@ -310,7 +309,18 @@ export async function liveScripts(
     now,
     probe,
   );
-  return pending.filter((t) => (t.deadline !== undefined ? now < t.deadline : !t.outputPath || verdicts.get(taskKey(t))));
+  return pending.filter((t) => taskLive(t, verdicts.get(taskKey(t)), now));
+}
+
+/**
+ * The one liveness rule for a pending task, shared by `liveScripts` and `liveTasks`
+ * (`core/script-wait.ts`) so the phone and the ⏳/inbox placement can't disagree: a
+ * Monitor is live until its deadline; any other task by its runner verdict, and one
+ * without an outputPath can't be probed and counts as live.
+ */
+export function taskLive(task: { deadline?: number; outputPath?: string }, verdict: boolean | undefined, now: number): boolean {
+  if (task.deadline !== undefined) return now < task.deadline;
+  return !task.outputPath || verdict === true;
 }
 
 // Per-transcript cache keyed by (size, mtime) — launch and notification are both

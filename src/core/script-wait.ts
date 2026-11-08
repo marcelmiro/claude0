@@ -17,7 +17,7 @@
  * last-write-wins: it is a pure memo of the transcript, so the worst a lost entry can
  * do is force one re-read that reproduces exactly the same answer.
  */
-import { parseBackgroundTasksFile, pendingScripts, taskKey } from "./background-tasks";
+import { parseBackgroundTasksFile, pendingScripts, taskKey, taskLive } from "./background-tasks";
 import { resolveVerdicts, runnersAlive, type ProbeTarget, type RunnerProbe } from "./runner-verdicts";
 import { resolveTranscriptPath } from "./last-turn";
 import { parkedJobSessions } from "./session-state";
@@ -64,18 +64,15 @@ function probeTargets(entries: ScriptWaitEntry[]): ProbeTarget[] {
 }
 
 /**
- * An entry's pending scripts that are still running, given already-resolved verdicts.
- * A Monitor is live until its deadline; any other task without an outputPath can't be
- * probed and counts as live (same posture as `liveScripts`).
+ * An entry's pending scripts that are still running, given already-resolved verdicts
+ * (`taskLive`).
  */
 export function liveTasks(
   entry: ScriptWaitEntry,
   verdicts: Map<string, boolean>,
   now = Date.now(),
 ): ScriptWaitEntry["pending"] {
-  return entry.pending.filter((t) =>
-    t.deadline !== undefined ? now < t.deadline : !t.outputPath || verdicts.get(t.key) === true,
-  );
+  return entry.pending.filter((t) => taskLive(t, verdicts.get(t.key), now));
 }
 
 /** `wait` = the session waits on a live script; `service` = every live script is a service. */
