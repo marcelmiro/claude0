@@ -34,7 +34,8 @@
  *   event ends it. It has no output file to probe while it runs, so its liveness
  *   is its own `timeoutMs` deadline (≤30m) instead of the runner probe.
  * - A successful `TaskStop` result (`{"message":"Successfully stopped task: <id>`)
- *   kills that task: a stopped Monitor gets no notification at all.
+ *   kills that task: a stopped Monitor gets no notification at all. Only a result
+ *   paired with a `TaskStop` tool_use counts, so printed output of that shape can't.
  */
 
 import { resolveVerdicts, runnersAlive, type RunnerProbe } from "./runner-verdicts";
@@ -116,6 +117,8 @@ function taskLineParser(): { feed: (line: string) => void; tasks: () => Backgrou
   const candidates = new Map<string, { name: string; label: string; command: string }>();
   // Foreground Bash calls, in case one times out into the background.
   const foregroundBash = new Map<string, { label: string; command: string }>();
+  // TaskStop calls, so only their own results can kill a task.
+  const stops = new Set<string>();
   // A `!` command's input and output are separate records; the output carries no command.
   let lastBashInput = "";
 
@@ -143,6 +146,7 @@ function taskLineParser(): { feed: (line: string) => void; tasks: () => Backgrou
       !line.includes('"name":"Workflow"') &&
       !line.includes('"name":"Agent"') &&
       !line.includes('"name":"Monitor"') &&
+      !line.includes('"name":"TaskStop"') &&
       !line.includes("Successfully stopped task") &&
       !line.includes('"name":"Bash"') &&
       !line.includes("<bash-input>") &&
@@ -179,6 +183,7 @@ function taskLineParser(): { feed: (line: string) => void; tasks: () => Backgrou
             name === "Monitor" ||
             (name === "Agent" && input["run_in_background"] !== false);
           if (!isCandidate) {
+            if (name === "TaskStop") stops.add(String(block["id"]));
             if (name === "Bash") {
               foregroundBash.set(String(block["id"]), {
                 label: String(input["description"] ?? input["command"] ?? name).slice(0, LABEL_CAP),
@@ -202,7 +207,7 @@ function taskLineParser(): { feed: (line: string) => void; tasks: () => Backgrou
             const fg = foregroundBash.get(toolUseId);
             const timedOut = text.match(TIMEOUT_LAUNCH_RE);
             if (fg && timedOut) launch(toolUseId, "script", fg.label, fg.command, timedOut[1], text, ts);
-            const stopped = byTaskId.get(text.match(TASK_STOP_RE)?.[1] ?? "");
+            const stopped = stops.has(toolUseId) ? byTaskId.get(text.match(TASK_STOP_RE)?.[1] ?? "") : undefined;
             if (stopped) stopped.status = "killed";
             continue;
           }

@@ -111,6 +111,15 @@ describe("Monitor tasks", () => {
     expect(parseBackgroundTasks(jsonl.join("\n"))[0]!.status).toBe("killed");
   });
 
+  test("a foreground command whose output IS a TaskStop result kills nothing", () => {
+    const jsonl = [
+      ...monitorLaunch("toolu_m", "bmon1"),
+      line({ type: "assistant", message: { content: [{ type: "tool_use", id: "toolu_c", name: "Bash", input: { command: "cat /tmp/stop.json" } }] } }),
+      line({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "toolu_c", content: '{"message":"Successfully stopped task: bmon1 (tail -F /tmp/w.log)"}' }] } }),
+    ];
+    expect(parseBackgroundTasks(jsonl.join("\n"))[0]!.status).toBe("pending");
+  });
+
   test("output that merely quotes a TaskStop result kills nothing", () => {
     const jsonl = [
       ...monitorLaunch("toolu_m", "bmon1"),
@@ -493,7 +502,7 @@ test("isServiceScript: a client's port flag, an org named like a tool, or a hyph
 });
 
 test("isServiceScript: only a bare PORT= binds a port — a client's *_PORT= setting does not", () => {
-  // The TF-316 ClickHouse dry run, filed as a service by CLICKHOUSE_PORT before.
+  // A ClickHouse backfill whose client CLICKHOUSE_PORT= setting used to file it as a service.
   expect(isServiceScript(
     "c=$(aws secretsmanager get-secret-value --secret-id maestro/canary/clickhouse) && CLICKHOUSE_HOST=127.0.0.1 CLICKHOUSE_PORT=8124",
     "CLICKHOUSE_HOST=127.0.0.1 CLICKHOUSE_PORT=8124 MAESTRO_ENV=canary bun apps/aws/scripts/repair-dispositions.ts --out /tmp/all.jsonl > /tmp/dry.log 2>&1",

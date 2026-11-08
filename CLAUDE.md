@@ -26,7 +26,7 @@ Entry: `bin/claude0.ts` (CLI router) → `src/cli.ts` (subcommands), `src/sideba
 These are routine, durably-authorized actions — **do them yourself, don't just tell the user**:
 
 - **Bridge restart** after changes to `src/bridge/server.ts` or the `core/` functions it imports (loaded into the running process): `systemctl --user restart claude0-bridge`; logs: `journalctl --user -u claude0-bridge`. NOT needed for `src/bridge/public/*` — served fresh with `cache-control: no-cache`; the user refreshes the page ([ADR 21](docs/adr/0021-offline-app-shell.md)). Verify: `curl http://127.0.0.1:8473/sessions` → 200 (loopback needs no login, [ADR 33](docs/adr/0033-bridge-access-is-identity-not-a-token.md)) and the changed route behaves.
-- **Daemon restart** after changes to `src/sidebar/`, `core/inbox-*.ts`, `core/search*.ts`, or config the daemon loads at startup (e.g. `tmux.keys` sidebar keys): `systemctl --user restart claude0-daemon` (launchd on a Mac host).
+- **Daemon restart** after changes to `src/sidebar/`, `core/inbox-*.ts`, `core/search*.ts`, any other `core/` module the daemon imports (e.g. `core/script-wait.ts`, `core/background-tasks.ts`: it shares their on-disk memos with the monitor, which runs fresh code every tick, so a stale daemon and a fresh monitor overwrite each other's entries), or config the daemon loads at startup (e.g. `tmux.keys` sidebar keys): `systemctl --user restart claude0-daemon` (launchd on a Mac host).
 - **Re-run `claude0 setup`** after changes to tmux/zsh fragments, systemd/launchd units, or CLI entry routing — that's how they propagate to the installed machine.
 
 ## Orientation
