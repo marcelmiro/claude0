@@ -37,6 +37,101 @@ function bashLaunch(id: string, taskId: string | null, cmd = "sleep 99", ts = "2
 const notif = (taskId: string, toolUseId: string, status = "completed") =>
   `<task-notification>\n<task-id>${taskId}</task-id>\n<tool-use-id>${toolUseId}</tool-use-id>\n<status>${status}</status>\n<summary>done</summary>\n</task-notification>`;
 
+// Shapes copied from real Claude Code 2.1.319 records (probe Monitors run 2026-11-07).
+function monitorLaunch(id: string, taskId: string | null, timeoutMs: number | null = 120000, ts = "2026-11-07T20:38:05.731Z") {
+  const use = line({
+    type: "assistant",
+    timestamp: ts,
+    message: {
+      content: [{ type: "tool_use", id, name: "Monitor", input: { description: "c1021 write run, one line per chunk", timeout_ms: 1800000, command: "tail -n +1 -F /tmp/w.log | grep --line-buffered chunk" } }],
+    },
+  });
+  const resultText = taskId
+    ? `Monitor started (task ${taskId}, expires in 2m unless the source ends first; you get one notice at expiry — re-arm if you still need the watch).`
+    : "Permission for this action was denied by the auto mode classifier.";
+  const result = line({
+    type: "user",
+    timestamp: ts,
+    message: { content: [{ type: "tool_result", tool_use_id: id, content: resultText }] },
+    ...(taskId && timeoutMs !== null && { toolUseResult: { taskId, timeoutMs, persistent: false } }),
+  });
+  return [use, result];
+}
+const monitorEvent = (taskId: string, event: string) =>
+  line({ type: "user", message: { content: `<task-notification>\n<task-id>${taskId}</task-id>\n<summary>Monitor event: "c1021 write run"</summary>\n<event>${event}</event>\n</task-notification>` } });
+const monitorEnded = (taskId: string, toolUseId: string) =>
+  line({ type: "user", message: { content: `<task-notification>\n<task-id>${taskId}</task-id>\n<tool-use-id>${toolUseId}</tool-use-id>\n<output-file>/tmp/${taskId}.output</output-file>\n<status>completed</status>\n<summary>Monitor "c1021 write run" stream ended</summary>\n<event>ALL_DONE</event>\n</task-notification>` } });
+const taskStop = (id: string, taskId: string) => [
+  line({ type: "assistant", message: { content: [{ type: "tool_use", id, name: "TaskStop", input: { task_id: taskId } }] } }),
+  line({
+    type: "user",
+    message: { content: [{ type: "tool_result", tool_use_id: id, content: JSON.stringify({ message: `Successfully stopped task: ${taskId} (tail -F /tmp/w.log)`, task_id: taskId, task_type: "local_bash" }) }] },
+  }),
+];
+
+describe("Monitor tasks", () => {
+  test("a confirmed Monitor launch is a pending script whose deadline is launch + timeoutMs", () => {
+    const [task] = parseBackgroundTasks(monitorLaunch("toolu_m", "bmon1").join("\n"));
+    expect(task).toEqual({
+      toolUseId: "toolu_m",
+      kind: "script",
+      label: "c1021 write run, one line per chunk",
+      status: "pending",
+      taskId: "bmon1",
+      launchedAt: "2026-11-07T20:38:05.731Z",
+      deadline: Date.parse("2026-11-07T20:38:05.731Z") + 120000,
+    });
+  });
+
+  test("a launch record without timeoutMs falls back to the 30m cap", () => {
+    const [task] = parseBackgroundTasks(monitorLaunch("toolu_m", "bmon1", null).join("\n"));
+    expect(task!.deadline).toBe(Date.parse("2026-11-07T20:38:05.731Z") + 30 * 60 * 1000);
+  });
+
+  test("a denied Monitor (no 'Monitor started') yields no task", () => {
+    expect(parseBackgroundTasks(monitorLaunch("toolu_m", null).join("\n"))).toEqual([]);
+  });
+
+  test("per-event notifications keep it pending; the stream-ended notice completes it", () => {
+    const launched = [...monitorLaunch("toolu_m", "bmon1"), monitorEvent("bmon1", "chunk ids-00 attempt 1 failed=0")];
+    expect(parseBackgroundTasks(launched.join("\n"))[0]!.status).toBe("pending");
+    expect(parseBackgroundTasks([...launched, monitorEnded("bmon1", "toolu_m")].join("\n"))[0]!.status).toBe("completed");
+  });
+
+  test("the expiry event ends it", () => {
+    const jsonl = [
+      ...monitorLaunch("toolu_m", "bmon1"),
+      monitorEvent("bmon1", "[Monitor expired after 45s with no events delivered. Re-arm it if you still need the watch.]"),
+    ];
+    expect(parseBackgroundTasks(jsonl.join("\n"))[0]!.status).toBe("completed");
+  });
+
+  test("a TaskStop of it kills it — a stopped Monitor gets no notification", () => {
+    const jsonl = [...monitorLaunch("toolu_m", "bmon1"), ...taskStop("toolu_s", "bmon1")];
+    expect(parseBackgroundTasks(jsonl.join("\n"))[0]!.status).toBe("killed");
+  });
+
+  test("output that merely quotes a TaskStop result kills nothing", () => {
+    const jsonl = [
+      ...monitorLaunch("toolu_m", "bmon1"),
+      line({ type: "assistant", message: { content: [{ type: "tool_use", id: "toolu_g", name: "Bash", input: { command: "grep stopped t.jsonl" } }] } }),
+      line({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "toolu_g", content: 'x {"message":"Successfully stopped task: bmon1"}' }] } }),
+    ];
+    expect(parseBackgroundTasks(jsonl.join("\n"))[0]!.status).toBe("pending");
+  });
+
+  test("liveScripts: live before its deadline, gone after — never runner-probed", async () => {
+    const batches: string[][] = [];
+    const probe = async (paths: string[]) => (batches.push(paths), new Map(paths.map((p) => [p, true])));
+    const now = Date.now();
+    const at = (ms: number) => new Date(ms).toISOString();
+    const fresh = parseBackgroundTasks(monitorLaunch("toolu_a", "bfresh", 1800000, at(now - 60_000)).join("\n"));
+    const stale = parseBackgroundTasks(monitorLaunch("toolu_b", "bstale", 1800000, at(now - 31 * 60_000)).join("\n"));
+    expect((await liveScripts([...fresh, ...stale], probe)).map((t) => t.taskId)).toEqual(["bfresh"]);
+    expect(batches.flat()).toEqual([]);
+  });
+});
+
 describe("parseBackgroundTasks", () => {
   test("bash launch without notification is a pending script", () => {
     const tasks = parseBackgroundTasks(bashLaunch("toolu_1", "babc123").join("\n"));
@@ -395,6 +490,16 @@ test("isServiceScript: a client's port flag, an org named like a tool, or a hyph
     "Run a marker command through the live route",
     "T=$(systemctl --user show -p EnvironmentFiles --value claude0-bridge | cut -d' ' -f1)",
   )).toBe(false);
+});
+
+test("isServiceScript: only a bare PORT= binds a port — a client's *_PORT= setting does not", () => {
+  // The TF-316 ClickHouse dry run, filed as a service by CLICKHOUSE_PORT before.
+  expect(isServiceScript(
+    "c=$(aws secretsmanager get-secret-value --secret-id maestro/canary/clickhouse) && CLICKHOUSE_HOST=127.0.0.1 CLICKHOUSE_PORT=8124",
+    "CLICKHOUSE_HOST=127.0.0.1 CLICKHOUSE_PORT=8124 MAESTRO_ENV=canary bun apps/aws/scripts/repair-dispositions.ts --out /tmp/all.jsonl > /tmp/dry.log 2>&1",
+  )).toBe(false);
+  expect(isServiceScript("Start the app", "PORT=3000 bun app.ts")).toBe(true);
+  expect(isServiceScript("Start the app", "cd web && PORT=3000 bun app.ts")).toBe(true);
 });
 
 test("isServiceScript: waits stay waits, even when they name a service", () => {

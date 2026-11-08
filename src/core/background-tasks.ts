@@ -28,6 +28,13 @@
  *   queued_command `attachment` record (session was mid-turn). Paired by
  *   task-id or tool-use-id; unmatched notifications (nested-agent completions
  *   routed to the parent, launches on the far side of a /clear split) are ignored.
+ * - A `Monitor` call is a script, confirmed by "Monitor started (task <id>". It
+ *   streams one notification per event, so only a notification carrying a
+ *   `<status>` (its stream ended, or it was stopped) or an `[Monitor expired`
+ *   event ends it. It has no output file to probe while it runs, so its liveness
+ *   is its own `timeoutMs` deadline (≤30m) instead of the runner probe.
+ * - A successful `TaskStop` result (`{"message":"Successfully stopped task: <id>`)
+ *   kills that task: a stopped Monitor gets no notification at all.
  */
 
 import { resolveVerdicts, runnersAlive, type RunnerProbe } from "./runner-verdicts";
@@ -50,6 +57,8 @@ export interface BackgroundTask {
   outputPath?: string;
   /** A script that keeps running (a server, a tunnel) rather than one Claude waits on — `isServiceScript`. */
   service?: true;
+  /** A Monitor's expiry (epoch ms): it is live only before this, and is never runner-probed. */
+  deadline?: number;
 }
 
 const LABEL_CAP = 160;
@@ -63,6 +72,11 @@ const AGENT_LAUNCH_RE = /Async agent launched successfully[\s\S]*?agentId: (\w+)
 const NOTIF_TASK_ID_RE = /<task-id>(\S+?)<\/task-id>/;
 const NOTIF_TOOL_USE_RE = /<tool-use-id>(\S+?)<\/tool-use-id>/;
 const NOTIF_STATUS_RE = /<status>(\w+)<\/status>/;
+const MONITOR_LAUNCH_RE = /^Monitor started \(task (\w+)/;
+const MONITOR_EXPIRED = "[Monitor expired";
+/** Claude Code's cap on a Monitor's `timeoutMs`, used when the launch record omits it. */
+const MONITOR_MAX_MS = 30 * 60 * 1000;
+const TASK_STOP_RE = /^\{"message":"Successfully stopped task: (\w+)/;
 
 function blockText(content: unknown): string {
   if (typeof content === "string") return content;
@@ -105,7 +119,7 @@ function taskLineParser(): { feed: (line: string) => void; tasks: () => Backgrou
   // A `!` command's input and output are separate records; the output carries no command.
   let lastBashInput = "";
 
-  const launch = (toolUseId: string, kind: BackgroundTaskKind, label: string, command: string, taskId: string | undefined, text: string, ts: string | undefined): void => {
+  const launch = (toolUseId: string, kind: BackgroundTaskKind, label: string, command: string, taskId: string | undefined, text: string, ts: string | undefined): BackgroundTask => {
     const task: BackgroundTask = { toolUseId, kind, label, status: "pending" };
     if (kind === "script" && isServiceScript(label, command)) task.service = true;
     if (taskId) {
@@ -117,6 +131,7 @@ function taskLineParser(): { feed: (line: string) => void; tasks: () => Backgrou
     if (outputPath) task.outputPath = outputPath;
     if (ts) task.launchedAt = ts;
     byToolUse.set(toolUseId, task);
+    return task;
   };
 
   const feed = (line: string): void => {
@@ -127,6 +142,8 @@ function taskLineParser(): { feed: (line: string) => void; tasks: () => Backgrou
       !line.includes("task-notification") &&
       !line.includes('"name":"Workflow"') &&
       !line.includes('"name":"Agent"') &&
+      !line.includes('"name":"Monitor"') &&
+      !line.includes("Successfully stopped task") &&
       !line.includes('"name":"Bash"') &&
       !line.includes("<bash-input>") &&
       !line.includes("moved to the background")
@@ -159,6 +176,7 @@ function taskLineParser(): { feed: (line: string) => void; tasks: () => Backgrou
           const isCandidate =
             input["run_in_background"] === true ||
             name === "Workflow" ||
+            name === "Monitor" ||
             (name === "Agent" && input["run_in_background"] !== false);
           if (!isCandidate) {
             if (name === "Bash") {
@@ -184,9 +202,19 @@ function taskLineParser(): { feed: (line: string) => void; tasks: () => Backgrou
             const fg = foregroundBash.get(toolUseId);
             const timedOut = text.match(TIMEOUT_LAUNCH_RE);
             if (fg && timedOut) launch(toolUseId, "script", fg.label, fg.command, timedOut[1], text, ts);
+            const stopped = byTaskId.get(text.match(TASK_STOP_RE)?.[1] ?? "");
+            if (stopped) stopped.status = "killed";
             continue;
           }
           candidates.delete(toolUseId);
+          if (use.name === "Monitor") {
+            const started = text.match(MONITOR_LAUNCH_RE);
+            if (!started) continue; // denied / failed to start
+            const timeoutMs = (rec["toolUseResult"] as { timeoutMs?: unknown } | undefined)?.timeoutMs;
+            const task = launch(toolUseId, "script", use.label, use.command, started[1], text, ts);
+            task.deadline = (ts ? Date.parse(ts) : 0) + (typeof timeoutMs === "number" ? timeoutMs : MONITOR_MAX_MS);
+            continue;
+          }
           const bash = text.match(BASH_LAUNCH_RE);
           const agent = text.match(AGENT_LAUNCH_RE);
           if (use.name === "Bash" && !bash) continue; // denied / failed to start
@@ -213,7 +241,10 @@ function taskLineParser(): { feed: (line: string) => void; tasks: () => Backgrou
       const taskId = notifText.match(NOTIF_TASK_ID_RE)?.[1];
       const toolUseId = notifText.match(NOTIF_TOOL_USE_RE)?.[1];
       const task = (taskId && byTaskId.get(taskId)) || (toolUseId && byToolUse.get(toolUseId)) || undefined;
-      if (task) task.status = notifText.match(NOTIF_STATUS_RE)?.[1] === "killed" ? "killed" : "completed";
+      const status = notifText.match(NOTIF_STATUS_RE)?.[1];
+      // A Monitor's per-event notifications carry no <status>; only its end does.
+      const ends = task?.deadline === undefined || status !== undefined || notifText.includes(MONITOR_EXPIRED);
+      if (task && ends) task.status = status === "killed" ? "killed" : "completed";
     }
   };
 
@@ -236,7 +267,7 @@ export function pendingScripts(tasks: BackgroundTask[]): BackgroundTask[] {
 // opens a tunnel or runs a dev server. A label that opens with a wait verb is a wait
 // even when it names a service ("Wait for the preview deploy").
 const SERVICE_NOUN = /\b(dev server|server(?!-)|serve|tunnel|port[- ]forward|ssm|vite|next dev|localhost|proxy|preview|embedded postgres)\b|\bon port \d+/i;
-const SERVICE_COMMAND = /\b[A-Z_]*PORT=\d+|--port[ =]\d+|\bssm start-session\b|-L \d+:|\b(vite|next dev|serve)\b|\bngrok (http|tcp|tls|start)\b|\brun dev\b|\bconvex[: ]dev\b|(?:^|\s)bridge\s*(?:$|[;&|>])/;
+const SERVICE_COMMAND = /(?<![A-Z0-9_])PORT=\d+|--port[ =]\d+|\bssm start-session\b|-L \d+:|\b(vite|next dev|serve)\b|\bngrok (http|tcp|tls|start)\b|\brun dev\b|\bconvex[: ]dev\b|(?:^|\s)bridge\s*(?:$|[;&|>])/;
 const WAIT_VERB = /^\s*(background[- ])?(wait|poll|watch|monitor)\b/i;
 
 /**
@@ -255,9 +286,10 @@ export function taskKey(task: BackgroundTask): string {
 
 /**
  * `pendingScripts` filtered to tasks whose runner is actually alive — what every
- * rendering surface uses. A task without an outputPath can't be probed and stays
- * visible. Note the flip side of trusting the probe: an intentionally-infinite
- * background daemon shows for as long as it truly runs — a true statement.
+ * rendering surface uses. A Monitor is live until its deadline; any other task
+ * without an outputPath can't be probed and stays visible. Note the flip side of
+ * trusting the probe: an intentionally-infinite background daemon shows for as long
+ * as it truly runs — a true statement.
  *
  * Verdicts come from the shared persisted store, so a task already known to be dead
  * costs no probe here no matter which process asks (see `runner-verdicts.ts`).
@@ -267,12 +299,13 @@ export async function liveScripts(
   probe: RunnerProbe = runnersAlive,
 ): Promise<BackgroundTask[]> {
   const pending = pendingScripts(tasks);
+  const now = Date.now();
   const verdicts = await resolveVerdicts(
     pending.filter((t) => t.outputPath).map((t) => ({ key: taskKey(t), outputPath: t.outputPath! })),
-    Date.now(),
+    now,
     probe,
   );
-  return pending.filter((t) => !t.outputPath || verdicts.get(taskKey(t)));
+  return pending.filter((t) => (t.deadline !== undefined ? now < t.deadline : !t.outputPath || verdicts.get(taskKey(t))));
 }
 
 // Per-transcript cache keyed by (size, mtime) — launch and notification are both

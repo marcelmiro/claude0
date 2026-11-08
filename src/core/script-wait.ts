@@ -37,7 +37,7 @@ export interface ScriptWaitEntry {
   size: number;
   mtimeMs: number;
   /** Pending scripts per the transcript: identity, probe target, and whether it's a service (`isServiceScript`). */
-  pending: Array<{ key: string; outputPath?: string; service?: boolean }>;
+  pending: Array<{ key: string; outputPath?: string; service?: boolean; deadline?: number }>;
   /** Last time a caller looked this session up — drives age-based pruning. */
   seenAt: number;
 }
@@ -65,11 +65,17 @@ function probeTargets(entries: ScriptWaitEntry[]): ProbeTarget[] {
 
 /**
  * An entry's pending scripts that are still running, given already-resolved verdicts.
- * A task without an outputPath can't be probed and counts as live (same posture as
- * `liveScripts`).
+ * A Monitor is live until its deadline; any other task without an outputPath can't be
+ * probed and counts as live (same posture as `liveScripts`).
  */
-export function liveTasks(entry: ScriptWaitEntry, verdicts: Map<string, boolean>): ScriptWaitEntry["pending"] {
-  return entry.pending.filter((t) => !t.outputPath || verdicts.get(t.key) === true);
+export function liveTasks(
+  entry: ScriptWaitEntry,
+  verdicts: Map<string, boolean>,
+  now = Date.now(),
+): ScriptWaitEntry["pending"] {
+  return entry.pending.filter((t) =>
+    t.deadline !== undefined ? now < t.deadline : !t.outputPath || verdicts.get(t.key) === true,
+  );
 }
 
 /** `wait` = the session waits on a live script; `service` = every live script is a service. */
@@ -126,6 +132,7 @@ export async function detectScriptWaits(
             key: taskKey(t),
             outputPath: t.outputPath,
             ...(t.service && { service: true }),
+            ...(t.deadline !== undefined && { deadline: t.deadline }),
           })),
           seenAt: now,
         };
@@ -145,7 +152,7 @@ export async function detectScriptWaits(
   for (const id of sessionIds) {
     const job = jobBySession.get(id);
     const entries = [current.get(id), job ? current.get(job) : undefined];
-    const kind = waitKind(entries.flatMap((e) => (e ? liveTasks(e, verdicts) : [])));
+    const kind = waitKind(entries.flatMap((e) => (e ? liveTasks(e, verdicts, now) : [])));
     if (kind) out.set(id, kind);
   }
 

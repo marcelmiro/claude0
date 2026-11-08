@@ -7,14 +7,14 @@ Code: `core/background-tasks.ts`, `core/runner-verdicts.ts`, `core/script-wait.t
 
 | Concern | Where |
 |---|---|
-| What the session launched and what finished. Bash and Agent launches count only once the `tool_result` confirms a task; any Workflow result counts; a timed-out foreground command counts via the harness's "moved to the background" notice | `core/background-tasks.ts` header (the detection rules) |
-| Whether a pending task's runner is alive: `lsof` on its output file, dead verdicts final, alive ones re-probed after a TTL, one file per task | `core/runner-verdicts.ts` header; lsof rules in the CLAUDE.md gotchas |
+| What the session launched and what finished. Bash and Agent launches count only once the `tool_result` confirms a task; any Workflow result counts; a timed-out foreground command counts via the harness's "moved to the background" notice. A `Monitor` counts once "Monitor started" confirms it, and ends only on a notice with a `<status>`, an `[Monitor expired` event or a `TaskStop` of it, never on its per-event notifications | `core/background-tasks.ts` header (the detection rules) |
+| Whether a pending task's runner is alive: `lsof` on its output file, dead verdicts final, alive ones re-probed after a TTL, one file per task. A Monitor is never probed: its output file only appears with its first event and nothing holds it open, so it is live until launch + `timeoutMs` (≤30m) | `core/runner-verdicts.ts` header; lsof rules in the CLAUDE.md gotchas |
 | ⏳ on the window prefix and inbox discovery: one entry point, so they can't disagree | `detectScriptWaits` (`core/script-wait.ts`) |
 | Home list's pending-script count, only for sessions with a live Claude process (with no process, no notification can ever arrive). The row's ⏳ hides while the session runs, like the window prefix | `pendingScriptsAt` (`core/background-tasks.ts`), called from the bridge's sessions payload; `renderInboxRow` (`bridge/public/app.js`) |
 | The navbar 🤖/⏳ pill and its sheet: the transcript payload's `pendingScripts`, filtered by the runner probe only, with no process gate | `liveScripts` via `readActiveBranchCached` (`core/session-api.ts`) |
 | Sheet order (pending scripts, running agents, agents finished since your last prompt, older collapsed) and its unknown-boundary rule | `AgentList` (`bridge/public/app.js`) |
 | Claude's native `shell` status maps to `ready`, with the shell shown only as ⏳ | `core/session-state.ts` header |
-| Wait vs service: a script whose label names a server or tunnel, or whose command binds a port, opens a tunnel or runs a dev server, is a service unless its label opens with a wait verb; only inbox placement reads the difference | `isServiceScript` (`core/background-tasks.ts`), `waitKind` (`core/script-wait.ts`) |
+| Wait vs service: a script whose label names a server or tunnel, or whose command binds a port (a bare `PORT=`, not a client's `*_PORT=` setting), opens a tunnel or runs a dev server, is a service unless its label opens with a wait verb; only inbox placement reads the difference | `isServiceScript` (`core/background-tasks.ts`), `waitKind` (`core/script-wait.ts`) |
 | Whether an agent is done: a final text turn, or a successful `SubagentHandback` call (how current Claude Code ends an agent) | `subagentStatus` / `handedBack` (`core/session-api.ts`) |
 
 Three parts of what the phone shows aren't stated in any one file:
