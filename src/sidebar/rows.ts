@@ -119,6 +119,7 @@ function helpLines(): string[] {
     ` ${fg(C.fg, "e")}       ${fg(C.muted, "done + close pane")}`,
     `         ${fg(C.dim, "recent: undo")}`,
     ` ${fg(C.fg, "f")}       ${fg(C.muted, "fork, new window")}`,
+    ` ${fg(C.fg, "y")}       ${fg(C.muted, "copy session id")}`,
     "",
     ` ${bold(fg(C.dim, "open"))}`,
     ` ${fg(C.fg, "/")}       ${fg(C.muted, "search all sessions")}`,

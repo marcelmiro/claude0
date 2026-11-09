@@ -546,6 +546,26 @@ export function runSidebarRenderer(): void {
     } catch {}
   }
 
+  // `set-buffer -w` reaches the outer terminal's clipboard via OSC 52
+  // (`set-clipboard on`). Target the client that just pressed the key — the
+  // most recently active one viewing this window — not every attached client.
+  async function copyToClipboard(win: WinState, text: string): Promise<boolean> {
+    try {
+      const viewers = (await Bun.$`tmux list-clients -F ${`#{client_activity}${SEP}#{window_id}${SEP}#{client_tty}`}`.quiet().text())
+        .trim()
+        .split("\n")
+        .map((line) => line.split(SEP))
+        .filter(([, windowId, tty]) => windowId === win.windowId && tty)
+        .sort(([a], [b]) => Number(b) - Number(a));
+      const tty = viewers[0]?.[2];
+      if (tty) await Bun.$`tmux set-buffer -w -t ${tty} -- ${text}`.quiet();
+      else await Bun.$`tmux set-buffer -w -- ${text}`.quiet();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   // Enter and click share this, select-then-commit like the click grammar:
   // a row in ANOTHER window shows that window — Enter with its sidebar
   // focused (the keyboard flow keeps working the queue from the sidebar; the
@@ -1109,6 +1129,12 @@ export function runSidebarRenderer(): void {
             showFlash(win, "fork failed");
           }
         }
+        paint(win);
+        break;
+      }
+      case "y": {
+        if (!row?.id) break;
+        showFlash(win, (await copyToClipboard(win, row.id)) ? `copied ${row.id}` : "copy failed");
         paint(win);
         break;
       }

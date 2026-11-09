@@ -194,6 +194,7 @@ describe("renderView", () => {
   test("help overlay replaces content while focused", () => {
     const view = renderView(SAMPLE, vs({ focused: true, helpVisible: true }), DIMS, NOW);
     expect(view.rows.join("")).toContain("navigate");
+    expect(view.rows.join("")).toContain("copy session id");
     expect(view.rows[view.rows.length - 1]).toContain("close");
     expect(view.visible).toEqual([]);
   });

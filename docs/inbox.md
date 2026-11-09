@@ -122,6 +122,8 @@ before painting (a killed window's tty can be reused by a new pane at once).
   the selector follows. Reopening is always explicit: `b` unparks, `e` on Recent restores,
   and Enter inside the preview opens the session the way search's Enter does.
 - **Fork** (`f`) places the new window beside the parent (`new-window -a`).
+- **Copy id** (`y`) puts the row's session id on the clipboard of the client that pressed
+  it: `set-buffer -w` → OSC 52 (`copyToClipboard`). Works on any row, Recent included.
 
 ### Search and new session
 
