@@ -30,7 +30,7 @@ import { SHELL_NAMES } from "../core/tmux";
 import { USER_SHELL } from "../core/launch-command";
 import { discoverRepos } from "../core/git";
 import { parseInput, type InputEvent } from "./input";
-import { renderView, SNOOZE_UNITS, type ViewState, type VisibleRow } from "./rows";
+import { renderView, seedFallback, SNOOZE_UNITS, type ViewState, type VisibleRow } from "./rows";
 import { filterRepos, jumpRepo, type Mode } from "./modes";
 import type { SearchHit, SearchRequest, SearchResponse } from "./search-worker";
 import { C, fmtWakeAbs } from "./ansi";
@@ -72,6 +72,8 @@ interface WinState extends ViewState {
   width: number;
   height: number;
   clickArmed: boolean;
+  /** Selector landed by focus on the pane-you-came-from's session, untouched since (`seedFallback`). */
+  seededId: string | null;
   confirmKillId: string | null;
   /** Last painted rows per line — the diff baseline. */
   lastRows: string[];
@@ -94,6 +96,7 @@ function freshWin(windowId: string): WinState {
     height: 24,
     focused: false,
     clickArmed: false,
+    seededId: null,
     selectedId: null,
     activePaneId: null,
     snoozeMenuFor: null,
@@ -280,7 +283,13 @@ export function runSidebarRenderer(): void {
 
   function paint(win: WinState): void {
     if (!win.stubTty) return;
-    const view = renderView(sessions, win, { width: win.width, height: win.height }, Date.now());
+    let view = renderView(sessions, win, { width: win.width, height: win.height }, Date.now());
+    const to = win.focused && win.seededId === win.selectedId && win.seededId ? seedFallback(win.visible, view.visible, win.seededId) : null;
+    if (to) {
+      win.selectedId = to;
+      win.seededId = null;
+      view = renderView(sessions, win, { width: win.width, height: win.height }, Date.now());
+    }
     win.scrollTop = view.scrollTop;
     win.visible = view.visible;
     win.rowAtLine = view.rowAtLine;
@@ -342,7 +351,8 @@ export function runSidebarRenderer(): void {
 
   function seedSelection(win: WinState): void {
     const from = sessions.find((s) => s.real?.paneId === win.activePaneId);
-    if (from && win.visible.some((v) => v.id === from.id)) win.selectedId = from.id;
+    win.seededId = null;
+    if (from && win.visible.some((v) => v.id === from.id)) win.selectedId = win.seededId = from.id;
     else if (!win.visible.some((v) => v.id === win.selectedId)) win.selectedId = win.visible[0]?.id ?? null;
   }
 
@@ -910,6 +920,7 @@ export function runSidebarRenderer(): void {
       return;
     }
 
+    win.seededId = null;
     if (ev.name !== "e") win.confirmKillId = null;
 
     // a mode owns every key — letters are query text there, `?` included
@@ -1237,6 +1248,7 @@ export function runSidebarRenderer(): void {
       return;
     }
     if (ev.type === "click") {
+      win.seededId = null;
       const line = ev.y - 1 + win.scrollTop;
       const id = win.rowAtLine[line];
       // select-then-commit: first click focuses + highlights; a click on a
@@ -1288,7 +1300,7 @@ export function runSidebarRenderer(): void {
     win.clickArmed = true;
     reloadSessions();
     const from = sessions.find((s) => s.real?.paneId === invokerPane);
-    if (from) win.selectedId = from.id;
+    if (from) win.selectedId = win.seededId = from.id;
     else seedSelection(win);
     paint(win);
   }

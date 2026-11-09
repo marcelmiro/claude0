@@ -85,7 +85,10 @@ before painting (a killed window's tty can be reused by a new pane at once).
 
 - **Unfocused**, the sidebar is a glance surface (no chrome, pinned to top). **Focus**
   (`sidebarFocus`, default `M-s`) is instant: the toggle signals the renderer directly, and
-  the selector lands on the session of the pane you came from; on a hidden sidebar it shows
+  the selector lands on the session of the pane you came from — and if that row leaves
+  Needs You before you press a key or click (you just submitted, so it turns Running), the
+  selector drops to the next Needs You row instead of following it (`seedFallback`); once
+  you've navigated, the selector follows its session wherever it goes. On a hidden sidebar it shows
   it first (`ctlFocus` → `ctlToggle`), since the sidebar is the only way into search and
   new session ([ADR 34](adr/0034-sidebar-is-the-only-desk-surface.md)). **Visibility**
   (`sidebarToggle`, default `M-S`) is global: hide kills every sidebar pane and stands

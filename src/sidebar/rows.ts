@@ -29,6 +29,22 @@ export interface VisibleRow {
   section: Section;
 }
 
+/**
+ * Where the selector goes when the row it was seeded on (the session of the pane you
+ * focused from) leaves Needs You on its own — submitting a message moves it to Running
+ * a beat after you focus the sidebar to pick the next one. Next Needs You row, else
+ * the one above; null keeps following the session.
+ */
+export function seedFallback(prev: VisibleRow[], next: VisibleRow[], id: string): string | null {
+  const i = prev.findIndex((v) => v.id === id);
+  if (prev[i]?.section !== "needs-you") return null;
+  if (next.find((v) => v.id === id)?.section === "needs-you") return null;
+  const still = new Set(next.filter((v) => v.section === "needs-you").map((v) => v.id));
+  const below = prev.slice(i + 1).find((v) => still.has(v.id));
+  const above = prev.slice(0, i).findLast((v) => still.has(v.id));
+  return below?.id ?? above?.id ?? null;
+}
+
 export type SnoozeUnit = "t" | "d" | "h";
 /** Form order = Tab-cycle order, most→least used. `t` = 8AM on the +N calendar day. */
 export const SNOOZE_UNITS: [SnoozeUnit, string][] = [

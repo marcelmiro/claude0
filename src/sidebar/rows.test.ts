@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { renderView, type ViewState } from "./rows";
+import { renderView, seedFallback, type ViewState, type VisibleRow } from "./rows";
 import { fmtWakeAbs, plainLen } from "./ansi";
 import { wakeAt, type InboxSession } from "../core/inbox-model";
 
@@ -263,4 +263,29 @@ test("PR chip: #N colored by state on the branch line, the edited checkout's bra
   expect(none).toContain("claude0/feat/x");
   expect(none).not.toContain("#");
   expect(row({ state: "none", fetchedAt: NOW })).toContain("claude0/main");
+});
+
+describe("seedFallback", () => {
+  const rows = (...spec: string[]): VisibleRow[] =>
+    spec.map((s) => {
+      const [id, sec] = s.split(":");
+      return { id: id!, section: sec === "r" ? "running" : sec === "p" ? "parked" : "needs-you" };
+    });
+
+  test("seeded row leaving Needs You falls to the Needs You row under it", () => {
+    expect(seedFallback(rows("a", "b", "c", "x:r"), rows("a", "c", "b:r", "x:r"), "b")).toBe("c");
+  });
+
+  test("last Needs You row falls to the one above, not into Running", () => {
+    expect(seedFallback(rows("a", "b", "x:r"), rows("a", "b:r", "x:r"), "b")).toBe("a");
+  });
+
+  test("sole Needs You row keeps following the session", () => {
+    expect(seedFallback(rows("b", "x:r"), rows("b:r", "x:r"), "b")).toBeNull();
+  });
+
+  test("unchanged: still in Needs You, or seeded outside it", () => {
+    expect(seedFallback(rows("a", "b"), rows("b", "a"), "b")).toBeNull();
+    expect(seedFallback(rows("a", "x:r"), rows("a", "x:p"), "x")).toBeNull();
+  });
 });
