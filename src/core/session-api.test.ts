@@ -1307,6 +1307,14 @@ test("parseDialog: tool permission prompt", () => {
   expect(d.text).toContain("Do you want to proceed?");
 });
 
+test("parseDialog: permission prompt under the dashed rule an Ask rule overriding auto mode draws", () => {
+  const d = parseDialog(fixture("viewport/permission-prompt-ask-rule.plain.txt"))!;
+  expect(d.options).toEqual(["Yes", "Yes, and don’t ask again for: python3 -", "No"]);
+  expect(d.cursor).toBe(0);
+  expect(d.text).toContain("Do you want to proceed?");
+  expect(d.text[0]).toBe("Ask rule Bash(dbq-write *) overrides auto mode for this command.");
+});
+
 test("parseDialog: unnumbered list (trust gate) — the rows aligned with the cursor row", () => {
   const d = parseDialog(fixture("viewport/trust-gate.plain.txt"))!;
   expect(d.options).toEqual(["No, exit", "Yes, I trust this folder"]);

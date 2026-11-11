@@ -1801,6 +1801,7 @@ export function isModelSwitchConfirm(dialog: PaneDialog): boolean {
 export type PaneDialog = { text: string[]; options: string[]; cursor: number; hint?: string };
 
 const DIALOG_BORDER = /^\s*▔{3,}/;
+const DIALOG_RULE = /^[─╌]{2,}/; // the input box's own rule is always `─` (TOP_RULE)
 const CURSOR_ROW = /^(\s*)❯\s+(\d+\.\s+)?(\S.*)$/;
 const OPTION_ROW = /^(\s*(?:❯\s+)?)\d+\.\s+(.*)$/;
 
@@ -1815,9 +1816,10 @@ const isCursorRow = (l: string) => {
 
 /**
  * Parse the dialog covering the input box, or null when the box is on screen (no dialog)
- * or no dialog border is found. The dialog starts under its `▔` border; the `─`-bordered
+ * or no dialog border is found. The dialog starts under its `▔` border; the rule-bordered
  * kinds (permission prompt, AskUserQuestion, trust gate) start under the lowest rule with
- * a cursor row below it. Options are the run of rows around the cursor row: numbered rows
+ * a cursor row below it — `─`, or the dashed `╌` a permission prompt draws when an Ask
+ * rule overrides auto mode. Options are the run of rows around the cursor row: numbered rows
  * whose number sits in the cursor row's number column (deeper-indented description and
  * wrap rows in between skipped), or for an unnumbered list (the trust gate) the rows
  * aligned with the cursor row's label. Numbered prose above the list (a plan's steps, a
@@ -1833,7 +1835,7 @@ export function parseDialog(capture: string): PaneDialog | null {
   if (start < 0) {
     let lowestRule = -1;
     for (let i = last; i >= 0 && start < 0; i--) {
-      if (!TOP_RULE.test(lines[i]!)) continue;
+      if (!DIALOG_RULE.test(lines[i]!)) continue;
       if (lowestRule < 0) lowestRule = i + 1; // a notice with no options starts here
       if (lines.slice(i + 1, last + 1).some(isCursorRow)) start = i + 1;
     }
@@ -1881,7 +1883,7 @@ export function parseDialog(capture: string): PaneDialog | null {
   const first = rows.length ? rows[0]! : region.length - (hint ? 1 : 0);
   const text = region
     .slice(0, first)
-    .filter((l) => l.trim() && !TOP_RULE.test(l))
+    .filter((l) => l.trim() && !DIALOG_RULE.test(l))
     .map((l) => l.trim())
     .slice(-10);
   if (!text.length && !labels.length) return null;
