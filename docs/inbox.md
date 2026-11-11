@@ -159,8 +159,11 @@ key as an extended sequence (CSI u); without that, it is a plain `^j`/`^k` move.
   and the renderer drops responses older than the window's latest (`searchSeq`).
 - **New session** (`n`) filters repos — `discoverRepos` order, worktrees under their base,
   a matching worktree keeping its base row as context — and Enter starts plain `claude` in
-  a new window right of this one, focus in it. `N` does the same in the cursor row's
-  session directory. No branch or worktree creation: agents make their own worktrees.
+  a new window right of this one, focus in it. `N` does the same in the base checkout
+  of the cursor row's repo, even when that session runs in a worktree: a fresh session
+  dropped onto another PR's branch can commit unrelated work there, and dies with the
+  worktree at cleanup (`f` forks into the same worktree). No branch or worktree creation:
+  agents make their own worktrees.
 
 ### Snooze form
 

@@ -125,7 +125,7 @@ function helpLines(): string[] {
     ` ${fg(C.fg, "/")}       ${fg(C.muted, "search all sessions")}`,
     `         ${fg(C.dim, "↵ previews, ↵ again opens")}`,
     ` ${fg(C.fg, "n")}       ${fg(C.muted, "new session, pick repo")}`,
-    ` ${fg(C.fg, "N")}       ${fg(C.muted, "new session here")}`,
+    ` ${fg(C.fg, "N")}       ${fg(C.muted, "new session, row's repo")}`,
     "",
     ` ${bold(fg(C.dim, "leave"))}`,
     ` ${fg(C.fg, "q ⎋")}    ${fg(C.muted, "back to work pane")}`,

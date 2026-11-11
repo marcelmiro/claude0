@@ -28,7 +28,7 @@ import { seedForkName } from "../core/session-api";
 import { PATHS, configCache, parseTmuxKey, tmuxKeys } from "../core/config";
 import { SHELL_NAMES } from "../core/tmux";
 import { USER_SHELL } from "../core/launch-command";
-import { discoverRepos } from "../core/git";
+import { discoverRepos, getBaseRepoPath } from "../core/git";
 import { parseInput, type InputEvent } from "./input";
 import { renderView, seedFallback, SNOOZE_UNITS, type ViewState, type VisibleRow } from "./rows";
 import { filterRepos, jumpRepo, type Mode } from "./modes";
@@ -1224,8 +1224,10 @@ export function runSidebarRenderer(): void {
           enterMode(win, "new");
           break;
         }
-        // N: a new session where the cursor row's session works (its worktree, if any)
-        await startClaude(win, findSession(row?.id)?.repoPath);
+        // N: a new session in the base checkout of the cursor row's repo, never its worktree
+        // (docs/inbox.md, "Search and new session")
+        const dir = findSession(row?.id)?.repoPath;
+        await startClaude(win, dir && (await getBaseRepoPath(dir)));
         break;
       }
       case "q":
