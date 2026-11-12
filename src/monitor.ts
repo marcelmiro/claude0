@@ -267,16 +267,18 @@ async function main(): Promise<void> {
 
   // Fork override — MUST run after processHookEvents (which just re-imposed the hook's
   // parent id from disk onto fork panes). Force the fork's real, native-resolved id and
-  // remember we changed the map so phase2 persists it (overwriting the wrong on-disk pane
-  // file), self-healing `claude0 list`, the TUI and the bridge on the next read.
-  let forkCorrected = false;
+  // overwrite the wrong on-disk pane file now (phase2 only fills panes with no file),
+  // self-healing `claude0 list`, the TUI and the bridge on the next read.
+  const forkFixes: Record<string, string> = {};
   for (const paneId of forkPaneIds) {
     const realId = resumeIds[paneId];
     if (realId && paneSessionMap[paneId] !== realId) {
       paneSessionMap[paneId] = realId;
-      forkCorrected = true;
+      forkFixes[paneId] = realId;
     }
   }
+  const forkCorrected = Object.keys(forkFixes).length > 0;
+  if (forkCorrected) await savePaneSessions(forkFixes);
 
   // Rebuild previous statuses from saved state
   const previousStatuses = new Map<string, SessionStatus>();
@@ -529,7 +531,9 @@ async function phase2(
   }
 
   if (mapChanged) {
-    await savePaneSessions(paneSessionMap);
+    // Fill gaps only: a --resume seed must not land over a SessionStart hook that fired
+    // after this tick read the map.
+    await savePaneSessions(paneSessionMap, { onlyNew: true });
   }
 
   // Reap on-disk files for dead sessions (Inc7 rotation). After the cleanup above,

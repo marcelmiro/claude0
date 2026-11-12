@@ -206,29 +206,28 @@ test("a prompt beyond the 64KB tail falls back to the last-prompt record Claude 
 
 // --- resolveActiveId — a known id with no transcript --------------------------------
 // Claude writes a NEW session's JSONL lazily (first turn); /clear and forks write eagerly.
-// An unprompted session must keep its id through that window when the live process owns
-// it (--session-id argv or Claude's per-pid native file); any other transcript-less known
-// id is a stale pane→session mapping.
+// With no transcript, the id the live process owns (Claude's per-pid native file, else
+// --session-id argv) is the answer — whether the pane map agrees, is stale, or hasn't been
+// written yet. Only with no live id does the pane blank for re-matching.
 
 test("resolveActiveId: a transcript-backed pane keeps the hook id, else the transcript's", () => {
   expect(resolveActiveId("hook", "tx", undefined)).toBe("hook");
   expect(resolveActiveId(undefined, "tx", undefined)).toBe("tx");
 });
 
-test("resolveActiveId: no transcript + id dictated by --session-id on the live process → keep it", () => {
-  expect(resolveActiveId("minted", undefined, "minted")).toBe("minted");
-});
-
-test("resolveActiveId: no transcript + the live process's native id → keep it (terminal-launched, unprompted)", () => {
+test("resolveActiveId: no transcript + the live process owns the known id → keep it (unprompted session)", () => {
   expect(resolveActiveId("fresh", undefined, "fresh")).toBe("fresh");
 });
 
-test("resolveActiveId: reused pane — a cached id from the previous process ≠ the live process's id → blank", () => {
-  expect(resolveActiveId("previous", undefined, "current")).toBe("");
+test("resolveActiveId: reused pane — a cached id from the previous process → the live process's id", () => {
+  expect(resolveActiveId("previous", undefined, "current")).toBe("current");
 });
 
-test("resolveActiveId: no transcript + id NOT owned by the live process → stale mapping, blank for re-matching", () => {
+test("resolveActiveId: new pane before its SessionStart hook writes the map → the live process's id, not a guess", () => {
+  expect(resolveActiveId(undefined, undefined, "booted")).toBe("booted");
+});
+
+test("resolveActiveId: no transcript and no live id → blank for re-matching", () => {
   expect(resolveActiveId("stale", undefined, undefined)).toBe("");
-  expect(resolveActiveId("other", undefined, "launch-id")).toBe("");
-  expect(resolveActiveId(undefined, undefined, "minted")).toBe("");
+  expect(resolveActiveId(undefined, undefined, undefined)).toBe("");
 });

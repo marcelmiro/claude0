@@ -1,7 +1,7 @@
 # 25. Forks are seeded with a copy of the parent transcript
 
 Date: 2026-08-24 (documents a decision shipped 2026-07-24 with the phone fork feature)
-Status: accepted; amended 2026-08-26 and 2026-10-09 (an unprompted session keeps its process-owned id)
+Status: accepted; amended 2026-08-26, 2026-10-09 (an unprompted session keeps its process-owned id) and 2026-11-12 (the process-owned id also replaces a stale or not-yet-written mapping)
 
 ## Context
 
@@ -40,12 +40,17 @@ already in use", 2.1.246). Only `--fork-session` skips that check.
   records the *parent's* id for a `--fork-session` pane (CLAUDE.md gotcha), so waiting on the
   hook would mis-map the pane.
 - **The blank-id rule has exactly one exception: the id the pane's live process owns.** A
-  known id with no transcript is kept only if it matches the live Claude process's own id:
-  its `--session-id` argv, else Claude's per-pid native file
-  (`~/.claude/sessions/<pid>.json`, written before the first turn, verified on 2.1.295). A
-  stale pane file can't produce an id that belongs to the running pid, so the guard against
-  stale mappings isn't weakened. An id learned any other way still resets to `""` when its
-  JSONL is missing.
+  pane with no transcript behind its known id resolves to the live Claude process's own id:
+  Claude's per-pid native file (`~/.claude/sessions/<pid>.json`, written before the first
+  turn and rewritten on `/clear`, verified on 2.1.322), else its `--session-id` argv. A stale
+  pane file can't produce an id that belongs to the running pid, so the guard against stale
+  mappings isn't weakened. Only a pane with no live id resets to `""`.
+  *Amended 2026-11-12:* this used to apply only when the known id already matched the live
+  id; a missing or stale mapping blanked and fell through to discovery's guesses. A new pane
+  in the ~0.6s before its SessionStart hook fired got a content-match guess (an older session
+  that shared its prompt), which revived that archived session and, persisted, clobbered the
+  hook's file. Discovery now also skips guessing while a process's native file is still
+  pending, and persists guesses only to panes with no file.
 - The seed is best-effort and never throws. If the parent transcript is unreadable or the
   destination dir is missing, the fork falls back to staying empty until its first turn; the
   fork itself still succeeds.

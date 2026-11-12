@@ -10,7 +10,7 @@
 import "../../test/helpers/home";
 import { CONFIG_DIR } from "../../test/helpers/home";
 import { test, expect, beforeEach } from "bun:test";
-import { mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { loadPaneSessions, savePaneSessions, processHookEvents, reconcilePaneFiles, buildSessionStates } from "./state";
 import type { Session, SessionNotificationState } from "../types";
@@ -25,6 +25,13 @@ beforeEach(() => {
 test("save/load round-trips per-pane files (the % paneId is a valid filename)", async () => {
   await savePaneSessions({ "%46": "sess-a", "%7": "sess-b" });
   expect(await loadPaneSessions()).toEqual({ "%46": "sess-a", "%7": "sess-b" });
+});
+
+test("savePaneSessions onlyNew fills missing panes but never overwrites a hook-written file", async () => {
+  await savePaneSessions({ "%5": "from-hook" });
+  await savePaneSessions({ "%5": "guess", "%6": "fallback" }, { onlyNew: true });
+  expect(await loadPaneSessions()).toEqual({ "%5": "from-hook", "%6": "fallback" });
+  expect(readdirSync(PANES_DIR).filter((f) => f.endsWith(".tmp"))).toEqual([]);
 });
 
 test("loadPaneSessions ignores in-flight .tmp files", async () => {

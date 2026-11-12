@@ -12,7 +12,7 @@ import { stripAllPrefixes, extractAIName } from "./notifications";
 import { slugify } from "./names";
 import { processHookEvents, savePaneSessions, reconcilePaneFiles } from "./state";
 import { eventSourcedStatus } from "./hook-events";
-import { nativeSessionIdByPid, nativeStatus, resolveStatus } from "./session-state";
+import { nativeFilePending, nativeSessionIdByPid, nativeStatus, resolveStatus } from "./session-state";
 import { isPromptRecord, readLastTurnAt, resolveTranscriptPath, latestTranscriptCwd } from "./last-turn";
 import { jsonlLines } from "./jsonl-reader";
 
@@ -110,15 +110,21 @@ export async function discoverSessions(opts?: { skipArchivedSummaries?: boolean;
 
   // Filter panes to those with a Claude process on their TTY
   const claudePanesWithProc: Array<{ pane: PaneInfo; sessionId?: string; isFork: boolean; liveId?: string }> = [];
+  // Panes whose Claude is still booting: no source knows their id yet, so a fallback guess here
+  // can only be wrong (a prompt shared with an older session matches it and revives that one).
+  const bootingPaneIds = new Set<string>();
   for (const pane of panes) {
     const normalizedPaneTty = pane.tty.replace(/^\/dev\//, "");
     const proc = claudeTtyMap.get(normalizedPaneTty);
     if (proc) {
+      // Native first: it follows /clear, while a --session-id argv stays the launch id.
+      const liveId = (await nativeSessionIdByPid(proc.pid)) ?? dictatedSessionId(proc.command) ?? undefined;
+      if (!liveId && (await nativeFilePending(proc.pid))) bootingPaneIds.add(pane.paneId);
       claudePanesWithProc.push({
         pane,
         sessionId: proc.sessionId,
         isFork: proc.isFork,
-        liveId: dictatedSessionId(proc.command) ?? (await nativeSessionIdByPid(proc.pid)) ?? undefined,
+        liveId,
       });
     }
   }
@@ -126,11 +132,15 @@ export async function discoverSessions(opts?: { skipArchivedSummaries?: boolean;
   // Phase A: Build active sessions from Claude panes. Hook map (cache/persisted) wins over
   // the command-line --resume id so a /clear'd or /compact'd pane resolves to its CURRENT
   // session, not the stale launch id (see resolvePaneSessionId). A fork is the exception —
-  // its hook map is the parent id, so its native-resolved id wins; cache it so the wrong
-  // hook-written pane file gets overwritten on savePaneSessions and every reader self-heals.
+  // its hook map is the parent id, so its native-resolved id wins; cache it and overwrite the
+  // wrong hook-written pane file so every reader self-heals.
+  const forkFixes: Record<string, string> = {};
   const activeSessionPromises = claudePanesWithProc.map(({ pane, sessionId, isFork, liveId }) => {
     const resolved = resolvePaneSessionId(pane.paneId, sessionId, paneSessionCache, persistedPaneMap, isFork);
-    if (isFork && resolved) paneSessionCache.set(pane.paneId, resolved);
+    if (isFork && resolved) {
+      if (persistedPaneMap[pane.paneId] !== resolved) forkFixes[pane.paneId] = resolved;
+      paneSessionCache.set(pane.paneId, resolved);
+    }
     return buildActiveSession(pane, projectsDir, resolved, liveId);
   });
   const activeSessions = await Promise.all(activeSessionPromises);
@@ -144,7 +154,12 @@ export async function discoverSessions(opts?: { skipArchivedSummaries?: boolean;
   const changedPaneIds = new Set<string>(hookChangedPanes);
 
   // Enrich active sessions that still couldn't resolve a session ID
-  await enrichUnmatchedSessions(activeSessions, projectsDir, persistedPaneMap, opts?.nameMap);
+  await enrichUnmatchedSessions(
+    activeSessions.filter((s) => !(s.tmuxPane && bootingPaneIds.has(s.tmuxPane.paneId))),
+    projectsDir,
+    persistedPaneMap,
+    opts?.nameMap,
+  );
 
   // Clean stale cache entries for panes that no longer exist
   const activePaneIds = new Set(claudePanesWithProc.map(({ pane }) => pane.paneId));
@@ -154,9 +169,11 @@ export async function discoverSessions(opts?: { skipArchivedSummaries?: boolean;
 
   // Persist the resolved map to the hook-owned per-pane files so every discoverer (incl. the
   // always-on bridge) keeps `resolveSessionPane` current — capturing window-name/mtime fallback
-  // resolutions the hook never wrote. Prune files for panes that have left tmux entirely (the
-  // full pane set, not just claude panes, so a transient miss can't drop a live mapping).
-  await savePaneSessions(Object.fromEntries(paneSessionCache));
+  // resolutions the hook never wrote, never over a file the hook already wrote. Prune files for
+  // panes that have left tmux entirely (the full pane set, not just claude panes, so a
+  // transient miss can't drop a live mapping).
+  await savePaneSessions(forkFixes);
+  await savePaneSessions(Object.fromEntries(paneSessionCache), { onlyNew: true });
   await reconcilePaneFiles(new Set(panes.map((p) => p.paneId)));
 
   // Phase B: Discover archived sessions from index files. With `archivedTtlMs` (bridge
@@ -489,14 +506,13 @@ export function pickRepoPath(
  * Derives repo info from tmux + git, with best-effort enrichment from JSONL/index.
  */
 /**
- * The id a live pane resolves to. A known id with no JSONL behind it is normally a stale
- * pane→session mapping and resets to "" so the pane falls through to
- * enrichUnmatchedSessions() — UNLESS it equals `liveId`, the id the pane's live Claude
- * process owns (its `--session-id` argv, else Claude's per-pid native file): Claude writes
- * a NEW session's transcript lazily (nothing on disk until the first turn; /clear and
- * forks write eagerly), and a stale mapping can't coincide with the live process's own
- * id, so the id is certain. Without this an unprompted session surfaced as an id-less
- * row in neither inbox.
+ * The id a live pane resolves to. A known id with no JSONL behind it is either a stale
+ * pane→session mapping or a session whose transcript doesn't exist yet (Claude writes a NEW
+ * session's JSONL lazily, on the first turn; /clear and forks write eagerly). Either way the
+ * answer is `liveId`, the id the pane's live Claude process owns (Claude's per-pid native
+ * file, else its `--session-id` argv): a stale mapping can't produce it, and it is known
+ * before the SessionStart hook writes the pane file. Only with no liveId does the pane reset
+ * to "" and fall through to enrichUnmatchedSessions()'s guesses.
  */
 export function resolveActiveId(
   knownSessionId: string | undefined,
@@ -504,8 +520,7 @@ export function resolveActiveId(
   liveId: string | undefined,
 ): string {
   if (transcriptSessionId) return knownSessionId ?? transcriptSessionId;
-  if (knownSessionId && knownSessionId === liveId) return knownSessionId;
-  return "";
+  return liveId ?? "";
 }
 
 async function buildActiveSession(
@@ -549,7 +564,7 @@ async function buildActiveSession(
   const repo = repoNameFromPath(baseRepoPath);
 
   const resolvedId = resolveActiveId(knownSessionId, activeInfo?.sessionId, liveId);
-  if (knownSessionId && !resolvedId) {
+  if (knownSessionId && resolvedId !== knownSessionId) {
     paneSessionCache.delete(pane.paneId); // stale mapping — see resolveActiveId
   }
 

@@ -10,7 +10,7 @@ import { test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadNativeStatuses, nativeSessionIdByPid, parkedJobSessions, resolveStatus } from "./session-state";
+import { loadNativeStatuses, nativeFilePending, nativeSessionIdByPid, parkedJobSessions, resolveStatus } from "./session-state";
 
 let dir: string;
 
@@ -96,6 +96,16 @@ test("nativeSessionIdByPid returns the id from the pid's native file", async () 
 
 test("nativeSessionIdByPid: missing file → null (fork's native file not written yet)", async () => {
   expect(await nativeSessionIdByPid(99999, dir)).toBeNull();
+});
+
+test("nativeFilePending: booting process (dir exists, no file yet) → true; written → false", async () => {
+  expect(await nativeFilePending(4242, dir)).toBe(true);
+  writeFile("4242.json", { ...base, pid: 4242, sessionId: "s", status: "idle" });
+  expect(await nativeFilePending(4242, dir)).toBe(false);
+});
+
+test("nativeFilePending: no native dir at all (Claude without native files) → false, keep fallbacks", async () => {
+  expect(await nativeFilePending(4242, join(dir, "absent"))).toBe(false);
 });
 
 test("nativeSessionIdByPid: non-interactive kind → null", async () => {

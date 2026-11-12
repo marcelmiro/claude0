@@ -23,6 +23,7 @@
  */
 
 import { homedir } from "os";
+import { stat } from "node:fs/promises";
 import { Glob } from "bun";
 import type { SessionStatus } from "./status";
 import { questionHeld } from "./approval";
@@ -162,6 +163,21 @@ export async function nativeSessionIdByPid(
     return typeof sessionId === "string" && sessionId ? sessionId : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * True while a live Claude process hasn't written its per-pid native file yet: the first
+ * ~0.6s after launch (measured on 2.1.322), when neither this file nor the SessionStart hook
+ * knows its id. False when the native dir doesn't exist at all (a Claude without native
+ * files), so callers keep their old fallbacks there.
+ */
+export async function nativeFilePending(pid: number, dir: string = NATIVE_STATUS_DIR): Promise<boolean> {
+  if (await Bun.file(`${dir}/${pid}.json`).exists()) return false;
+  try {
+    return (await stat(dir)).isDirectory();
+  } catch {
+    return false;
   }
 }
 

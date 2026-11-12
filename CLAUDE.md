@@ -33,7 +33,7 @@ These are routine, durably-authorized actions — **do them yourself, don't just
 
 - `src/core/` — pure/IO logic shared by all processes (discovery, tmux, status, git, inbox, transcripts). `src/bridge/` — phone HTTP server + `public/` client. `src/sidebar/` — inbox sidebar renderer and its search worker. `src/preview/` — the transcript preview popup. `src/monitor.ts` — status-right poller. Types in `src/types.ts`.
 - Processes share state through `~/.config/claude0/` (config.json, state.json, panes/, verdicts/, …): monitor (fresh per tick), daemon (sidebar renderer, plus its search worker, search indexer and preview popups), bridge.
-- Session discovery correlates Claude process TTYs with tmux pane TTYs, plus per-pane files under `panes/` written by the SessionStart hook (`claude0 setup` installs it). Session data: `~/.claude/projects/*/{sessions-index.json,<id>.jsonl}`.
+- Session discovery correlates Claude process TTYs with tmux pane TTYs, plus per-pane files under `panes/` written by the SessionStart hook (`claude0 setup` installs it); discovery's own fallback resolutions only fill panes with no file (`savePaneSessions` `onlyNew`), never overwrite the hook's ([ADR 25](docs/adr/0025-fork-transcript-seeding.md)). Session data: `~/.claude/projects/*/{sessions-index.json,<id>.jsonl}`.
 - Driving portkey in a real browser (fixtures bridge + inspect-ui): [docs/portkey-design-loop.md](docs/portkey-design-loop.md). Backlog: `ideas.txt`.
 
 ## Conventions

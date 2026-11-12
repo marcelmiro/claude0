@@ -1,4 +1,4 @@
-import { readdir, unlink, rename, writeFile, mkdir } from "node:fs/promises";
+import { readdir, unlink, rename, writeFile, mkdir, link } from "node:fs/promises";
 import { PATHS } from "./config";
 import type { AggregateStatus, State, Session, SessionNotificationState } from "../types";
 
@@ -30,17 +30,27 @@ export async function loadPaneSessions(): Promise<Record<string, string>> {
 
 /** Persist resolved pane→session entries as per-pane files (atomic temp+rename, one file per
  *  pane → no shared-file contention). Additive — never deletes; pruning is liveness-gated
- *  (`reconcilePaneFiles`). Captures fallback-resolved (--resume / window-name / mtime) panes
- *  the hook never wrote, so `resolveSessionPane` (bridge sends) can find them too. */
-export async function savePaneSessions(map: Record<string, string>): Promise<void> {
+ *  (`reconcilePaneFiles`). Captures fallback-resolved (--resume / window-name / content) panes
+ *  the hook never wrote, so `resolveSessionPane` (bridge sends) can find them too.
+ *  `onlyNew` writes only panes with no file yet (temp+link, which fails on an existing file): a
+ *  discovery cycle that read the map before a new pane's SessionStart hook fired must not land
+ *  its fallback guess over the hook's id — every reader would then agree with the guess. */
+export async function savePaneSessions(
+  map: Record<string, string>,
+  { onlyNew = false }: { onlyNew?: boolean } = {},
+): Promise<void> {
   try {
     await mkdir(PANES_DIR, { recursive: true });
     await Promise.all(Object.entries(map).map(async ([paneId, sessionId]) => {
       if (!paneId || !sessionId) return;
       const dest = `${PANES_DIR}/${paneId}`;
-      const tmp = `${dest}.tmp`;
+      const tmp = `${dest}.${process.pid}.tmp`;
       await writeFile(tmp, sessionId);
-      await rename(tmp, dest);
+      if (!onlyNew) return rename(tmp, dest);
+      try {
+        await link(tmp, dest);
+      } catch {}
+      await unlink(tmp);
     }));
   } catch {}
 }
