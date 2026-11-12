@@ -13,6 +13,11 @@ the implementation detail. Decisions:
 
 ## Attention and tiers
 
+tmux fires the status job per client and on every redraw (~1/s); `core/monitor-gate.ts`
+reprints the last tick's output for runs within 2.5s of it, unless the focused window
+changed, a Claude status file flipped, or a present user is looking at a ⚡ window — so
+transitions and the auto-clear are still caught on the next run.
+
 Each monitor tick, transitions (`classifyTransition`: running→waiting and ready→waiting
 are *blocked*, running→ready is *turnComplete*) seed the attention set. Presence decides
 the active pane: when the terminal is focused (a client keystroke within the presence

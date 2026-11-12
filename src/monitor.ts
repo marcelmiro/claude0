@@ -10,6 +10,7 @@ import { listPanes, capturePane, renameWindow } from "./core/tmux";
 import { findClaudeProcesses } from "./core/process";
 import { detectStatus, type SessionStatus } from "./core/status";
 import { eventSourcedStatus } from "./core/hook-events";
+import { recordTick } from "./core/monitor-gate";
 import { nativeStatus, resolveStatus } from "./core/session-state";
 import { reapDeadSessionFiles } from "./core/approval";
 import { loadConfig, configCache, PATHS } from "./core/config";
@@ -165,6 +166,7 @@ function formatStatus(aggregate: AggregateStatus): string {
 }
 
 async function main(): Promise<void> {
+  const tickStart = Date.now();
   if (!acquireMonitorLock()) {
     process.stdout.write(formatStatus(computeAggregate(await loadState())));
     return;
@@ -240,6 +242,9 @@ async function main(): Promise<void> {
   } catch {
     // Not in tmux context
   }
+
+  // The gate in bin/claude0.ts compares this against the client's focus on its next run.
+  const focused = activeSession !== undefined && activeWindow !== undefined ? `${activeSession}:${activeWindow}` : "";
 
   // Quick poll active sessions (event-sourced status when a hook log exists)
   const { sessions, allPanes, resumeIds, forkPaneIds } = await quickDiscoverActive(paneSessionMap);
@@ -455,6 +460,7 @@ async function main(): Promise<void> {
     await debugLog(`freshState bail: state modified by another process during poll`);
     const aggregate = computeAggregate(freshState);
     process.stdout.write(formatStatus(aggregate));
+    recordTick(focused, formatStatus(aggregate), tickStart);
     releaseMonitorLock();
     // Still run Phase 2 (lsof + naming) — it writes to separate files
     phase2(sessions, paneSessionMap, nameCache, hookChanged || forkCorrected).catch(() => {});
@@ -469,6 +475,7 @@ async function main(): Promise<void> {
   // Output status text to stdout — tmux renders this in the status bar
   const aggregate = computeAggregate(newState);
   process.stdout.write(formatStatus(aggregate));
+  recordTick(focused, formatStatus(aggregate), tickStart);
   releaseMonitorLock();
 
   // Phase 2: hook events + AI naming (runs after stdout, doesn't block tmux)

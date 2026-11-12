@@ -38,38 +38,43 @@ import type { HookEvent } from "../types";
 
 export function deriveStatus(events: HookEvent[]): SessionStatus {
   for (let i = events.length - 1; i >= 0; i--) {
-    const event = events[i];
-    switch (event.hook_event_name) {
-      case "Stop":
-        return "ready";
-      case "Notification":
-        if (event.notification_type === "permission_prompt") return "waiting";
-        if (event.notification_type === "idle_prompt") return "ready";
-        continue; // unknown notification flavor — look further back
-      case "PreToolUse":
-        // A pending AskUserQuestion is the model blocked on the user — `waiting`,
-        // not `running`. It emits no permission_prompt Notification (it's a tool,
-        // not a permission gate), so this is the only place it can be typed.
-        // Permission-gated tools still flow through Notification above.
-        return event.tool_name === "AskUserQuestion" ? "waiting" : "running";
-      case "PostToolUse":
-        // The tool finished, but the turn has not (no Stop) — Claude is still
-        // working with the result. A bare PostToolUse is `running`, not `ready`.
-        return "running";
-      case "UserPromptSubmit":
-        return "running";
-      case "SubagentStop":
-        // NON-determining: a subagent finishing says nothing about whether the
-        // PARENT turn is running — that's decided by the parent's own edges. In
-        // auto-mode / agent sessions a SubagentStop routinely trickles in AFTER the
-        // turn's Stop+idle_prompt; returning "running" here un-finished a done
-        // session (the stuck-running bug). Skip it and read the real status behind.
-        continue;
-      case "SessionStart":
-        return "idle";
-      default:
-        continue;
-    }
+    const status = edgeStatus(events[i]);
+    if (status) return status;
   }
   return "idle";
+}
+
+/** The status one event determines on its own, or null for a non-determining edge. */
+export function edgeStatus(event: HookEvent): SessionStatus | null {
+  switch (event.hook_event_name) {
+    case "Stop":
+      return "ready";
+    case "Notification":
+      if (event.notification_type === "permission_prompt") return "waiting";
+      if (event.notification_type === "idle_prompt") return "ready";
+      return null; // unknown notification flavor — look further back
+    case "PreToolUse":
+      // A pending AskUserQuestion is the model blocked on the user — `waiting`,
+      // not `running`. It emits no permission_prompt Notification (it's a tool,
+      // not a permission gate), so this is the only place it can be typed.
+      // Permission-gated tools still flow through Notification above.
+      return event.tool_name === "AskUserQuestion" ? "waiting" : "running";
+    case "PostToolUse":
+      // The tool finished, but the turn has not (no Stop) — Claude is still
+      // working with the result. A bare PostToolUse is `running`, not `ready`.
+      return "running";
+    case "UserPromptSubmit":
+      return "running";
+    case "SubagentStop":
+      // NON-determining: a subagent finishing says nothing about whether the
+      // PARENT turn is running — that's decided by the parent's own edges. In
+      // auto-mode / agent sessions a SubagentStop routinely trickles in AFTER the
+      // turn's Stop+idle_prompt; returning "running" here un-finished a done
+      // session (the stuck-running bug). Skip it and read the real status behind.
+      return null;
+    case "SessionStart":
+      return "idle";
+    default:
+      return null;
+  }
 }

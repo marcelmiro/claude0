@@ -11,8 +11,10 @@ subscriptions), `bridge/server.ts` (payload composition, watchers, consumer mark
 
 - **Sessions.** Every `/sessions` recompute ends in `startSessionsRefresh` →
   `stream.pushSessions`, which dedupes against the last pushed JSON. State changes trigger
-  recomputes via `kickSessionsPush`. The on-connect snapshot goes, undeduped, to the new
-  connection only.
+  recomputes via `kickSessionsPush` — with no stream client connected, at most one trailing
+  recompute per 15s instead, since hook events fire on every tool call. The on-connect
+  snapshot (the cached payload) goes, undeduped, to the new connection only, with a fresh
+  recompute behind it.
 - **Transcript.** No transcript is pushed on connect: the client re-declares its
   subscription on every stream open, carrying the rev it holds, and that request decides
   between a snapshot and a zero-turn append. Mid-turn appends come from the JSONL watcher

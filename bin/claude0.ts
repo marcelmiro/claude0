@@ -109,6 +109,12 @@ switch (cmd) {
       });
       process.exit(await child.exited);
     }
+    const { focusedClient, recentTickOutput } = await import("../src/core/monitor-gate");
+    const recent = recentTickOutput(focusedClient());
+    if (recent !== null) {
+      process.stdout.write(recent);
+      break;
+    }
     await import("../src/monitor");
     break;
   }

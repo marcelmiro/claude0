@@ -14,6 +14,7 @@ import { test, expect, beforeEach } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import {
   readEvents,
+  eventsNewestFirst,
   eventSourcedStatus,
   pendingToolCall,
   eventLogPath,
@@ -108,6 +109,64 @@ test("readEvents skips a corrupt/half-written line, keeps the rest", () => {
 
 test("readEvents returns [] when no log exists", () => {
   expect(readEvents("never-existed")).toEqual([]);
+});
+
+// --- eventsNewestFirst ---------------------------------------------------------
+
+test("eventsNewestFirst is readEvents reversed across the rotated .old half, lines longer than the read window, a torn line and blanks", () => {
+  const id = "sess-tail";
+  const big = "y".repeat(200 * 1024); // spans several 64KB windows
+  const old = [
+    ev({ hook_event_name: "SessionStart" }, "x"),
+    { ...ev({ hook_event_name: "PostToolUse", tool_use_id: "tu_big" }, "x"), tool_response: big },
+    ev({ hook_event_name: "Stop" }, "x"),
+  ];
+  writeFileSync(`${eventLogPath(id)}.old`, old.map((e) => JSON.stringify(e)).join("\n") + "\n");
+  writeFileSync(
+    eventLogPath(id),
+    [
+      JSON.stringify(ev({ hook_event_name: "UserPromptSubmit", prompt: `é${big}` }, "x")),
+      "",
+      '{"hook_event_name":"PreToolUse", "tool_n', // torn mid-write
+      JSON.stringify(ev({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_use_id: "tu_1" }, "x")),
+    ].join("\n"), // no trailing newline: the last line still counts
+  );
+  const full = readEvents(id);
+  expect(full.map((e) => e.hook_event_name)).toEqual(["SessionStart", "PostToolUse", "Stop", "UserPromptSubmit", "PreToolUse"]);
+  expect([...eventsNewestFirst(id)]).toEqual(full.reverse());
+});
+
+test("eventsNewestFirst yields nothing when no log exists", () => {
+  expect([...eventsNewestFirst("never-existed")]).toEqual([]);
+});
+
+test("eventSourcedStatus: a log of only non-determining edges is idle, not null", async () => {
+  const id = "sess-nondetermining";
+  writeLog(id, [ev({ hook_event_name: "SubagentStop" }, "x")]);
+  expect(await eventSourcedStatus(id)).toBe("idle");
+});
+
+test("pendingToolCall: the turn's Stop in the current half hides an open PreToolUse in .old", () => {
+  const id = "sess-rotated-stop";
+  writeFileSync(
+    `${eventLogPath(id)}.old`,
+    JSON.stringify(ev({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_use_id: "tu_old" }, "x")) + "\n",
+  );
+  writeLog(id, [ev({ hook_event_name: "Stop" }, "x")]);
+  expect(pendingToolCall(id)).toBeNull();
+});
+
+test("pendingToolCall: an open PreToolUse in .old with no Stop since is still pending", () => {
+  const id = "sess-rotated-open";
+  writeFileSync(
+    `${eventLogPath(id)}.old`,
+    JSON.stringify(ev({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_use_id: "tu_open" }, "x")) + "\n",
+  );
+  writeLog(id, [
+    ev({ hook_event_name: "PreToolUse", tool_name: "Read", tool_use_id: "tu_done" }, "x"),
+    ev({ hook_event_name: "PostToolUse", tool_name: "Read", tool_use_id: "tu_done" }, "x"),
+  ]);
+  expect(pendingToolCall(id)?.toolUseId).toBe("tu_open");
 });
 
 // --- pendingToolCall -----------------------------------------------------------

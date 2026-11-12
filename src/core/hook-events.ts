@@ -13,9 +13,9 @@
  * discovery hot path (the log is bounded to 200–400 lines).
  */
 
-import { readFileSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readFileSync, readSync } from "node:fs";
 import { PATHS } from "./config";
-import { deriveStatus } from "./event-status";
+import { edgeStatus } from "./event-status";
 import type { PendingToolCall } from "./jsonl-reader";
 import { toPendingQuestion } from "./jsonl-reader";
 import type { HookEvent } from "../types";
@@ -69,19 +69,77 @@ export function readEvents(sessionId: string): HookEvent[] {
 }
 
 /**
+ * The same events as `readEvents`, newest first, parsed lazily from byte windows read
+ * off the end of each half. The per-tick callers (monitor, discovery, bridge) stop
+ * within the last few lines, while a full read JSON-parses every logged
+ * `tool_response` (MBs per session) on every tick.
+ */
+export function* eventsNewestFirst(sessionId: string): Generator<HookEvent> {
+  // Current half first — it holds the newer events. An early stop never opens `.old`.
+  for (const path of [eventLogPath(sessionId), `${eventLogPath(sessionId)}.old`]) {
+    for (const line of linesNewestFirst(path)) {
+      if (!line.trim()) continue;
+      try {
+        yield JSON.parse(line) as HookEvent;
+      } catch {
+        // corrupt/half-written line — skip
+      }
+    }
+  }
+}
+
+const TAIL_WINDOW = 64 * 1024;
+
+/** A file's lines, last first; nothing if it's absent. The open fd keeps reading the
+ *  same inode if a rotation renames it mid-walk. */
+function* linesNewestFirst(path: string): Generator<string> {
+  let fd: number;
+  try {
+    fd = openSync(path, "r");
+  } catch {
+    return;
+  }
+  try {
+    let pos = fstatSync(fd).size;
+    let partial = Buffer.alloc(0); // start of the already-walked region, line not yet complete
+    while (pos > 0) {
+      const n = Math.min(TAIL_WINDOW, pos);
+      pos -= n;
+      const window = Buffer.allocUnsafe(n);
+      readSync(fd, window, 0, n, pos);
+      const chunk = partial.length ? Buffer.concat([window, partial]) : window;
+      let end = chunk.length;
+      for (let i = chunk.length - 1; i >= 0; i--) {
+        if (chunk[i] !== 10) continue;
+        if (end > i + 1) yield chunk.toString("utf8", i + 1, end);
+        end = i;
+      }
+      partial = chunk.subarray(0, end);
+    }
+    if (partial.length) yield partial.toString("utf8");
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
  * Event-sourced status for a session, or `null` if it has no event log (the caller
  * then falls back to the `status.ts` scraper — ADR-2 opt-in by presence).
  *
- * Pure edges: the status is exactly what `deriveStatus` reads off the newest
+ * Pure edges: the status is exactly what `edgeStatus` reads off the newest
  * determining hook event. No transcript read, no timeout, no pairing — a dropped
  * terminal edge is rare and self-heals on the next event, which is far cheaper than
  * the false `ready`s a transcript backstop produced on long-running sessions.
  * `async` only to keep the call sites (which `await`) unchanged.
  */
 export async function eventSourcedStatus(sessionId: string): Promise<SessionStatus | null> {
-  const events = readEvents(sessionId);
-  if (events.length === 0) return null;
-  return deriveStatus(events);
+  let any = false;
+  for (const e of eventsNewestFirst(sessionId)) {
+    any = true;
+    const status = edgeStatus(e);
+    if (status) return status;
+  }
+  return any ? "idle" : null;
 }
 
 /**
@@ -91,30 +149,21 @@ export async function eventSourcedStatus(sessionId: string): Promise<SessionStat
  * `PendingToolCall` so the preview/Space-menu renderers consume it unchanged.
  */
 export function pendingToolCall(sessionId: string): PendingToolCall | null {
-  const events = readEvents(sessionId);
-  const closed = new Set<string>();
-  for (const e of events) {
-    if (e.hook_event_name === "PostToolUse" && e.tool_use_id) closed.add(e.tool_use_id);
-  }
   // A tool is only genuinely pending if it opened in the CURRENT (unfinished) turn.
   // After a `Stop` (turn end) every tool is done — even if its PostToolUse was never
   // captured (e.g. a Bash that spawned a detached process keeping the hook's pipe
   // open), so a PreToolUse before the last Stop is stale, not "running". A live
   // AskUserQuestion / permission prompt blocks mid-turn, so NO Stop follows it — it
-  // stays after the last Stop and is still surfaced.
-  let lastStop = -1;
-  for (let i = events.length - 1; i >= 0; i--) {
-    if (events[i]!.hook_event_name === "Stop") {
-      lastStop = i;
-      break;
-    }
-  }
+  // stays after the last Stop and is still surfaced. A tool's PostToolUse is appended
+  // after its PreToolUse, so walking newest first meets the close before the open.
   // Subagents log into the parent's session log and keep opening tools while the main
   // thread blocks, so their calls would shadow a held question. Their AskUserQuestion
   // still counts: the question hook doesn't filter subagents, so it can be held too.
+  const closed = new Set<string>();
   let pre: HookEvent | undefined;
-  for (let i = events.length - 1; i > lastStop; i--) {
-    const e = events[i];
+  for (const e of eventsNewestFirst(sessionId)) {
+    if (e.hook_event_name === "Stop") break;
+    if (e.hook_event_name === "PostToolUse" && e.tool_use_id) closed.add(e.tool_use_id);
     if (e.agent_id && e.tool_name !== "AskUserQuestion") continue;
     if (e.hook_event_name === "PreToolUse" && e.tool_use_id && !closed.has(e.tool_use_id)) {
       pre = e;

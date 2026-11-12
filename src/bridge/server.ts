@@ -1018,10 +1018,25 @@ function deviceOf(req: Request): string | undefined {
  * instead of refetching. A sessionId additionally schedules a transcript push
  * for that session's subscribers.
  */
+const IDLE_RECOMPUTE_MS = 15_000;
+let idleRecompute: ReturnType<typeof setTimeout> | null = null;
+
 function kickSessionsPush(sessionId?: string): void {
   // Fixtures mode: the canned payload IS the state — never let a real recompute
   // (whose discovery output would differ) get pushed over it.
   if (FIXTURES) {
+    if (sessionId) scheduleTranscriptPush(sessionId);
+    return;
+  }
+  // No stream client: hook events fire on every tool call in every session (~40 full
+  // recomputes/min measured), and nobody receives the push. Recompute at most every
+  // IDLE_RECOMPUTE_MS so naming (ADR 28) and the cached payload still move; a phone
+  // connecting gets that cached copy at once and a fresh recompute behind it.
+  if (stream.clientCount() === 0) {
+    idleRecompute ??= setTimeout(() => {
+      idleRecompute = null;
+      void startSessionsRefresh().catch(() => {});
+    }, IDLE_RECOMPUTE_MS);
     if (sessionId) scheduleTranscriptPush(sessionId);
     return;
   }
