@@ -1701,15 +1701,25 @@ async function route(req: Request): Promise<Response> {
   const snooze = path.match(/^\/sessions\/([^/]+)\/snooze$/);
   if (method === "POST" && snooze) {
     const id = decodeURIComponent(snooze[1]!);
-    const body = (await req.json().catch(() => ({}))) as { preset?: unknown };
-    if (typeof body.preset !== "string" || !isWakePreset(body.preset)) {
+    // Phone: {preset}. An agent snoozing its own session (dotfiles `snooze-self`): {until, prompt}
+    // — until is epoch ms or an ISO time, prompt the message the session resumes with.
+    const body = (await req.json().catch(() => ({}))) as { preset?: unknown; until?: unknown; prompt?: unknown };
+    const now = Date.now();
+    const wakeAt =
+      typeof body.preset === "string" && isWakePreset(body.preset)
+        ? presetWakeAt(now, body.preset)
+        : typeof body.until === "number"
+          ? body.until
+          : typeof body.until === "string"
+            ? Date.parse(body.until)
+            : NaN;
+    const wakePrompt = typeof body.prompt === "string" && body.prompt.trim() ? body.prompt.trim() : null;
+    if (!Number.isFinite(wakeAt) || wakeAt <= now || (body.prompt !== undefined && !wakePrompt)) {
       return json({ ok: false, reason: "bad-args" }, 400);
     }
     const store = getInboxStore();
     if (!store) return json({ ok: false, reason: "no-store" }, 500);
-    const now = Date.now();
-    const wakeAt = presetWakeAt(now, body.preset);
-    if (!store.snooze(id, wakeAt, now, deviceOf(req) ?? null)) {
+    if (!store.snooze(id, wakeAt, now, deviceOf(req) ?? null, wakePrompt)) {
       return json({ ok: false, reason: "archived" }, 409);
     }
     seedInboxRow(store, id, now);

@@ -22,6 +22,8 @@ export interface DueWake {
   snoozedAt: number;
   /** The portkey device that set the snooze — the wake push targets it. Null = Mac-set. */
   deviceId: string | null;
+  /** The session resumes with this as its next message; null = a plain resume at the prompt. */
+  wakePrompt: string | null;
 }
 
 /**
@@ -39,7 +41,7 @@ export function dueWakes(
   for (const [id, d] of dispositions) {
     if (d.kind !== "snoozed" || d.until === null || d.until > now) continue;
     if (d.autoResumed || archived.has(id) || liveSessionIds.has(id)) continue;
-    due.push({ sessionId: id, snoozedAt: d.createdAt, deviceId: d.deviceId });
+    due.push({ sessionId: id, snoozedAt: d.createdAt, deviceId: d.deviceId, wakePrompt: d.note });
   }
   return due;
 }
@@ -125,19 +127,27 @@ function snapshotRow(
   return {};
 }
 
+/** Single-quote for the window's `$SHELL -c`: the wake prompt is free text. */
+export function shellQuote(s: string): string {
+  return `'${s.replaceAll("'", `'\\''`)}'`;
+}
+
 async function spawnWakeWindow(
   sessionId: string,
   dir: string,
   repo: string,
   banner: string,
+  wakePrompt: string | null,
 ): Promise<WakeWindow | null> {
   // banner scrolls above claude's UI: walking into this window days later
   // should say WHY it exists (safe chars only — it runs through a shell).
   // Separator is printable on purpose: tmux sanitizes control chars (\t) to
   // `_` for clients running outside tmux — i.e. this daemon, always.
   // Trailing login shell (not `exec claude`) so the window survives claude exiting.
+  // A wake prompt rides as claude's positional prompt: the resumed session runs it as its next turn.
+  const resume = wakePrompt ? `claude -r ${sessionId} ${shellQuote(wakePrompt)}` : `claude -r ${sessionId}`;
   const out = (
-    await Bun.$`tmux new-window -d -P -F ${"#{pane_id}<|>#{session_name}<|>#{window_index}"} -c ${dir} -n ${`⚡${repo}`} ${`echo '${banner}'; claude -r ${sessionId}; exec ${USER_SHELL} -l`}`.text()
+    await Bun.$`tmux new-window -d -P -F ${"#{pane_id}<|>#{session_name}<|>#{window_index}"} -c ${dir} -n ${`⚡${repo}`} ${`echo '${banner}'; ${resume}; exec ${USER_SHELL} -l`}`.text()
   ).trim();
   const [paneId, sessionName, windowIndex] = out.split("<|>");
   if (!paneId || !sessionName || windowIndex === undefined) return null;
@@ -164,8 +174,12 @@ export async function wakePass(store: InboxStore, now = Date.now()): Promise<voi
         dir,
         row.repo ?? "wake",
         wakeBanner(w.snoozedAt, now),
+        w.wakePrompt,
       );
       if (!win) continue;
+      // A prompted wake is a session at work, not an alarm: its own turn-complete
+      // attention alerts once the check is done, so neither ⚡ nor a wake alert here.
+      if (w.wakePrompt) continue;
       const stamped = await stampWakeAttention(win.paneId);
       // Alert tier: a wake is an alarm the user set, so it alerts like any
       // attention event. Only once the session is genuinely ready — a resume

@@ -298,6 +298,23 @@ test("/shell refuses a second command while one is running", async () => {
   expect((await first).status).toBe(200);
 });
 
+test("/sessions/:id/snooze takes a preset, or an until (ms or ISO) with a wake prompt", async () => {
+  const { InboxStore } = await import("../core/inbox-store");
+  const store = new InboxStore(); // same temp-HOME db the bridge writes
+  const soon = Date.now() + 3_600_000;
+  const r1 = await post("/sessions/snz-prompt/snooze", { until: new Date(soon).toISOString(), prompt: " check the run " });
+  expect(r1.status).toBe(200);
+  const d = store.dispositions().get("snz-prompt")!;
+  expect(d.note).toBe("check the run");
+  expect(Math.abs(d.until! - soon)).toBeLessThan(1000);
+  expect((await post("/sessions/snz-ms/snooze", { until: soon })).status).toBe(200);
+  expect((await post("/sessions/snz-preset/snooze", { preset: "4h" })).status).toBe(200);
+  expect(store.dispositions().get("snz-preset")!.note).toBeNull();
+  for (const bad of [{ until: Date.now() - 1 }, { until: "not a time" }, { until: soon, prompt: "  " }, { preset: "2h" }, {}]) {
+    expect((await post("/sessions/snz-bad/snooze", bad)).status).toBe(400);
+  }
+});
+
 test("the bridge binds loopback only — a tailnet bind would take identity headers at face value", () => {
   for (const ok of ["127.0.0.1", "127.0.0.2", "localhost", "::1"]) expect(isAllowedHost(ok)).toBe(true);
   for (const no of ["100.77.206.39", "100.64.0.1", "0.0.0.0", "192.168.1.5", "::"]) expect(isAllowedHost(no)).toBe(false);

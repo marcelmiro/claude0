@@ -53,6 +53,7 @@ tmux calls follow CLAUDE.md's "tmux, from a tty-less process" gotchas.
 | Due snooze → detached `claude -r` in a `⚡` window, claimed atomically so no double-spawn | `wakePass` (`core/inbox-wake.ts`), `markAutoResumed` (`core/inbox-store.ts`) |
 | The wake's ⚡ waits for status `ready` (the boot spinner reads as running) | `stampWakeAttention` (`core/inbox-wake.ts`) |
 | Wake alert: push to the device that set the snooze; Mac-set → banner on darwin, broadcast push elsewhere | `core/inbox-wake.ts` |
+| A snooze with a wake prompt (an agent parking its own session through `POST /sessions/:id/snooze` `{until, prompt}`) resumes as `claude -r <id> '<prompt>'`, the prompt stored in the snoozed row's `note`. No ⚡ and no wake alert: the session works the prompt, and its own turn-complete attention alerts when it's done | `wakePass`, `shellQuote` (`core/inbox-wake.ts`) |
 | A verb landing mid-tick survives the snapshot replace; a bridge seed can't mask a dead daemon | `saveSnapshot`, `seedSnapshotRow` (`core/inbox-store.ts`) |
 | Reply observed: disposition + archive cleared in one transaction | `replyObserved` (`core/inbox-store.ts`) |
 | Pane-less rows resume via the restore target (deleted worktrees land in the base repo) | `resolveRestoreTarget` (`core/resurrect.ts`) |

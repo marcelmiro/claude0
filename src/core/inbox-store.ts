@@ -31,7 +31,8 @@ export interface DispositionRow {
   kind: DispositionKind;
   /** Wake timestamp (ms) — snoozed only. */
   until: number | null;
-  /** Free text — blocked only. Future: may hold a session ref (ADR 0013). */
+  /** Blocked: the free-text reason. Snoozed: the wake prompt the session resumes with, or null
+   * for a plain snooze (docs/inbox.md, Daemon and wakes). Future: may hold a session ref (ADR 0013). */
   note: string | null;
   createdAt: number;
   /** A woken snooze already auto-reopened its pane — never spawn twice. */
@@ -122,20 +123,26 @@ export class InboxStore {
 
   // ── verbs (each refuses invalid targets, mirrors ADR semantics) ──────────
 
-  /** Park until `until`. Re-snoozing re-arms the wake auto-reopen. */
-  snooze(sessionId: string, until: number, now: number, deviceId: string | null = null): boolean {
+  /** Park until `until`. Re-snoozing re-arms the wake auto-reopen and replaces the wake prompt. */
+  snooze(
+    sessionId: string,
+    until: number,
+    now: number,
+    deviceId: string | null = null,
+    wakePrompt: string | null = null,
+  ): boolean {
     return this.db.transaction(() => {
       if (this.isArchived(sessionId)) return false;
       this.db
         .query(
           `INSERT INTO dispositions(session_id, kind, until, note, created_at, auto_resumed, device_id)
-           VALUES (?, 'snoozed', ?, NULL, ?, 0, ?)
+           VALUES (?, 'snoozed', ?, ?, ?, 0, ?)
            ON CONFLICT(session_id) DO UPDATE SET
-             kind='snoozed', until=excluded.until, note=NULL,
+             kind='snoozed', until=excluded.until, note=excluded.note,
              created_at=excluded.created_at, auto_resumed=0, device_id=excluded.device_id`,
         )
-        .run(sessionId, until, now, deviceId);
-      this.event(sessionId, now, "snooze", { until });
+        .run(sessionId, until, wakePrompt, now, deviceId);
+      this.event(sessionId, now, "snooze", wakePrompt ? { until, wakePrompt } : { until });
       return true;
     })();
   }

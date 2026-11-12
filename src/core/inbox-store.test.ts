@@ -19,6 +19,14 @@ describe("verbs", () => {
     expect(d.autoResumed).toBe(false);
   });
 
+  test("a snooze keeps its wake prompt; a re-snooze replaces or drops it", () => {
+    const s = fresh();
+    s.snooze("a", 1000, 1, null, "check the 22:05Z run");
+    expect(s.dispositions().get("a")!.note).toBe("check the 22:05Z run");
+    s.snooze("a", 2000, 2);
+    expect(s.dispositions().get("a")!.note).toBeNull();
+  });
+
   test("block replaces a snooze; both refuse archived sessions", () => {
     const s = fresh();
     s.snooze("a", 1000, 1);

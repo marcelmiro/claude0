@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { dueWakes } from "./inbox-wake";
+import { dueWakes, shellQuote } from "./inbox-wake";
 import type { DispositionRow } from "./inbox-store";
 
 const NOW = 1_000_000;
@@ -32,6 +32,18 @@ describe("dueWakes", () => {
     const woken = dueWakes(disp, new Map(), new Set(), NOW);
     expect(woken.find((w) => w.sessionId === "phone-set")!.deviceId).toBe("dev-1");
     expect(woken.find((w) => w.sessionId === "mac-set")!.deviceId).toBeNull();
+  });
+
+  test("the wake prompt rides along; a plain snooze has none", () => {
+    const disp = new Map([snoozed("prompted", NOW - 1, { note: "check the run" }), snoozed("plain", NOW - 1)]);
+    const woken = dueWakes(disp, new Map(), new Set(), NOW);
+    expect(woken.find((w) => w.sessionId === "prompted")!.wakePrompt).toBe("check the run");
+    expect(woken.find((w) => w.sessionId === "plain")!.wakePrompt).toBeNull();
+  });
+
+  test("shellQuote survives quotes and shell metacharacters", async () => {
+    const prompt = `it's $HOME; \`id\` "x" && echo pwned`;
+    expect((await Bun.$`sh -c ${`printf %s ${shellQuote(prompt)}`}`.text())).toBe(prompt);
   });
 
   test("empty inputs wake nothing", () => {
