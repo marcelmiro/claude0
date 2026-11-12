@@ -46,6 +46,17 @@ describe("renderTranscript grammar", () => {
     expect(out).toEqual(["● Read src/a.ts", "", "● Bash bun test …", "  ⎿ 1 fail"]);
   });
 
+  test("a delivery is one dim line: summary, else idle for a bare ping, else the body's first line", () => {
+    const tm = (id: string, summary: string, body: string): TranscriptTurn => ({ role: "user", content: [], teammate: [{ id, summary, body }] });
+    expect(
+      lines([
+        tm("std", "2 findings", "{}"),
+        tm("ux", "", '{"type":"idle_notification"}'),
+        tm("throxy-8a", "", "\nAck: watcher stopped.\n\nMore."),
+      ]).filter(Boolean),
+    ).toEqual(["↳ std: 2 findings", "↳ ux: idle", "↳ throxy-8a: Ack: watcher stopped."]);
+  });
+
   test("three tool-only turns before the newest prompt fold into a tally", () => {
     const burst = [tool("Read", { file_path: "/r/a.ts" }), tool("Read", { file_path: "/r/b.ts" }), tool("Edit", { file_path: "/r/a.ts" }, false)];
     for (const [i, t] of burst.entries()) t.at = at(30 - i);

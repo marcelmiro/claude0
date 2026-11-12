@@ -300,9 +300,10 @@ export interface TranscriptTurn {
   // user bubble, making it clear the branch originated from a compact.
   compactSummary?: boolean;
   // Set on a message consumed from Claude Code's input queue MID-turn (a `queued_command`
-  // attachment record — it never becomes a `user` record). It ran like any prompt, but
-  // Claude's /rewind picker does not list it as a checkpoint, so rewind-count walks must
-  // skip queued turns or every earlier prompt's upCount shifts by one.
+  // attachment record — it never becomes a `user` record), and on a delivery the queue
+  // wrote as an `isMeta` user record. It ran like any prompt, but Claude's /rewind picker
+  // does not list it as a checkpoint, so rewind-count walks must skip queued turns or
+  // every earlier prompt's upCount shifts by one.
   queued?: boolean;
   // Set on an executed slash command (`<command-name>` runner record): the typed command
   // ("/pr-triage args"), shown as a normal user message — the terminal echoes commands as
@@ -315,12 +316,14 @@ export interface TranscriptTurn {
   bash?: { command: string; stdout: string; stderr: string };
   // Set on a Claude-teams mailbox delivery: the harness injects a teammate session's
   // message into this transcript as a `user` record ("Another Claude session sent a
-  // message:" + one or more `<teammate-message>` blocks). Not typed by the user — the
+  // message:" + one or more `<teammate-message>` blocks), or another top-level session's
+  // `<cross-session-message>` (`id` is its `from-name`). Not typed by the user — the
   // UI renders teammate rows, not a user bubble. One entry per block; `summary` is the
   // tag's summary attribute, else the payload JSON's `summary` field, else "" (a bare
   // idle ping); `color` is the harness-assigned teammate color name, verbatim.
-  // `content` is empty. These ARE real user-role API messages that start turns, so
-  // rewind-count walks treat them like typed prompts.
+  // `content` is empty. A turn-end delivery (non-meta `user` record) is a real user-role
+  // API message that starts a turn, so rewind-count walks treat it like a typed prompt;
+  // the queue-consumed carriers also set `queued` and are skipped.
   teammate?: Array<{ id: string; color?: string; summary: string; body: string }>;
 }
 

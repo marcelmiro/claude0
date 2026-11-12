@@ -343,6 +343,13 @@ function burstLine(turns: TranscriptTurn[], max: number): Line {
   };
 }
 
+/** A delivery's one-line head: its summary, else "idle" for a bare ping, else its first line. */
+function teammateHead(m: NonNullable<TranscriptTurn["teammate"]>[number]): string {
+  if (m.summary) return m.summary;
+  if (/"type"\s*:\s*"idle_notification"/.test(m.body)) return "idle";
+  return m.body.split("\n").find((l) => l.trim())?.trim() ?? "";
+}
+
 /** A turn that is nothing but tool calls (an answered question is conversation). */
 export function isToolOnly(t: TranscriptTurn): boolean {
   return (
@@ -395,7 +402,7 @@ function turnItems(t: TranscriptTurn, o: RenderOpts): { lines: Line[]; prompt?: 
   if (t.command) return [{ lines: promptLines(t.command, o), prompt: true }];
   if (t.bash) return [{ lines: bashLines(t.bash, o), prompt: true }];
   if (t.teammate) {
-    return [{ lines: t.teammate.map((m) => ({ spans: clip([{ t: `↳ ${m.id}: ${m.summary || "idle"}`, fg: C.dim }], o.width) })) }];
+    return [{ lines: t.teammate.map((m) => ({ spans: clip([{ t: `↳ ${m.id}: ${teammateHead(m)}`, fg: C.dim }], o.width) })) }];
   }
   if (t.role === "user") {
     const texts = t.content.flatMap((b) => (b.type === "text" ? [b.text] : b.type === "image" ? ["[image]"] : []));

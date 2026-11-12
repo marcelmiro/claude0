@@ -159,6 +159,8 @@ const NON_PROMPT_PREFIXES = [
   // every time a teammate pings. (It stays a rewind checkpoint on the phone — this list
   // and isPromptTurn diverge deliberately here.)
   "Another Claude session sent a message:",
+  // A peer session's message absorbed mid-turn: its attachment carries the bare block.
+  "<cross-session-message",
 ];
 
 /**

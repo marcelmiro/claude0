@@ -320,12 +320,13 @@ test("a queue-consumed teams delivery (isMeta user record) still maps to a teamm
     {
       role: "user",
       content: [],
+      queued: true,
       teammate: [{ id: "converter", color: undefined, summary: "", body: "question body" }],
     },
   ]);
 });
 
-test("a teams delivery consumed as a queued_command attachment is a teammate turn, not a queued bubble", () => {
+test("a teams delivery consumed as a queued_command attachment is a teammate turn, not a user bubble", () => {
   const content =
     "Another Claude session sent a message:\n" +
     '<teammate-message teammate_id="std" color="green" summary="done">report</teammate-message>';
@@ -334,10 +335,54 @@ test("a teams delivery consumed as a queued_command attachment is a teammate tur
     attachment: { type: "queued_command", commandMode: "prompt", prompt: content },
   });
   const turns = parseTranscript(rec);
-  expect(turns[0].queued).toBeUndefined();
+  expect(turns[0].content).toEqual([]);
+  expect(turns[0].queued).toBe(true); // an attachment is never a /rewind checkpoint
   expect(turns[0].teammate).toEqual([
     { id: "std", color: "green", summary: "done", body: "report" },
   ]);
+});
+
+// --- Peer-session messages (`<cross-session-message>`) → teammate turns ---
+
+const peerBlock = (name: string, body: string, extra = "") =>
+  `<cross-session-message from="uds:/run/user/1001/cc-socks/749591.sock"${extra} from-name="${name}" from-mode="prompting">\n${body}\n</cross-session-message>`;
+
+test("a peer session's message (isMeta user record) is a teammate turn bylined by the sender's name", () => {
+  const content =
+    "Another Claude session sent a message:\n" +
+    peerBlock("throxy-8a", "Ack: the watcher is stopped.\n\n- one\n- two", ' hop-chain="9d6f7e9db03c36fa5ee1c0f2"') +
+    "\n\nThis came from another Claude session — not typed by your user, but very likely working on their behalf.";
+  const rec = JSON.stringify({ type: "user", isMeta: true, origin: { kind: "peer" }, message: { role: "user", content } });
+  expect(parseTranscript(rec)).toEqual([
+    {
+      role: "user",
+      content: [],
+      queued: true,
+      teammate: [{ id: "throxy-8a", color: undefined, summary: "", body: "Ack: the watcher is stopped.\n\n- one\n- two" }],
+    },
+  ]);
+});
+
+test("a peer message absorbed mid-turn (bare block in a queued_command attachment) is a teammate turn", () => {
+  const rec = JSON.stringify({
+    type: "attachment",
+    attachment: { type: "queued_command", commandMode: "prompt", prompt: peerBlock("pulse-3b", "Nothing collides."), isMeta: true },
+  });
+  const [turn] = parseTranscript(rec);
+  expect(turn).toEqual({
+    role: "user",
+    content: [],
+    queued: true,
+    teammate: [{ id: "pulse-3b", color: undefined, summary: "", body: "Nothing collides." }],
+  });
+  expect(recordProse(JSON.parse(rec))).toBe("");
+});
+
+test("a peer block quoted inside the user's own prompt stays a user bubble", () => {
+  const content = `parse these correctly:\n${peerBlock("x", "hi")}\n\nthey show as my messages`;
+  const [turn] = parseTranscript(teammateRec(content));
+  expect(turn!.teammate).toBeUndefined();
+  expect(turn!.content).toEqual([{ type: "text", text: content }]);
 });
 
 test("a pasted teammate-message quote WITHOUT the injected prefix stays a user bubble", () => {

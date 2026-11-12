@@ -69,13 +69,14 @@ export function markPortkeySource(
 
 /**
  * Turns the harness injects, which Claude logs as `UserPromptSubmit` with a
- * prompt_id of their own: a completed background task and a subagent's hand-back.
+ * prompt_id of their own: a completed background task, a subagent's hand-back and
+ * another session's message.
  * The human did not type them, so they must not shadow the portkey marker — the
  * phone still drove this session. Sibling list for JSONL records (not hook events):
  * `NON_PROMPT_PREFIXES` in last-turn.ts.
  */
 const INJECTED_PROMPT =
-  /^\s*<(task-notification|agent-message|teammate-message|system-reminder)\b/;
+  /^\s*<(task-notification|agent-message|teammate-message|cross-session-message|system-reminder)\b/;
 
 /**
  * Whether the most recent input on this session came from portkey — and if so,

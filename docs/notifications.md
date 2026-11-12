@@ -41,7 +41,7 @@ Hook-held approvals push on their own path (`dispatchHeldApprovalPushes`), dedup
 | Concern | Where |
 |---|---|
 | Source marker written on portkey actions, read at dispatch; the `text` vs `prompt_id` anchors | `markPortkeySource`, `sourceForSession` (`core/input-source.ts`) |
-| Harness-injected turns (task notifications, agent/teammate hand-backs) must not shadow the marker | `INJECTED_PROMPT` (`core/input-source.ts`) |
+| Harness-injected turns (task notifications, agent/teammate hand-backs, peer-session messages) must not shadow the marker | `INJECTED_PROMPT` (`core/input-source.ts`) |
 | `deviceId`: minted in localStorage, sent as `x-claude0-device` and `?device=` on the stream | `app.js` (`DEVICE_ID`) |
 
 ## Suppression and retry

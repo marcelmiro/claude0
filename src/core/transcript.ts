@@ -63,20 +63,24 @@ const BASH_OUTPUT_OPEN = /^\s*<bash-(?:stdout|stderr)>/;
 /**
  * Claude-teams mailbox delivery: a teammate session's message injected into this
  * transcript as a `user` record — "Another Claude session sent a message:" followed by
- * one or more tagged blocks and a trailing trust-boundary boilerplate. Two wrappers
- * exist: `<teammate-message teammate_id= color= [summary=]>` (mailbox deliveries) and
- * `<agent-message from=>` (direct agent reports — no color or summary attributes).
+ * one or more tagged blocks and a trailing trust-boundary boilerplate. Three wrappers
+ * exist: `<teammate-message teammate_id= color= [summary=]>` (mailbox deliveries),
+ * `<agent-message from=>` (direct agent reports — no color or summary attributes) and
+ * `<cross-session-message from= [hop-chain=] from-name= from-mode=>` (another top-level
+ * session on this machine; `from` is its socket path, `from-name` the readable sender).
  * Gate on the injected PREFIX, not the tag alone: a user pasting a quoted teammate
  * block mid-message must keep rendering as their own text. The summary lives either as
  * a `summary` attribute on the tag or as a `summary` field in a JSON payload
  * (idle_notification records use the latter).
  */
 const TEAMMATE_PREFIX = /^\s*Another Claude session sent a message:/;
-const TEAMMATE_MESSAGE = /<(teammate-message|agent-message)\b([^>]*)>([\s\S]*?)<\/\1>/g;
+const TEAMMATE_MESSAGE = /<(teammate-message|agent-message|cross-session-message)\b([^>]*)>([\s\S]*?)<\/\1>/g;
 // A direct report delivered with no prefix at all: the record is exactly one tagged block
-// (observed for `SendMessage` to "main" from a named subagent). Nothing surrounds the tag,
-// so a pasted quote — which sits inside the user's own prose — still can't match.
-const BARE_DELIVERY = /^\s*<(teammate-message|agent-message)\b[^>]*>[\s\S]*<\/\1>\s*$/;
+// (observed for `SendMessage` to "main" from a named subagent, and for every peer-session
+// message on the input queue: its `queue-operation` and its mid-turn `queued_command`
+// attachment). Nothing surrounds the tag, so a pasted quote — which sits inside the
+// user's own prose — still can't match.
+const BARE_DELIVERY = /^\s*<(teammate-message|agent-message|cross-session-message)\b[^>]*>[\s\S]*<\/\1>\s*$/;
 
 /** Harness-injected teams delivery (prefixed, or a bare tagged block) — never the user's own text. */
 export function isTeammateDelivery(text: string): boolean {
@@ -115,7 +119,10 @@ function parseTeammateDelivery(text: string): TranscriptTurn["teammate"] | null 
       } catch {} // non-JSON payload — no summary to lift
     }
     msgs.push({
-      id: attrs.match(/(?:teammate_id|from)="([^"]*)"/)?.[1] ?? "teammate",
+      id:
+        attrs.match(/(?:teammate_id|from-name)="([^"]*)"/)?.[1] ??
+        attrs.match(/from="([^"]*)"/)?.[1] ??
+        "teammate",
       color: attrs.match(/color="([^"]*)"/)?.[1],
       summary,
       body: handbackReport(body) ?? body,
@@ -188,17 +195,19 @@ function recordToTurnBody(record: RawRecord): FoldableTurn | null {
     const text = typeof record.attachment?.prompt === "string" ? record.attachment.prompt : "";
     if (!text || LOCAL_COMMAND_META.test(text) || TASK_NOTIFICATION.test(text)) return null;
     // A teams delivery consumed mid-turn from the input queue is still a teammate
-    // message, not something the user queued — render it as a teammate turn.
+    // message, not something the user queued — render it as a teammate turn. `queued`
+    // stays set: like any attachment it is absent from Claude's /rewind picker.
     const attachedTeammate = parseTeammateDelivery(text);
-    if (attachedTeammate) return { role: "user", content: [], teammate: attachedTeammate };
+    if (attachedTeammate) return { role: "user", content: [], queued: true, teammate: attachedTeammate };
     return { role: "user", content: [{ type: "text", text }], queued: true };
   }
   if (record.type !== "user" && record.type !== "assistant") return null;
   const content = record.message?.content;
   if (record.isMeta) {
     // The one meta shape we surface: a queue-consumed teams delivery lands as an
-    // isMeta user record (turn-end deliveries arrive non-meta). Everything else
-    // meta stays hidden.
+    // isMeta user record (turn-end deliveries arrive non-meta; a peer session's
+    // message is always meta). Everything else meta stays hidden. `queued` because
+    // Claude's /rewind picker lists no isMeta record.
     if (record.type === "user") {
       const text =
         typeof content === "string"
@@ -210,7 +219,7 @@ function recordToTurnBody(record: RawRecord): FoldableTurn | null {
                 .join("\n")
             : "";
       const metaTeammate = parseTeammateDelivery(text);
-      if (metaTeammate) return { role: "user", content: [], teammate: metaTeammate };
+      if (metaTeammate) return { role: "user", content: [], queued: true, teammate: metaTeammate };
     }
     return null;
   }

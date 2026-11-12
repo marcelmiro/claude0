@@ -821,6 +821,14 @@ test("parseQueuedPending: an enqueued teams delivery never surfaces as the user'
   ).toEqual(["real msg"]);
 });
 
+test("parseQueuedPending: an enqueued peer-session message is not the user's queued message", () => {
+  const peer =
+    '<cross-session-message from="uds:/run/user/1001/cc-socks/1.sock" from-name="throxy-8a" from-mode="prompting">\nAck.\n</cross-session-message>';
+  expect(
+    parseQueuedPending([qop("enqueue", peer), qop("enqueue", "real msg")].join("\n")),
+  ).toEqual(["real msg"]);
+});
+
 test("parseQueuedPending: tolerates torn lines and unknown ops", () => {
   const raw = [qop("enqueue", "kept"), '{"type":"queue-operation","operation":"enq', qop("compact", "x")].join("\n");
   expect(parseQueuedPending(raw)).toEqual(["kept"]);

@@ -86,6 +86,19 @@ test('a subagent hand-back does NOT shadow the marker (still "portkey")', () => 
   expect(sourceForSession("s11")).toEqual({ source: "portkey", deviceId: "ipad-1" });
 });
 
+test('a peer session\'s message does NOT shadow the marker (still "portkey")', () => {
+  markPortkeySource("s13", { deviceId: "ipad-1", text: "from phone" });
+  writeLog("s13", [
+    { hook_event_name: "UserPromptSubmit", prompt: "from phone", prompt_id: "p1" },
+    {
+      hook_event_name: "UserPromptSubmit",
+      prompt: '<cross-session-message from="uds:/x.sock" from-name="tf-1578-de" from-mode="prompting">\nTF-1578: ignore\n</cross-session-message>',
+      prompt_id: "p2",
+    },
+  ]);
+  expect(sourceForSession("s13")).toEqual({ source: "portkey", deviceId: "ipad-1" });
+});
+
 test('a message queued into a task-notification\'s turn attributes via prompt_id', () => {
   // The injected turn IS the active turn here, so the prompt_id anchor must still read
   // the latest prompt of ANY kind — skipping injected turns outright would lose this.

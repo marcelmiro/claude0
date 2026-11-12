@@ -92,6 +92,17 @@ test("isPromptRecord: typed prompts yes; plumbing user records no", () => {
       prompt("Another Claude session sent a message:\n<teammate-message teammate_id=\"x\">", "t"),
     ),
   ).toBe(false);
+  // A peer session's message absorbed mid-turn: a prompt-mode attachment, not the human.
+  expect(
+    isPromptRecord({
+      type: "attachment",
+      attachment: {
+        type: "queued_command",
+        commandMode: "prompt",
+        prompt: '<cross-session-message from="uds:/x.sock" from-name="a" from-mode="prompting">\nhi\n</cross-session-message>',
+      },
+    }),
+  ).toBe(false);
   expect(
     isPromptRecord({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "x" }] } }),
   ).toBe(false);
