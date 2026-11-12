@@ -39,7 +39,7 @@ import { recoverWorktreeTranscript } from "./recover";
 import { buildBaseName } from "./notifications";
 import { inheritName, loadNameCache, saveNameCache, slugify } from "./names";
 import { getLatestUserPrompt } from "./sessions";
-import { parseBackgroundTasks, liveScripts, type BackgroundTask } from "./background-tasks";
+import { parseBackgroundTasks, liveScripts, agentScriptsAt, type BackgroundTask } from "./background-tasks";
 import { decideQuestion, declineQuestion, buildAnswersMap } from "./approval";
 import { nativeStatus, parkedJobSessions } from "./session-state";
 import { jsonlLines, type PendingQuestion, type PendingToolCall } from "./jsonl-reader";
@@ -1180,11 +1180,15 @@ async function readActiveBranchCached(allPaths: string[]): Promise<BranchRead> {
     const hit = branchCache.get(cacheKey);
     // pendingScripts is derived per READ, not cached: the runner-liveness probe must
     // keep running while the files — and thus the cache entry — sit still, or a wait
-    // whose runner died would stay visible until the transcript next changes.
+    // whose runner died would stay visible until the transcript next changes. The
+    // agents' scripts join here for the same reason: their launches are in the agents'
+    // own files (`scanAgentScripts`), which change without these files changing.
+    const live = async (tasks: BackgroundTask[]) =>
+      liveScripts([...tasks, ...(await agentScriptsAt(files[files.length - 1]!.path))]);
     if (hit && hit.statKey === statKey)
       return {
         turns: hit.turns,
-        pendingScripts: await liveScripts(hit.backgroundTasks),
+        pendingScripts: await live(hit.backgroundTasks),
         queuedPending: hit.queuedPending,
         usage: hit.usage,
         rev: hit.rev,
@@ -1210,7 +1214,7 @@ async function readActiveBranchCached(allPaths: string[]): Promise<BranchRead> {
     branchCache.set(cacheKey, entry);
     return {
       turns: entry.turns,
-      pendingScripts: await liveScripts(entry.backgroundTasks),
+      pendingScripts: await live(entry.backgroundTasks),
       queuedPending: entry.queuedPending,
       usage: entry.usage,
       rev: entry.rev,

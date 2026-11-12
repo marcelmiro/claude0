@@ -4,9 +4,9 @@
 import "../../test/helpers/home";
 import { CONFIG_DIR } from "../../test/helpers/home";
 import { describe, expect, test, beforeEach } from "bun:test";
-import { rmSync } from "node:fs";
+import { rmSync, mkdirSync, writeFileSync, utimesSync } from "node:fs";
 import { join } from "node:path";
-import { parseBackgroundTasks, pendingScripts, liveScripts, isServiceScript } from "./background-tasks";
+import { parseBackgroundTasks, pendingScripts, liveScripts, isServiceScript, scanAgentScripts } from "./background-tasks";
 
 // Dead verdicts are terminal AND persisted, so they would otherwise leak between tests.
 beforeEach(() => rmSync(join(CONFIG_DIR, "verdicts"), { recursive: true, force: true }));
@@ -466,6 +466,7 @@ test("isServiceScript: servers and tunnels are services, by label", () => {
     "Start Next.js dev server on :3000 (prod supabase)",
     "Open the SSM port-forward to the Libretto QA API",
     "Open the Maestro RDS tunnel in the background",
+    "Open Maestro Postgres and ClickHouse tunnels",
     "Run local production server on :3002 (background)",
     "Start embedded Postgres 18 on port 5439",
     "Restart embedded Postgres for the test re-run",
@@ -537,4 +538,61 @@ test("a background launch carries the service flag from its label or command", (
     ] } }),
   ]);
   expect(tasks.map((t) => [t.taskId, t.service])).toEqual([["b1", true], ["b2", undefined]]);
+});
+
+describe("scanAgentScripts", () => {
+  const PROJECTS = join(CONFIG_DIR, "agent-scan");
+  const SESSION = join(PROJECTS, "repo", "sess.jsonl");
+  const agentFile = (name: string, lines: string[], mtimeS: number, proj = "repo") => {
+    const subs = join(PROJECTS, proj, "sess", "subagents");
+    mkdirSync(subs, { recursive: true });
+    writeFileSync(join(subs, name), lines.join("\n"));
+    utimesSync(join(subs, name), mtimeS, mtimeS);
+  };
+  const ids = (scan: Awaited<ReturnType<typeof scanAgentScripts>>) =>
+    scan?.pending.map((t) => `${t.src.replace("/sess/subagents/", ":")}:${t.taskId}`).sort();
+  beforeEach(() => rmSync(PROJECTS, { recursive: true, force: true }));
+
+  test("a session with no agent transcripts scans to undefined", async () => {
+    expect(await scanAgentScripts(SESSION)).toBeUndefined();
+  });
+
+  test("collects each agent's pending scripts, skipping finished ones and non-agent files", async () => {
+    agentFile("agent-a1.jsonl", bashLaunch("toolu_1", "bwait"), 1000);
+    agentFile("agent-a2.jsonl", [...bashLaunch("toolu_2", "bdone"), line({ type: "user", message: { content: notif("bdone", "toolu_2") } })], 1000);
+    agentFile("aside_question-x.jsonl", bashLaunch("toolu_3", "baside"), 1000);
+    expect(ids(await scanAgentScripts(SESSION))).toEqual(["repo:agent-a1.jsonl:bwait"]);
+  });
+
+  test("unchanged files return the previous scan itself; only a modified file is re-parsed", async () => {
+    agentFile("agent-a1.jsonl", bashLaunch("toolu_1", "bone"), 1000);
+    agentFile("agent-a2.jsonl", bashLaunch("toolu_2", "btwo"), 1000);
+    const first = await scanAgentScripts(SESSION);
+    expect(await scanAgentScripts(SESSION, first)).toBe(first!);
+
+    // a1 is rewritten WITHOUT its mtime moving past the scan: it must not be re-read.
+    agentFile("agent-a1.jsonl", bashLaunch("toolu_1", "bstale"), 1000);
+    agentFile("agent-a2.jsonl", bashLaunch("toolu_2", "bnew"), 2000);
+    const second = await scanAgentScripts(SESSION, first);
+    expect(ids(second)).toEqual(["repo:agent-a1.jsonl:bone", "repo:agent-a2.jsonl:bnew"]);
+    expect(second!.newest).toBe(2_000_000);
+  });
+
+  test("finds agent transcripts under another project dir than the session's transcript", async () => {
+    // A session that moved into a worktree: the agent's file lands under the worktree's
+    // project dir, the transcript stays in the base repo's.
+    agentFile("agent-a1.jsonl", bashLaunch("toolu_1", "bworktree"), 1000, "repo--worktrees-x");
+    agentFile("agent-a2.jsonl", bashLaunch("toolu_2", "bother"), 1000, "repo");
+    writeFileSync(join(PROJECTS, "repo", "other.jsonl"), ""); // another session's dir is not swept in
+    mkdirSync(join(PROJECTS, "repo", "other", "subagents"), { recursive: true });
+    writeFileSync(join(PROJECTS, "repo", "other", "subagents", "agent-a3.jsonl"), bashLaunch("toolu_3", "bforeign").join("\n"));
+    expect(ids(await scanAgentScripts(SESSION))).toEqual(["repo--worktrees-x:agent-a1.jsonl:bworktree", "repo:agent-a2.jsonl:bother"]);
+  });
+
+  test("a deleted agent transcript takes its scripts with it", async () => {
+    agentFile("agent-a1.jsonl", bashLaunch("toolu_1", "bone"), 1000);
+    const first = await scanAgentScripts(SESSION);
+    rmSync(join(PROJECTS, "repo", "sess", "subagents", "agent-a1.jsonl"));
+    expect(ids(await scanAgentScripts(SESSION, first))).toEqual([]);
+  });
 });

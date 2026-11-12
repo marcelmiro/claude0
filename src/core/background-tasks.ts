@@ -36,6 +36,9 @@
  * - A successful `TaskStop` result (`{"message":"Successfully stopped task: <id>`)
  *   kills that task: a stopped Monitor gets no notification at all. Only a result
  *   paired with a `TaskStop` tool_use counts, so printed output of that shape can't.
+ * - A script launched by one of the session's agents (a fork, a teammate, a subagent)
+ *   is recorded in that agent's own transcript, never in the session's: see
+ *   `scanAgentScripts`.
  */
 
 import { resolveVerdicts, runnersAlive, type RunnerProbe } from "./runner-verdicts";
@@ -271,7 +274,7 @@ export function pendingScripts(tasks: BackgroundTask[]): BackgroundTask[] {
 // on. The label (the model-written description) names it, or the command binds a port,
 // opens a tunnel or runs a dev server. A label that opens with a wait verb is a wait
 // even when it names a service ("Wait for the preview deploy").
-const SERVICE_NOUN = /\b(dev server|server(?!-)|serve|tunnel|port[- ]forward|ssm|vite|next dev|localhost|proxy|preview|embedded postgres)\b|\bon port \d+/i;
+const SERVICE_NOUN = /\b(dev server|server(?!-)|serve|tunnels?|port[- ]forward|ssm|vite|next dev|localhost|proxy|preview|embedded postgres)\b|\bon port \d+/i;
 const SERVICE_COMMAND = /(?<![A-Z0-9_])PORT=\d+|--port[ =]\d+|\bssm start-session\b|-L \d+:|\b(vite|next dev|serve)\b|\bngrok (http|tcp|tls|start)\b|\brun dev\b|\bconvex[: ]dev\b|(?:^|\s)bridge\s*(?:$|[;&|>])/;
 const WAIT_VERB = /^\s*(background[- ])?(wait|poll|watch|monitor)\b/i;
 
@@ -323,6 +326,80 @@ export function taskLive(task: { deadline?: number; outputPath?: string }, verdi
   return !task.outputPath || verdict === true;
 }
 
+/** A pending script one of the session's agents launched; `src` is the agent transcript, relative to the projects dir. */
+export type AgentScript = BackgroundTask & { src: string };
+
+/** A session's agent-launched pending scripts, current up to the `newest` agent-transcript mtime. */
+export interface AgentScripts {
+  newest: number;
+  pending: AgentScript[];
+}
+
+/**
+ * The pending scripts a session's agents launched, read from the agents' own transcripts
+ * (`<proj>/<sessionId>/subagents/agent-*.jsonl`: forks, teammates and subagents all write
+ * there). The session's own transcript never records these launches, so without this a
+ * session whose fork stopped to wait on its own script reads as having no background
+ * work at all.
+ *
+ * Every project dir is searched, not just the transcript's: an agent's file lands under
+ * the project dir of the session's cwd at launch, and a session that moved into a
+ * worktree keeps its transcript in the base repo's dir.
+ *
+ * "Pending" here is weaker than in the session's transcript: once the agent has stopped,
+ * the harness delivers the script's completion notice to the PARENT, so the agent's file
+ * says pending forever. Only the runner probe (`taskLive`) makes these honest — every
+ * script carries an output path or a Monitor deadline, so each one resolves. A Monitor
+ * whose end notice went to the parent shows until its deadline (≤30m).
+ *
+ * Incremental against `prev`: only files modified after `prev.newest` are re-parsed, the
+ * rest keep their tasks, so a steady-state call costs one stat per agent file (<2ms for
+ * 91 files). Returns `prev` itself when nothing changed, and undefined when the session
+ * has no agent transcripts.
+ */
+export async function scanAgentScripts(transcriptPath: string, prev?: AgentScripts): Promise<AgentScripts | undefined> {
+  const [, dir, sessionId] = transcriptPath.match(/^(.*)\/[^/]+\/([A-Za-z0-9-]+)\.jsonl$/) ?? [];
+  if (!dir || !sessionId) return prev;
+  const files: { name: string; mtimeMs: number }[] = [];
+  try {
+    const names = await Array.fromAsync(new Bun.Glob(`*/${sessionId}/subagents/agent-*.jsonl`).scan({ cwd: dir }));
+    await Promise.all(
+      names.map(async (name) => {
+        try {
+          files.push({ name, mtimeMs: (await Bun.file(`${dir}/${name}`).stat()).mtimeMs });
+        } catch {
+          // vanished between the scan and the stat
+        }
+      }),
+    );
+  } catch {
+    // unreadable projects dir — no agent transcripts
+  }
+  const present = new Set(files.map((f) => f.name));
+  const changed = files.filter((f) => f.mtimeMs > (prev?.newest ?? -1));
+  if (prev ? changed.length === 0 && prev.pending.every((t) => present.has(t.src)) : files.length === 0) return prev;
+  const reparsed = new Set(changed.map((f) => f.name));
+  const pending = (prev?.pending ?? []).filter((t) => present.has(t.src) && !reparsed.has(t.src));
+  for (const { name } of changed) {
+    try {
+      for (const t of pendingScripts(await parseBackgroundTasksFile(`${dir}/${name}`))) pending.push({ ...t, src: name });
+    } catch {
+      // unreadable agent transcript — no tasks from it
+    }
+  }
+  return { newest: Math.max(prev?.newest ?? -1, ...files.map((f) => f.mtimeMs)), pending };
+}
+
+// `scanAgentScripts` state for a long-lived caller (the bridge), per session transcript.
+const agentCache = new Map<string, AgentScripts>();
+
+/** A transcript's agent-launched pending scripts, incrementally cached in this process. */
+export async function agentScriptsAt(transcriptPath: string): Promise<AgentScript[]> {
+  const scan = await scanAgentScripts(transcriptPath, agentCache.get(transcriptPath));
+  if (scan) agentCache.set(transcriptPath, scan);
+  return scan?.pending ?? [];
+}
+
 // Per-transcript cache keyed by (size, mtime) — launch and notification are both
 // transcript records, so an unchanged file means an unchanged answer. Shared by the
 // detail view and the sessions-list badge, so a change costs one scan total. Caches the
@@ -330,17 +407,21 @@ export function taskLive(task: { deadline?: number; outputPath?: string }, verdi
 // can die while the file (and thus this cache entry) sits still.
 const pathCache = new Map<string, { size: number; mtimeMs: number; tasks: BackgroundTask[] }>();
 
-/** Cached live pending scripts for a transcript file (runner-probed). [] on unreadable. */
+/**
+ * Cached live pending scripts for a transcript file and the agents it launched
+ * (runner-probed). [] on unreadable.
+ */
 export async function pendingScriptsAt(path: string): Promise<BackgroundTask[]> {
   try {
     const file = Bun.file(path);
     const stat = await file.stat();
     if (!stat) return [];
-    const hit = pathCache.get(path);
-    if (hit && hit.size === stat.size && hit.mtimeMs === stat.mtimeMs) return liveScripts(hit.tasks);
-    const tasks = await parseBackgroundTasksFile(path);
-    pathCache.set(path, { size: stat.size, mtimeMs: stat.mtimeMs, tasks });
-    return liveScripts(tasks);
+    let hit = pathCache.get(path);
+    if (!hit || hit.size !== stat.size || hit.mtimeMs !== stat.mtimeMs) {
+      hit = { size: stat.size, mtimeMs: stat.mtimeMs, tasks: await parseBackgroundTasksFile(path) };
+      pathCache.set(path, hit);
+    }
+    return liveScripts([...hit.tasks, ...(await agentScriptsAt(path))]);
   } catch {
     return [];
   }

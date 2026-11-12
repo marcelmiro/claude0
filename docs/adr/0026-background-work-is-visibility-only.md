@@ -1,7 +1,7 @@
 # 26. Background work is one visibility-only surface
 
 Date: 2026-08-24 (records decisions made when the feature shipped, 2026-07-21 → 27)
-Status: accepted; amended 2026-10-24 (a script Claude waits on holds inbox placement), 2026-11-06 (the hold lasts 12h, not 2h), 2026-11-08 (a Monitor is a script, live until its deadline)
+Status: accepted; amended 2026-10-24 (a script Claude waits on holds inbox placement), 2026-11-06 (the hold lasts 12h, not 2h), 2026-11-08 (a Monitor is a script, live until its deadline), 2026-11-12 (scripts the session's agents launched count too, read from the agents' transcripts)
 
 How detection, the runner-liveness probe, the caches and the phone sheet work:
 [docs/background-work.md](../background-work.md).
@@ -14,8 +14,9 @@ in the tmux window said the session was still mid-work. Separately, async agents
 and their reports can't be read from the phone (tool_results are stripped from the
 thread), so a finished agent simply vanished.
 
-There is no live registry to ask. The harness records background work only in the
-session's transcript: a `tool_use` launch, a `tool_result` confirming it, and much later a
+There is no live registry to ask. The harness records background work only in
+transcripts (the session's, and each agent's own for what that agent launched): a
+`tool_use` launch, a `tool_result` confirming it, and much later a
 `<task-notification>` when it completes. "Pending" has to be recovered from that record,
 and the record can lie. A session resumed under a new Claude process orphans its tasks:
 the runner is dead and the notification never comes, so the transcript says "pending"

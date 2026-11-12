@@ -8,8 +8,8 @@
  *    with `liveScripts`, which has tasks but no session id.
  *
  * Both are on disk because none of the callers outlive the work: the monitor is a
- * fresh process per tmux status tick. Steady-state cost per call is one stat per candidate session,
- * and one `lsof` for all genuinely-live runners every ~15s.
+ * fresh process per tmux status tick. Steady-state cost per call is one stat per candidate session
+ * and per agent transcript it has, and one `lsof` for all genuinely-live runners every ~15s.
  *
  * Note the two use different concurrency strategies, deliberately. Verdicts get one
  * file per task because a lost verdict costs a fresh ~115ms `lsof` and is a fact about
@@ -17,7 +17,7 @@
  * last-write-wins: it is a pure memo of the transcript, so the worst a lost entry can
  * do is force one re-read that reproduces exactly the same answer.
  */
-import { parseBackgroundTasksFile, pendingScripts, taskKey, taskLive } from "./background-tasks";
+import { parseBackgroundTasksFile, pendingScripts, scanAgentScripts, taskKey, taskLive, type AgentScripts, type BackgroundTask } from "./background-tasks";
 import { resolveVerdicts, runnersAlive, type ProbeTarget, type RunnerProbe } from "./runner-verdicts";
 import { resolveTranscriptPath } from "./last-turn";
 import { parkedJobSessions } from "./session-state";
@@ -38,8 +38,24 @@ export interface ScriptWaitEntry {
   mtimeMs: number;
   /** Pending scripts per the transcript: identity, probe target, and whether it's a service (`isServiceScript`). */
   pending: Array<{ key: string; outputPath?: string; service?: boolean; deadline?: number }>;
+  /** Pending scripts the session's agents launched, with the scan state that keeps them current (`scanAgentScripts`). */
+  agents?: AgentScripts;
   /** Last time a caller looked this session up — drives age-based pruning. */
   seenAt: number;
+}
+
+function slim(t: BackgroundTask): ScriptWaitEntry["pending"][number] {
+  return {
+    key: taskKey(t),
+    outputPath: t.outputPath,
+    ...(t.service && { service: true }),
+    ...(t.deadline !== undefined && { deadline: t.deadline }),
+  };
+}
+
+/** Every pending script of an entry: the session's own and its agents'. */
+function candidates(entry: ScriptWaitEntry): ScriptWaitEntry["pending"] {
+  return entry.agents ? [...entry.pending, ...entry.agents.pending.map(slim)] : entry.pending;
 }
 
 type ScriptWaitCache = Record<string, ScriptWaitEntry>;
@@ -56,7 +72,7 @@ async function loadCache(): Promise<ScriptWaitCache> {
 function probeTargets(entries: ScriptWaitEntry[]): ProbeTarget[] {
   const byKey = new Map<string, ProbeTarget>();
   for (const entry of entries) {
-    for (const t of entry.pending) {
+    for (const t of candidates(entry)) {
       if (t.outputPath) byKey.set(t.key, { key: t.key, outputPath: t.outputPath });
     }
   }
@@ -72,7 +88,7 @@ export function liveTasks(
   verdicts: Map<string, boolean>,
   now = Date.now(),
 ): ScriptWaitEntry["pending"] {
-  return entry.pending.filter((t) => taskLive(t, verdicts.get(t.key), now));
+  return candidates(entry).filter((t) => taskLive(t, verdicts.get(t.key), now));
 }
 
 /** `wait` = the session waits on a live script; `service` = every live script is a service. */
@@ -122,17 +138,13 @@ export async function detectScriptWaits(
       let entry = cache[id];
       if (!entry || entry.size !== stat.size || entry.mtimeMs !== stat.mtimeMs) {
         const tasks = await parseBackgroundTasksFile(path);
-        entry = {
-          size: stat.size,
-          mtimeMs: stat.mtimeMs,
-          pending: pendingScripts(tasks).map((t) => ({
-            key: taskKey(t),
-            outputPath: t.outputPath,
-            ...(t.service && { service: true }),
-            ...(t.deadline !== undefined && { deadline: t.deadline }),
-          })),
-          seenAt: now,
-        };
+        entry = { size: stat.size, mtimeMs: stat.mtimeMs, pending: pendingScripts(tasks).map(slim), agents: entry?.agents, seenAt: now };
+        dirty = true;
+      }
+      // The agents' files change on their own clock, so they are scanned every call.
+      const agents = await scanAgentScripts(path, entry.agents);
+      if (agents !== entry.agents) {
+        entry = { ...entry, agents };
         dirty = true;
       }
       current.set(id, entry);
@@ -165,7 +177,7 @@ export async function detectScriptWaits(
       if (seenAt !== entry.seenAt) dirty = true;
       // Rebuild rather than spread, so fields from an older cache shape die out
       // instead of being copied forward forever.
-      merged[id] = { size: entry.size, mtimeMs: entry.mtimeMs, pending: entry.pending, seenAt };
+      merged[id] = { size: entry.size, mtimeMs: entry.mtimeMs, pending: entry.pending, ...(entry.agents && { agents: entry.agents }), seenAt };
     }
     for (const [id, entry] of Object.entries(merged)) {
       if (now - (entry.seenAt ?? 0) > PRUNE_MS) {

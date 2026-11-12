@@ -197,10 +197,10 @@ test("runnersAlive: empty input does not spawn anything", async () => {
 const PROJECTS = join(CONFIG_DIR, "projects");
 
 /** Write a transcript whose only content is one pending background script. */
-function transcript(sessionId: string, taskId: string, description?: string): void {
-  mkdirSync(join(PROJECTS, "proj"), { recursive: true });
+function transcript(sessionId: string, taskId: string, description?: string, file = `${sessionId}.jsonl`): void {
+  mkdirSync(join(PROJECTS, "proj", file, ".."), { recursive: true });
   writeFileSync(
-    join(PROJECTS, "proj", `${sessionId}.jsonl`),
+    join(PROJECTS, "proj", file),
     [
       JSON.stringify({
         type: "assistant",
@@ -317,4 +317,34 @@ test("without a parked job the parent's own transcript still decides", async () 
   rmSync(CACHE, { force: true });
   transcript("solo", "bsolo");
   expect(await detectScriptWaits(["solo"], probeAll(true), PROJECTS, new Map())).toEqual(new Map([["solo", "wait"]]));
+});
+
+// --- agents: the launch lives in the AGENT's transcript, the badge on the session ---
+
+test("a live script one of the session's agents launched makes the session wait", async () => {
+  rmSync(PROJECTS, { recursive: true, force: true });
+  rmSync(CACHE, { force: true });
+  // The session's own transcript never records a fork's or teammate's launches.
+  mkdirSync(join(PROJECTS, "proj"), { recursive: true });
+  writeFileSync(join(PROJECTS, "proj", "lead.jsonl"), "");
+  transcript("lead", "bfork", "Wait for the paired run", "lead/subagents/agent-a1.jsonl");
+
+  expect(await detectScriptWaits(["lead"], probeAll(true), PROJECTS, new Map())).toEqual(new Map([["lead", "wait"]]));
+
+  // Its completion notice goes to the parent, so the agent's file says pending forever:
+  // the runner probe is what ends the wait.
+  rmSync(VERDICTS_DIR, { recursive: true, force: true });
+  expect(await detectScriptWaits(["lead"], probeAll(false), PROJECTS, new Map())).toEqual(new Map());
+});
+
+test("an agent's script launched while the session's transcript sits still is picked up", async () => {
+  rmSync(PROJECTS, { recursive: true, force: true });
+  rmSync(CACHE, { force: true });
+  transcript("lead", "bdead");
+  expect(await detectScriptWaits(["lead"], probeAll(false), PROJECTS, new Map())).toEqual(new Map());
+
+  transcript("lead", "bmate", "Wait for CI to settle", "lead/subagents/agent-a2.jsonl");
+  const alive = async (paths: string[]) => new Map(paths.map((p) => [p, p.includes("bmate")]));
+  expect(await detectScriptWaits(["lead"], alive, PROJECTS, new Map())).toEqual(new Map([["lead", "wait"]]));
+  expect(readCache().lead.agents.pending.map((t: { taskId: string; src: string }) => [t.taskId, t.src])).toEqual([["bmate", "proj/lead/subagents/agent-a2.jsonl"]]);
 });
