@@ -70,6 +70,20 @@ describe("renderView", () => {
     for (const row of view.rows) expect(plainLen(row)).toBeLessThanOrEqual(24);
   });
 
+  test("⏰ stacks with the reply due: a woken session on a prompt shows ✋⏰ / ❓⏰, a plain one ⏰", () => {
+    const rows = [
+      sess({ id: "wa", name: "woke-approve", reason: "approval", fromSnooze: true, since: NOW - 3 * H }),
+      sess({ id: "wq", name: "woke-ask", reason: "question", fromSnooze: true, unread: true, since: NOW - 2 * H }),
+      sess({ id: "wt", name: "woke-done", fromSnooze: true, since: NOW - 1 * H }),
+    ];
+    const view = renderView(rows, vs(), { width: 26, height: 14 }, NOW);
+    const plain = view.rows.map((r) => r.replace(/\x1b\[[0-9;]*m/g, ""));
+    expect(plain.find((r) => r.includes("woke-approve"))).toContain("✋⏰ 3h");
+    expect(plain.find((r) => r.includes("woke-ask"))).toContain("⚡❓⏰ 2h");
+    expect(plain.find((r) => r.includes("woke-done"))).toContain("⏰ 1h");
+    for (const row of view.rows) expect(plainLen(row)).toBeLessThanOrEqual(26);
+  });
+
   test("running glyphs: ⚡⏳ unread script-wait, ⏳ script-wait, bare in-flight even when unread", () => {
     const run = { finishAt: Number.MAX_SAFE_INTEGER };
     const rows = [

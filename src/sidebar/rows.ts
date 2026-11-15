@@ -250,10 +250,14 @@ export function renderView(
     const woken = isWoken(s, now) || s.fromSnooze;
     const age = fmtAge(now - effectiveSince(s, now));
     // ⚡ = unread (the window-name flag), then the reply due: ❓ question,
-    // ✋ approval, ⏰ snooze wake. Emoji are two cells; tmux 3.4 and
+    // ✋ approval, ⏰ snooze wake. Marks stack, left-most = most important: a
+    // woken session that stops on a prompt shows ❓/✋ then ⏰. Emoji are two cells; tmux 3.4 and
     // Bun.stringWidth agree on that, so the width math holds (the ADR's
     // one-cell rule was about blessed, which this renderer bypasses).
-    const marks = (s.unread ? "⚡" : "") + (woken ? "⏰" : s.reason === "question" ? "❓" : s.reason === "approval" ? "✋" : "");
+    const marks =
+      (s.unread ? "⚡" : "") +
+      (s.reason === "question" ? "❓" : s.reason === "approval" ? "✋" : "") +
+      (woken ? "⏰" : "");
     // ⏳ here = a script still runs: a service (a dev server, a tunnel), or a wait past the cap
     const script = s.script ? "⏳" : "";
     const glyph = marks || script ? `${marks}${script} ` : "";

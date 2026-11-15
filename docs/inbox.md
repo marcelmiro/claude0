@@ -189,7 +189,8 @@ key as an extended sequence (CSI u); without that, it is a plain `^j`/`^k` move.
 - **Right slot.** `⚡` = unread (the monitor's `needsAttention` flag for the row's pane —
   the same flag behind the window prefix and portkey's row glow, so all three clear
   together; overlaid per paint by `overlayAttention`). Then the reply due: `❓` question,
-  `✋` approval, `⏰` snooze wake; a plain ready session shows only its age, and `⏳` follows
+  `✋` approval, `⏰` snooze wake; marks stack, left-most = most important (`⚡✋⏰` = unread,
+  on a permission prompt, and woken from a snooze); a plain ready session shows only its age, and `⏳` follows
   the marks while a service still runs. Running rows show `⏳` for script-wait, and `⚡⏳`
   while that turn still carries the attention flag. `e` on any `⏳` row needs a second
   press, because the script dies with the pane.
