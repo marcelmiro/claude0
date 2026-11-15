@@ -1119,7 +1119,7 @@ test("parseStatusline: every family maps to its arg key", () => {
   expect(parseStatusline("• b • Opus 5.5 (1M context)").model).toBe("opus[1m]");
   expect(parseStatusline("• b • Sonnet 5").model).toBe("sonnet");
   expect(parseStatusline("• b • Haiku 4.5").model).toBe("haiku");
-  expect(parseStatusline("• b • Fable 5.1").model).toBe("fable");
+  expect(parseStatusline("• b • Fable 5.2").model).toBe("fable");
 });
 
 test("parseStatusline: 'Default' renders as 1M Opus → resolves to opus[1m]", () => {

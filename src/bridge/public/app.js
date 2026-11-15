@@ -4875,9 +4875,9 @@ function App() {
 const MODEL_OPTS = [
   { key: "default", label: "Default", sub: "recommended · Opus 5.5 1M" },
   { key: "opus[1m]", label: "Opus", sub: "Opus 5.5 · 1M context" },
-  { key: "fable", label: "Fable", sub: "Fable 5.1" },
+  { key: "fable", label: "Fable", sub: "Fable 5.2" },
   { key: "sonnet", label: "Sonnet", sub: "Sonnet 5.5" },
-  { key: "haiku", label: "Haiku", sub: "Haiku 4.5" },
+  { key: "haiku", label: "Haiku", sub: "Haiku 5.5" },
 ];
 const EFFORT_OPTS = [
   { key: "low", label: "Low" },
