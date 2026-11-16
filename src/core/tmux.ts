@@ -403,6 +403,22 @@ export async function isQuestionPickerOpen(paneId: string): Promise<boolean> {
 }
 
 /**
+ * Scroll a fullscreen (alt-screen) Claude pane back to its bottom. A native picker that
+ * arrives while the user is scrolled up renders in the scrolled-away part (only a
+ * "Waiting for your answer (ctrl+End) ↓" pill shows), so every on-screen pre-flight reads
+ * it as absent. Ctrl+End is Claude's `scroll:bottom`: a no-op at the bottom, and it leaves
+ * a draft and its cursor alone. Callers sample after their own settle.
+ */
+export async function scrollToBottom(paneId: string): Promise<void> {
+  try {
+    const alt = (await Bun.$`tmux display-message -p -t ${paneId} '#{alternate_on}'`.quiet().text()).trim();
+    if (alt === "1") await sendKey(paneId, "C-End");
+  } catch {
+    // pane may have closed
+  }
+}
+
+/**
  * Whether the user is demonstrably at the desk looking at this pane: active tmux
  * window + attached client + a client keystroke inside the presence window. TS port
  * of the three probes in `question-pretooluse.sh`'s focus gate (cli.ts) — keep the

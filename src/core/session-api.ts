@@ -24,6 +24,7 @@ import {
   answerQuestion,
   isQuestionPickerOpen,
   clarifyQuestion,
+  scrollToBottom,
   getMainSession,
   launchClaudeWindow,
   launchResumeWindow,
@@ -2285,6 +2286,7 @@ export async function answerSessionQuestion(
   // phone experienced as "tapping does nothing".
   const paneId = await resolveSessionPane(sessionId);
   if (!paneId) return { ok: false, reason: "no-pane" };
+  await scrollToBottom(paneId);
   if (!(await isQuestionPickerOpen(paneId))) return { ok: false, reason: "not-presented" };
   await answerQuestion(paneId, selections);
   return { ok: true };
@@ -2305,6 +2307,7 @@ export async function clarifySessionQuestion(sessionId: string): Promise<SendRes
   if (declineQuestion(sessionId, pending!.toolUseId)) return { ok: true };
   const paneId = await resolveSessionPane(sessionId);
   if (!paneId) return { ok: false, reason: "no-pane" };
+  await scrollToBottom(paneId);
   if (!(await clarifyQuestion(paneId))) return { ok: false, reason: "not-presented" };
   return { ok: true };
 }

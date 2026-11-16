@@ -37,6 +37,7 @@ dialog still on the pane comes back.
 | The question hold is its own matcher-scoped hook with a 4h window, so a hung approval stays killable at ~10 min | `src/cli.ts` (question intercept script, hook registration), `QUESTION_HOLD_MS` |
 | Hold release when the user is back at the pane, and why its failure polarity is the opposite of the intercept gate's | `atDeskFocus` (`core/tmux.ts`) |
 | Un-held clarify: the picker's own "Chat about this" digit, pre-flighted, falling back to Escape | `clarifyQuestion`, `chatRowKey` (`core/tmux.ts`) |
+| Un-held answer/clarify scroll a fullscreen pane to its bottom first: a picker that arrives while the user is scrolled up is off-screen, so the pre-flight would refuse it | `scrollToBottom` (`core/tmux.ts`) |
 | Dialog parse: border, options, cursor; an empty region (caught mid-paint) is no dialog | `parseDialog` (`core/session-api.ts`) |
 | Dialogs over a running turn count only with options (mid-turn Ctrl+O also hides the box) | `liveDialog` (`core/session-api.ts`) |
 | Answering: a label-pinned cursor walk, or Escape to dismiss | `POST /sessions/:id/dialog` → `answerDialog` |
@@ -57,6 +58,11 @@ dialog still on the pane comes back.
   this" as numbered rows after the real options. A lone digit submits a single-select
   option. multiSelect digits toggle, and submitting goes through a review screen where the
   wrong digit cancels the call.
+- **Fullscreen mode** (`CLAUDE_CODE_NO_FLICKER=1`, alt-screen) keeps the input box and
+  the `/model` dialog pinned while the conversation scrolls, but the AskUserQuestion picker
+  renders inside the scrolled conversation. A picker that arrives while the user is scrolled
+  up is off-screen and only a `Waiting for your answer (ctrl+End) ↓` pill shows. Ctrl+End
+  (`scroll:bottom`) brings it back.
 
 Scrape shapes are pinned by `test/fixtures/viewport/`: `model-switch-dialog`,
 `model-switch-dialog-running`, `model-picker`, `trust-gate`, `ask-user-question`,
