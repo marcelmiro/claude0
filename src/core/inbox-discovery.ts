@@ -19,6 +19,7 @@ import { detectScriptWaits } from "./script-wait";
 import { readLastPromptAt, resolveTranscriptPath } from "./last-turn";
 import { pendingToolCall } from "./hook-events";
 import { loadState } from "./state";
+import { listPanes } from "./tmux";
 import type { InboxStore } from "./inbox-store";
 import { stripOverlay, type InboxSession } from "./inbox-model";
 
@@ -30,6 +31,10 @@ const SCRIPT_WAIT_CAP_MS = 12 * 60 * 60 * 1000;
 export async function discoveryTick(store: InboxStore): Promise<void> {
   const nameCache = await loadNameCache(); // AI names, same source as the TUI
   const { sessions } = await discoverSessions({ skipArchivedSummaries: true, nameMap: nameCache.names });
+  // Every tmux pane id, Claude or not (empty = tmux failed: no pane counts as closed).
+  // Listed BEFORE dispositions load: park/snooze verbs write the disposition before
+  // killing the pane, so a kill seen here has its disposition visible below.
+  const livePanes = new Set((await listPanes()).map((p) => p.paneId));
   // ⏳ tier: `ready` with a live run_in_background script. A wait (CI, a
   // deploy, a review) hasn't handed you anything yet, so it holds the row in
   // RUNNING; a session whose only live scripts are services (a dev server, a
@@ -60,6 +65,12 @@ export async function discoveryTick(store: InboxStore): Promise<void> {
     const dup = byId.get(s.id);
     if (dup && !/^\d+:/.test(dup.real!.target)) continue;
     const p = prevById.get(s.id);
+    // live again after its pane-closed archive without a resume verb (resume paths
+    // unarchive themselves): tmux-resurrect re-hosting it under a new pane id, or a
+    // pane the previous pass missed — the archive no longer describes reality
+    if (arch.has(s.id) && isPaneClosedArchive(store.latestEvent(s.id)) && store.unarchive(s.id, now)) {
+      arch.delete(s.id);
+    }
     // effective status: a `ready` session waiting on a script counts as running
     // until the cap, and the transition script-done → truly-ready stamps `since`
     // like any other. The wait's start is carried across ticks — past the cap too,
@@ -151,8 +162,9 @@ export async function discoveryTick(store: InboxStore): Promise<void> {
 
   // a transient discovery hiccup (tmux/ps failing mid-call) yields zero rows;
   // writing that would wipe the activity snapshot — skip the tick instead
-  // (the authored overlay is safe in its own tables regardless)
-  if (byId.size === 0 && prevRows.some((s) => s.real)) return;
+  // (the authored overlay is safe in its own tables regardless). Zero rows with every
+  // previous pane gone is real: the last Claude pane was closed.
+  if (byId.size === 0 && prevRows.some((s) => s.real && (!livePanes.size || livePanes.has(s.real.paneId)))) return;
 
   // /clear (or a relaunch in the same pane) hands the pane to a NEW session id: the old
   // one is over and never gets a pane back, so file it under RECENT now instead of
@@ -160,6 +172,13 @@ export async function discoveryTick(store: InboxStore): Promise<void> {
   // snapshot because each tick is a fresh process (no in-memory id-change signal).
   for (const id of replacedInPane(prevRows, byId)) {
     if (store.archive(id, now)) arch.set(id, now);
+  }
+  // closing a pane by hand is the done verb (ADR 13): it archives into RECENT. A parked
+  // row's pane was killed by its park verb — that's not done.
+  if (livePanes.size) {
+    for (const id of closedPanes(prevRows, byId, livePanes)) {
+      if (!disp.has(id) && store.archive(id, now, PANE_CLOSED)) arch.set(id, now);
+    }
   }
 
   const rows = [...byId.values()];
@@ -236,6 +255,22 @@ export async function discoveryTick(store: InboxStore): Promise<void> {
   if (prStale.length) save();
 }
 
+
+const PANE_CLOSED = { reason: "pane-closed" } as const;
+
+function isPaneClosedArchive(ev: { type: string; meta: unknown } | null): boolean {
+  return ev?.type === "archive" && (ev.meta as { reason?: string } | null)?.reason === PANE_CLOSED.reason;
+}
+
+/**
+ * Ids of previous-snapshot rows whose pane no longer exists in tmux and that are not
+ * alive at any pane this tick. Keyed on the pane, not the session: a session missing
+ * from discovery while its pane lives is a lost mapping (`reconcilePaneFiles`), not a
+ * close. tmux never reuses a pane id within a server. Pure; unit-tested.
+ */
+export function closedPanes(prevRows: InboxSession[], current: Map<string, InboxSession>, livePanes: Set<string>): string[] {
+  return prevRows.filter((p) => p.real && !current.has(p.id) && !livePanes.has(p.real.paneId)).map((p) => p.id);
+}
 
 /**
  * Ids of previous-snapshot rows whose live pane now hosts a DIFFERENT session — the

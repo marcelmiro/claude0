@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { replacedInPane } from "./inbox-discovery";
+import { closedPanes, replacedInPane } from "./inbox-discovery";
 import type { InboxSession } from "./inbox-model";
 
 const row = (id: string, paneId?: string): InboxSession => ({
@@ -32,4 +32,18 @@ test("replacedInPane: a session that moved panes but is still live is not replac
 
 test("replacedInPane: a pane that lost its id (id-less row) is not a replacement", () => {
   expect(replacedInPane([row("a", "%7")], current(row("", "%7")))).toEqual([]);
+});
+
+test("closedPanes: the previous row's pane no longer exists and the session isn't live elsewhere → closed", () => {
+  expect(closedPanes([row("a", "%7")], current(), new Set(["%1"]))).toEqual(["a"]);
+});
+
+test("closedPanes: a pane that still exists is never closed — a session missing from it is a lost mapping", () => {
+  expect(closedPanes([row("a", "%7")], current(), new Set(["%7"]))).toEqual([]);
+  expect(closedPanes([row("a", "%7")], current(row("", "%7")), new Set(["%7"]))).toEqual([]);
+});
+
+test("closedPanes: a session that moved to another pane, or a pane-less previous row, is not closed", () => {
+  expect(closedPanes([row("a", "%7")], current(row("a", "%9")), new Set(["%9"]))).toEqual([]);
+  expect(closedPanes([row("parked")], current(), new Set(["%1"]))).toEqual([]);
 });

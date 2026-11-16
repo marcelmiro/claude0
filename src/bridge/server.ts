@@ -839,6 +839,9 @@ async function computeSessionsPayload(): Promise<unknown> {
         firstSeenAt.set(id, now);
         return now;
       };
+      // a pane-less session the store archived is done (its pane was closed, or `e`):
+      // a question left open in its hook log must not pull it back into Needs You
+      const archivedIds = store.archivedAt();
       const discovery = new Map<string, DiscoverySeen>(
         tracked.map((s) => {
           const pt = pendingById.get(s.id);
@@ -848,10 +851,11 @@ async function computeSessionsPayload(): Promise<unknown> {
               status: s.status,
               live: !!s.tmuxPane,
               needsYou:
-                !!(s.tmuxPane && unread.has(s.tmuxPane.paneId)) ||
-                approvalIds.has(s.id) ||
-                dialogIds.has(s.id) ||
-                (pt?.name === "AskUserQuestion" && !!pt.question),
+                !(!s.tmuxPane && archivedIds.has(s.id)) &&
+                (!!(s.tmuxPane && unread.has(s.tmuxPane.paneId)) ||
+                  approvalIds.has(s.id) ||
+                  dialogIds.has(s.id) ||
+                  (pt?.name === "AskUserQuestion" && !!pt.question)),
               since: s.lastTurnAt?.getTime() ?? firstSeen(s.id),
             },
           ];

@@ -31,9 +31,17 @@ docblocks carry the implementation detail. Decisions:
   holds Running for at most 12h (`SCRIPT_WAIT_CAP_MS`, `core/inbox-discovery.ts`), which
   catches a service the check misses; the released row ages from when the wait began.
 - **`/clear`** hands a pane to a new session id; the daemon tick archives the old one into
-  Recent (`replacedInPane`, `core/inbox-discovery.ts`). A pane that is simply killed is
-  not a replacement, and neither is one that discovery reads as id-less — that's a lost
-  pane→session mapping (`reconcilePaneFiles`, `core/state.ts`), not a new session.
+  Recent (`replacedInPane`, `core/inbox-discovery.ts`). One that discovery reads as
+  id-less is not a replacement — that's a lost pane→session mapping
+  (`reconcilePaneFiles`, `core/state.ts`), not a new session.
+- **Closing a pane by hand archives its session into Recent** (`closedPanes`,
+  `core/inbox-discovery.ts`), ADR 13's done verb. The test is that the pane id itself is gone
+  from tmux, never that the session went missing from discovery (a lost mapping again). A
+  parked row is exempt (its park verb killed the pane), and a pane-closed archive is
+  undone when the session shows up live again without a resume verb: tmux-resurrect
+  re-hosts every session under new pane ids, and those would otherwise sit in Recent while
+  running. Portkey keeps a pane-less archived row out of Needs You even with a question
+  left open in its hook log.
 - **An archived session that never got a prompt skips Recent** (`empty`, `sectionOf`):
   Claude writes no transcript before the first prompt, so there's nothing to reread or
   resume.

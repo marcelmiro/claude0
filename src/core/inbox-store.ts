@@ -181,12 +181,12 @@ export class InboxStore {
   }
 
   /** Done. Clears any disposition; idempotent-refuses a second archive. */
-  archive(sessionId: string, now: number): boolean {
+  archive(sessionId: string, now: number, meta?: { reason: "pane-closed" }): boolean {
     return this.db.transaction(() => {
       if (this.isArchived(sessionId)) return false;
       this.db.query("DELETE FROM dispositions WHERE session_id = ?").run(sessionId);
       this.db.query("INSERT INTO archived(session_id, archived_at) VALUES (?, ?)").run(sessionId, now);
-      this.event(sessionId, now, "archive");
+      this.event(sessionId, now, "archive", meta);
       return true;
     })();
   }

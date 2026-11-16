@@ -51,6 +51,14 @@ describe("verbs", () => {
     expect(s.unarchive("a", 5)).toBe(false);
   });
 
+  test("archive records its reason on the event (a pane-closed archive is undone when the session reappears live)", () => {
+    const s = fresh();
+    s.archive("a", 1, { reason: "pane-closed" });
+    expect(s.latestEvent("a")).toEqual({ type: "archive", meta: { reason: "pane-closed" } });
+    s.archive("b", 1);
+    expect(s.latestEvent("b")).toEqual({ type: "archive", meta: null });
+  });
+
   test("clearDisposition reports what it cleared (drives the ↺ marker)", () => {
     const s = fresh();
     s.snooze("a", 1000, 1);
