@@ -486,6 +486,13 @@ test("isServiceScript: servers and tunnels are services, by label", () => {
   ]) expect(isServiceScript(label, "")).toBe(true);
 });
 
+test("isServiceScript: a booted server is a service even with no port in its command", () => {
+  // Seed-then-idle servers that held their session in Running as waits.
+  expect(isServiceScript("Boot a local in-memory Pulse seeded for the SAY NOW click-test", "node --experimental-strip-types /tmp/saynow-local/boot.ts > /tmp/saynow-local/boot.log 2>&1")).toBe(true);
+  expect(isServiceScript("Boot a throwaway Pulse with a Beta role for the new tab", "node --experimental-strip-types /tmp/newtab-demo.mts > /tmp/newtab-demo.log 2>&1")).toBe(true);
+  expect(isServiceScript("Wait for live's boot to write #113's track delivery", "until grep -q delivered /tmp/live.log; do sleep 5; done")).toBe(false);
+});
+
 test("isServiceScript: a port-binding, tunnel or dev-server command is a service whatever its label", () => {
   for (const command of [
     "CLAUDE0_BRIDGE_FIXTURES=1 CLAUDE0_BRIDGE_TOKEN=design-token CLAUDE0_BRIDGE_HOST=127.0.0.2 CLAUDE0_BRIDGE_PORT=8481 bun run bin/claude0.ts bridge",
@@ -507,6 +514,23 @@ test("isServiceScript: a run routed through a server, an infra preview or a vite
   expect(isServiceScript("Run typecheck, the full test suite and the build", "npm run typecheck; npm test; npx vite build")).toBe(false);
   // …while a preview server on a port stays a service.
   expect(isServiceScript("Start the preview of main e7146a0 on port 8796", "node boot.mjs")).toBe(true);
+});
+
+test("isServiceScript: a server the script backgrounds itself, or a vite config path, doesn't make a one-shot a service", () => {
+  // A screenshot job that builds, previews in its own background, shoots and exits.
+  const shots = [
+    "run() {",
+    "  npx vite build --config sim/emulator/stage/vite.config.js --outDir \"$2\" --emptyOutDir >/dev/null 2>&1",
+    "  (npx vite preview --config sim/emulator/stage/vite.config.js --outDir \"$2\" --port \"$3\" --strictPort >/tmp/preview-$3.log 2>&1 &)",
+    "  STAGE_URL=\"http://127.0.0.1:$3\" npx playwright test --config sim/emulator/stage/playwright.config.ts 2>&1 | tail -4",
+    "}",
+    "run \"$BASE\" /tmp/stage-base 8803 base1",
+  ].join("\n");
+  expect(isServiceScript("Screenshot every brief-screen scene on the base commit (twice) and on this branch", shots)).toBe(false);
+  expect(isServiceScript("Typecheck the stage", "tsc -p sim/emulator/stage/vite.config.ts --noEmit")).toBe(false);
+  // The foreground server, redirections and all, still decides.
+  expect(isServiceScript("Bring up my copy of the stage", "npx vite --config sim/emulator/stage/vite.config.js --strictPort > /tmp/stage.log 2>&1")).toBe(true);
+  expect(isServiceScript("Bring up my copy of the stage", "npx vite build && npx vite preview &> /tmp/stage.log")).toBe(true);
 });
 
 test("isServiceScript: a client's port flag, an org named like a tool, or a hyphenated noun is not a service", () => {

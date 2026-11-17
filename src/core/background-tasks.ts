@@ -361,8 +361,13 @@ export function endedWorkflows(tasks: BackgroundTask[], limit = 10): BackgroundT
 const SERVICE_NOUN = /\b(dev server|server(?!-)|serve|tunnels?|port[- ]forward|ssm|vite|next dev|localhost|proxy|embedded postgres)\b|\bon port \d+/i;
 // "Play the call through the real server": the server is the route, the run is a wait.
 const THROUGH_SERVER = /\bthrough (?:the|a|its)\b[^.]*\bserver\b/i;
-const SERVICE_COMMAND = /(?<![A-Z0-9_])PORT=\d+|--port[ =]\d+|\bssm start-session\b|-L \d+:|\bvite\b(?!\s+build)|\b(next dev|serve)\b|\bngrok (http|tcp|tls|start)\b|\brun dev\b|\bconvex[: ]dev\b|(?:^|\s)bridge\s*(?:$|[;&|>])/;
+const SERVICE_COMMAND = /(?<![A-Z0-9_])PORT=\d+|--port[ =]\d+|\bssm start-session\b|-L \d+:|\bvite(?![\w.-]|\s+build)|\b(next dev|serve)\b|\bngrok (http|tcp|tls|start)\b|\brun dev\b|\bconvex[: ]dev\b|(?:^|\s)bridge\s*(?:$|[;&|>])/;
+// A command the script itself backgrounds (`server &`, `(server &)`) runs beside a script that
+// goes on to finish, so it says nothing about the task. `2>&1` and `&>` are redirections, not `&`.
+const SELF_BACKGROUNDED = /(?:[^\n;&|()]|[<>]&|&>)+(?<![<>])&(?![&>])/g;
 const WAIT_VERB = /^\s*(background[- ])?(wait|poll|watch|monitor)\b/i;
+// Every "Boot …" label on disk launched a server, most with no port in the command.
+const SERVICE_VERB = /^\s*boot\b/i;
 
 /**
  * Whether a background script is a long-lived service rather than a wait. Only inbox
@@ -370,7 +375,7 @@ const WAIT_VERB = /^\s*(background[- ])?(wait|poll|watch|monitor)\b/i;
  */
 export function isServiceScript(label: string, command: string): boolean {
   if (WAIT_VERB.test(label)) return false;
-  return (SERVICE_NOUN.test(label) && !THROUGH_SERVER.test(label)) || SERVICE_COMMAND.test(command);
+  return SERVICE_VERB.test(label) || (SERVICE_NOUN.test(label) && !THROUGH_SERVER.test(label)) || SERVICE_COMMAND.test(command.replace(SELF_BACKGROUNDED, ""));
 }
 
 /** The verdict-store key for a task: the harness task id, or the tool use it came from. */
