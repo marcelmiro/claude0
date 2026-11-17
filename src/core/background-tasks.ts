@@ -56,7 +56,7 @@ export type BackgroundTaskKind = "script" | "agent" | "workflow";
 export type BackgroundTaskStatus = "pending" | "completed" | "killed";
 
 export interface BackgroundTask {
-  /** Harness task id (`b7cxqdaxr` for Bash, hex agentId for Agent); Workflow launches may lack one. */
+  /** Harness task id (`b7cxqdaxr` for Bash, hex agentId for Agent); a Workflow launch without one isn't counted. */
   taskId?: string;
   /** The launching tool_use — or the task id for a user `!` command, which has none. */
   toolUseId: string;
