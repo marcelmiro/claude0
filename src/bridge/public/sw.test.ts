@@ -114,10 +114,11 @@ function makeScope() {
   // handler fell through — the "never intercepted" assertion). waitUntil promises
   // are NOT awaited here: the background cache update outlives the response on the
   // timeout path, and awaiting it would deadlock a deliberately-hung network.
-  async function dispatchFetch(request: Record<string, unknown>) {
+  async function dispatchFetch(request: Record<string, unknown>, ids: { clientId?: string; resultingClientId?: string } = {}) {
     let responded: Promise<Response> | undefined;
     const ev = {
       request,
+      ...ids,
       respondWith(p: Promise<Response>) {
         responded = p;
       },
@@ -244,7 +245,7 @@ test("stashes even when a window already exists and the message may be dropped",
 
 // --- app-shell fetch handler (network-first, cached fallback — ADR 0021) ---
 
-const SHELL = "claude0-shell-v1";
+const SHELL = "claude0-shell-v2";
 const get = (path: string, mode = "no-cors") => ({ method: "GET", url: `${ORIGIN}${path}`, mode });
 const hang = () => new Promise<Response>(() => {});
 
@@ -272,6 +273,68 @@ test("a navigation with a dead network falls back to the cached shell page", asy
 
   const res = await h.dispatchFetch(get("/anything", "navigate"));
   expect(await res!.text()).toBe("<html>shell</html>");
+});
+
+// One page load = one shell version. Every request races on its own, so after a tunnel
+// wake a cached index.html (whose inline CSS predates the current markup) could pair with
+// a fresh app.js — the new-session picker rendered unstyled.
+const fetchByPath = (byPath: Record<string, () => Promise<Response>>) => async (req: unknown) =>
+  byPath[new URL((req as { url: string }).url).pathname]!();
+
+test("a page answered from the cache gets the cached shell, even when the network is up", async () => {
+  const h = await loadWorker({ fetch: fetchByPath({ "/": hang, "/app.js": async () => new Response("app js v2") }) });
+  h.cacheFor(SHELL).set("/", "index v1");
+  h.cacheFor(SHELL).set("/app.js", "app js v1");
+
+  const page = await h.dispatchFetch(get("/", "navigate"), { resultingClientId: "p1" });
+  const js = await h.dispatchFetch(get("/app.js"), { clientId: "p1" });
+  expect(await page!.text()).toBe("index v1");
+  expect(await js!.text()).toBe("app js v1");
+});
+
+test("without client ids, the last navigation decides (single-window PWA)", async () => {
+  const h = await loadWorker({ fetch: fetchByPath({ "/": hang, "/app.js": async () => new Response("app js v2") }) });
+  h.cacheFor(SHELL).set("/", "index v1");
+  h.cacheFor(SHELL).set("/app.js", "app js v1");
+
+  await h.dispatchFetch(get("/", "navigate"));
+  const js = await h.dispatchFetch(get("/app.js"), { clientId: "unknown" });
+  expect(await js!.text()).toBe("app js v1");
+});
+
+test("a page answered from the network keeps network-first assets", async () => {
+  const h = await loadWorker({ fetch: async () => new Response("v2") });
+  h.cacheFor(SHELL).set("/", "index v1");
+  h.cacheFor(SHELL).set("/app.js", "app js v1");
+
+  await h.dispatchFetch(get("/", "navigate"), { resultingClientId: "p1" });
+  const js = await h.dispatchFetch(get("/app.js"), { clientId: "p1" });
+  expect(await js!.text()).toBe("v2");
+});
+
+test("a cached page falls back to the network for an asset the cache lacks", async () => {
+  const h = await loadWorker({ fetch: fetchByPath({ "/": hang, "/app.js": async () => new Response("app js v2") }) });
+  h.cacheFor(SHELL).set("/", "index v1");
+
+  await h.dispatchFetch(get("/", "navigate"), { resultingClientId: "p1" });
+  const js = await h.dispatchFetch(get("/app.js"), { clientId: "p1" });
+  expect(await js!.text()).toBe("app js v2");
+});
+
+test("a late network page never overwrites the cache it lost to", async () => {
+  // Writing the late index v2 next to the cached app js v1 would leave the cache itself
+  // mixed for the next offline launch.
+  let resolveIndex!: (r: Response) => void;
+  const h = await loadWorker({
+    fetch: fetchByPath({ "/": () => new Promise<Response>((r) => (resolveIndex = r)) }),
+  });
+  h.cacheFor(SHELL).set("/", "index v1");
+
+  const page = await h.dispatchFetch(get("/", "navigate"), { resultingClientId: "p1" });
+  expect(await page!.text()).toBe("index v1");
+  resolveIndex(new Response("index v2"));
+  await Bun.sleep(5);
+  expect(h.cacheFor(SHELL).get("/")).toBe("index v1");
 });
 
 test("API paths are never intercepted", async () => {

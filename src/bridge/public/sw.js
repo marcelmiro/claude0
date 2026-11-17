@@ -8,7 +8,7 @@
 // iOS's lazy default (otherwise stale push handlers linger for days).
 
 const NAV_CACHE = "claude0-nav";
-const SHELL_CACHE = "claude0-shell-v1";
+const SHELL_CACHE = "claude0-shell-v2";
 
 // Everything the shell needs to paint offline: the module graph under app.js
 // plus manifest/icons. Mirrors the server's STATIC allow-map (sw.js is a
@@ -58,6 +58,22 @@ self.addEventListener("activate", (event) =>
 // tests don't sleep through the real timer.
 const NET_TIMEOUT_MS = self.__shellTimeoutMs || 3500;
 
+// One page load = one shell version: the CSS is inline in index.html and the markup
+// lives in app.js, so a cached page paired with a fresh app.js renders unstyled
+// (ADR 0021). The navigation's outcome pins its page's assets: a page answered from
+// the cache gets cached assets, and only requests answered live write the cache.
+// Keyed by client id; the last navigation stands in where a browser omits the ids.
+const pageFromCache = new Map();
+let lastNavFromCache = false;
+
+async function cachedShell(key) {
+  try {
+    return await (await caches.open(SHELL_CACHE)).match(key);
+  } catch {
+    return undefined; // cache unavailable — the caller falls back to the network
+  }
+}
+
 self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
@@ -67,18 +83,24 @@ self.addEventListener("fetch", (event) => {
   if (!isNav && !SHELL_PATHS.includes(url.pathname)) return; // API, /stream: untouched
   const cacheKey = isNav ? "/" : url.pathname;
 
-  // Network-first: fetch always starts, and a 200 always refreshes the cache —
-  // even when the race below already answered from cache (waitUntil keeps the
-  // worker alive for the late write, so the NEXT launch gets the fresh copy).
-  const network = fetch(req).then(async (res) => {
-    if (res.status === 200) {
-      const copy = res.clone();
-      const cache = await caches.open(SHELL_CACHE);
-      await cache.put(cacheKey, copy);
-    }
-    return res;
-  });
-  event.waitUntil(network.catch(() => {}));
+  if (!isNav && (pageFromCache.get(event.clientId) ?? lastNavFromCache)) {
+    event.respondWith((async () => (await cachedShell(cacheKey)) || fetch(req))());
+    return;
+  }
+
+  // Network-first: fetch always starts; the race below decides who answers, and the
+  // network's 200 is cached only if it is what this request was answered with
+  // (waitUntil keeps the worker alive for that write).
+  const network = fetch(req).then((res) => ({ res, copy: res.status === 200 ? res.clone() : null }));
+  let answeredLive;
+  const decided = new Promise((resolve) => (answeredLive = resolve));
+  event.waitUntil(
+    Promise.all([network, decided])
+      .then(async ([{ copy }, live]) => {
+        if (live && copy) await (await caches.open(SHELL_CACHE)).put(cacheKey, copy);
+      })
+      .catch(() => {}),
+  );
 
   event.respondWith(
     (async () => {
@@ -86,15 +108,15 @@ self.addEventListener("fetch", (event) => {
         network.catch(() => null), // network error → try cache
         new Promise((resolve) => setTimeout(() => resolve("timeout"), NET_TIMEOUT_MS)),
       ]);
-      if (winner && winner !== "timeout") return winner;
-      let cached;
-      try {
-        cached = await (await caches.open(SHELL_CACHE)).match(cacheKey);
-      } catch {
-        /* cache unavailable — fall through to the network's own outcome */
+      const cached = winner && winner !== "timeout" ? undefined : await cachedShell(cacheKey);
+      if (isNav) {
+        lastNavFromCache = !!cached;
+        if (event.resultingClientId) pageFromCache.set(event.resultingClientId, !!cached);
       }
+      answeredLive(!cached);
       if (cached) return cached;
-      return network; // no fallback: surface whatever the network does, as before
+      // no fallback: surface whatever the network does, as before
+      return network.then(({ res }) => res);
     })(),
   );
 });

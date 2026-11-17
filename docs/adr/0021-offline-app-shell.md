@@ -1,7 +1,7 @@
 # 21. Portkey caches its app shell, network-first
 
 Date: 2026-08-23
-Status: accepted (partially reverses the sw.js "no caching" stance)
+Status: accepted (partially reverses the sw.js "no caching" stance); amended 2026-11-17 — one page load gets one shell version
 
 ## Context
 
@@ -25,9 +25,16 @@ the gap was purely getting the shell to paint.
 `sw.js` gains a fetch handler for GET navigations and a fixed shell allowlist
 (the module graph under `app.js`, manifest, icons), **network-first**: the
 network gets 3.5s; a 200 wins, is served, and refreshes the versioned shell
-cache (`claude0-shell-v1`) — including a late 200 after the cache already
-answered, via `waitUntil`. Only on timeout or network error does the cached
-copy serve. Data endpoints, `/stream`, and every non-GET fall through
+cache (`claude0-shell-vN`). Only on timeout or network error does the cached
+copy serve. The navigation's outcome pins its whole page load: a page answered
+from the cache gets every shell asset from the cache too (network only for an
+asset the cache lacks), and only a response that actually answered its request
+is written back — a late 200 that lost the race is dropped. Each request
+racing on its own let a cached `index.html` (all CSS is inline there) pair
+with a fresh `app.js` after a tunnel wake, rendering new markup unstyled, and
+let a late `/` land in the cache beside an older `app.js`. Pages are keyed by
+`resultingClientId`/`clientId`; where a browser omits those, the last
+navigation's outcome applies (portkey is a single-window PWA). Data endpoints, `/stream`, and every non-GET fall through
 untouched. Alongside it, all API fetches carry abort timeouts (12s default,
 30s for endpoints that shell out to git/gh or block on pane readiness), and
 `resync()` runs a 30s × 4s burst that rebuilds the SSE stream until it
@@ -41,7 +48,11 @@ would previously have hung or failed.
 ## Consequences
 
 - An offline open right after a deploy serves the previous shell once; the next
-  reachable open self-heals. Accepted — strictly better than a white screen.
+  reachable open self-heals. A cached open no longer refreshes the cache from its
+  late network replies, so an offline open serves whatever the last reachable
+  open fetched.
+- A page answered live whose asset then times out still takes the cached asset —
+  a version mix is possible only when the tunnel dies mid-load. Accepted — strictly better than a white screen.
 - `claude0-shell-vN` is bumped by hand and nothing enforces it; a forgotten
   bump can't strand a reachable client (network-first) but could serve a
   mismatched shell set offline.
