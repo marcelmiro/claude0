@@ -46,6 +46,8 @@ const AUTOSTART = `${PATHS.dir}/inbox-sidebar-autostart-default`;
 const HIDDEN = `${PATHS.dir}/inbox-sidebar-hidden-default`;
 /** start_command marker for stub panes (what discovery greps for). */
 const STUB_MARK = "sidebar-pane";
+/** An unfocused wheel scroll returns to the top this long after the last wheel event. */
+const GLANCE_WHEEL_HOLD_MS = 10_000;
 /**
  * Field separator for tmux -F output. NOT \t: tmux sanitizes control
  * characters to `_` when the client runs OUTSIDE tmux (no TMUX env) — which
@@ -72,6 +74,8 @@ interface WinState extends ViewState {
   width: number;
   height: number;
   clickArmed: boolean;
+  /** When the last wheel event landed — an unfocused wheel hold releases GLANCE_WHEEL_HOLD_MS after it. */
+  wheelAt: number;
   /** Selector landed by focus on the pane-you-came-from's session, untouched since (`seedFallback`). */
   seededId: string | null;
   confirmKillId: string | null;
@@ -96,6 +100,7 @@ function freshWin(windowId: string): WinState {
     height: 24,
     focused: false,
     clickArmed: false,
+    wheelAt: 0,
     seededId: null,
     selectedId: null,
     activePaneId: null,
@@ -109,6 +114,7 @@ function freshWin(windowId: string): WinState {
     flash: "",
     flashUntil: 0,
     scrollTop: 0,
+    scrollHold: null,
     lastRows: [],
     modesWritten: false,
     visible: [],
@@ -444,6 +450,7 @@ export function runSidebarRenderer(): void {
     cancelPendingFocus(target);
     target.focused = true;
     target.clickArmed = true;
+    target.scrollHold = null;
     target.selectedId = sessionId;
     await Bun.$`tmux select-pane -t ${target.stubPane}`.quiet();
     paint(target);
@@ -491,6 +498,7 @@ export function runSidebarRenderer(): void {
       if (!target?.stubPane) return;
       target.focused = true;
       target.clickArmed = true;
+      target.scrollHold = null;
       if (nextId) target.selectedId = nextId;
       else seedSelection(target);
       await Bun.$`tmux select-pane -t ${target.stubPane}`.quiet();
@@ -906,6 +914,7 @@ export function runSidebarRenderer(): void {
     win.focusPending = setTimeout(() => {
       win.focusPending = null;
       win.focused = true;
+      win.scrollHold = null;
       seedSelection(win);
       paint(win);
     }, 80);
@@ -1239,6 +1248,8 @@ export function runSidebarRenderer(): void {
   }
 
   async function handleEvent(win: WinState, ev: InputEvent): Promise<void> {
+    // a wheel or click hold lasts until you do anything else; then the list re-anchors
+    if (ev.type !== "wheel") win.scrollHold = null;
     if (ev.type === "focus") {
       if (ev.in) gainFocusSoon(win);
       else {
@@ -1257,7 +1268,11 @@ export function runSidebarRenderer(): void {
     }
     if (ev.type === "wheel") {
       if (win.mode !== "inbox" && win.focused) win.modeCursor = Math.max(0, win.modeCursor + ev.dir);
-      else win.scrollTop = Math.max(0, win.scrollTop + ev.dir * 2);
+      else {
+        win.scrollHold = "wheel";
+        win.wheelAt = Date.now();
+        win.scrollTop = Math.max(0, win.scrollTop + ev.dir * 2);
+      }
       paint(win);
       return;
     }
@@ -1288,13 +1303,17 @@ export function runSidebarRenderer(): void {
         win.clickArmed = true;
         if (id && win.visible.some((v) => v.id === id)) win.selectedId = id;
         else seedSelection(win);
+        win.scrollHold = "click";
         paint(win);
         return;
       }
       const s = findSession(id);
       if (!s) return;
       if (win.selectedId === s.id) await enterRow(win, s, true);
-      else win.selectedId = s.id;
+      else {
+        win.selectedId = s.id;
+        win.scrollHold = "click";
+      }
       paint(win);
       return;
     }
@@ -1327,6 +1346,7 @@ export function runSidebarRenderer(): void {
     cancelPendingFocus(win);
     win.focused = true;
     win.clickArmed = true;
+    win.scrollHold = null;
     reloadSessions();
     const from = sessions.find((s) => s.real?.paneId === invokerPane);
     if (from) win.selectedId = win.seededId = from.id;
@@ -1584,8 +1604,11 @@ export function runSidebarRenderer(): void {
         win.modesWritten = false; // repaint full frame at the new size
         win.lastRows = [];
       }
-      // pin: this window's active WORK pane (survives a visit to the sidebar)
-      const activeWork = winPanes.find((p) => p.paneActive && !p.startCmd.includes(STUB_MARK));
+      // pin: this window's active WORK pane (survives a visit to the sidebar);
+      // with the sidebar active and nothing remembered (a daemon restart), a
+      // window's only work pane is the one
+      const work = winPanes.filter((p) => !p.startCmd.includes(STUB_MARK));
+      const activeWork = work.find((p) => p.paneActive) ?? (!win.activePaneId && work.length === 1 ? work[0] : undefined);
       if (activeWork) win.activePaneId = activeWork.paneId;
       // focus fallback (focus escapes are the fast path): sidebar pane active
       // in the active window ⇔ focused
@@ -1593,6 +1616,7 @@ export function runSidebarRenderer(): void {
       if (win.focused && !nowFocused) {
         win.focused = false;
         win.clickArmed = false;
+        win.scrollHold = null;
         win.helpVisible = false;
         win.blockNoteFor = null;
         exitMode(win);
@@ -1797,6 +1821,11 @@ export function runSidebarRenderer(): void {
     } catch {}
     const minute = Math.floor(Date.now() / 60_000);
     if (minute !== lastMinute) lastMinute = minute;
+    // an unfocused wheel hold has no next key to end it: release it so the
+    // glance surface returns to Needs You
+    for (const win of wins.values()) {
+      if (win.scrollHold === "wheel" && !win.focused && Date.now() - win.wheelAt > GLANCE_WHEEL_HOLD_MS) win.scrollHold = null;
+    }
     // paint() diffs per line, so ticking every second is cheap
     phase = "paint";
     paintAll();

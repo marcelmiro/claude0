@@ -67,6 +67,10 @@ export interface ViewState {
   flash: string;
   flashUntil: number;
   scrollTop: number;
+  /** The mouse holds the list. "wheel": scrollTop is honored as-is, no anchoring on the selection / pinned row.
+   * "click": the selection stays in view but gets no margin — a margin scroll would move the clicked row out
+   * from under the pointer, and the commit click would land on its neighbour. */
+  scrollHold: "wheel" | "click" | null;
   /** `/` search and `n` new-session take over the pane (modes.ts); inbox = the lifecycle list. */
   mode: Mode;
   query: string;
@@ -100,6 +104,14 @@ const SECTION_HINTS: Record<Section, string> = {
   parked: "↵  b s e f  ?",
   done: "↵  e f  ?",
 };
+
+// the overflow indicator's words, in section order
+const SECTION_LABELS: [Section, string][] = [
+  ["needs-you", "needs you"],
+  ["running", "running"],
+  ["parked", "parked"],
+  ["done", "recent"],
+];
 
 function helpLines(): string[] {
   return [
@@ -221,7 +233,8 @@ export function renderView(
   const lines: string[] = [];
   const visible: VisibleRow[] = [];
   const rowAtLine: (string | undefined)[] = [];
-  let selLine = -1;
+  /** Session id → its first and last content line. */
+  const span = new Map<string, [number, number]>();
 
   // absurdly narrow pane (layout accident): counts only, no letter-soup
   if (width < 16) {
@@ -239,7 +252,7 @@ export function renderView(
     lines.push(bold(fg(color, ` ${label}`) + (count === null ? "" : fg(color, ` ${count}`))));
 
   const push = (s: InboxSession, section: Section, rowLines: string[]) => {
-    if (vs.focused && s.id === vs.selectedId && selLine === -1) selLine = lines.length;
+    if (!span.has(s.id)) span.set(s.id, [lines.length, lines.length + rowLines.length - 1]);
     for (let k = 0; k < rowLines.length; k++) rowAtLine[lines.length + k] = s.id;
     lines.push(...rowLines);
     visible.push({ id: s.id, section });
@@ -316,29 +329,79 @@ export function renderView(
   }
 
   // chrome: hints bottom-most, detail row above it ONLY when the selected row
-  // has authored info. Unfocused = pure glance surface, no chrome, top-pinned.
+  // has authored info. Unfocused = pure glance surface, no chrome, top-anchored.
   const sel = sessions.find((s) => s.id === vs.selectedId);
   const detail = vs.focused && sel ? detailFor(sel, now) : null;
   // the snooze form spends a second chrome line (unit blocks + amount/preview)
   const chromeRows = (vs.focused && vs.snoozeMenuFor ? 2 : 1) + (detail ? 1 : 0);
   const contentHeight = Math.max(1, height - chromeRows);
 
-  // scroll: glance mode always shows the top (Needs you); focused keeps the
-  // selection in view
-  let scrollTop = vs.focused ? Math.max(0, Math.min(vs.scrollTop, lines.length - contentHeight)) : 0;
-  if (vs.focused && selLine >= 0) {
-    if (selLine < scrollTop) scrollTop = selLine;
-    else if (selLine >= scrollTop + contentHeight) scrollTop = selLine - contentHeight + 1;
+  // overflow: a line names what's hidden below the list — unfocused, the
+  // bottom row (blank but for a flash); focused, the list window's last line,
+  // above the detail row and hints
+  const overflow = lines.length > contentHeight;
+  const windowHeight = overflow && vs.focused ? Math.max(1, contentHeight - 1) : contentHeight;
+
+  // scroll: after a wheel, wherever the wheel left it. Otherwise anchored —
+  // focused keeps the selection in view; glance mode shows the top (Needs
+  // you), scrolled just far enough to keep this window's own session in view
+  const pinnedId = vs.activePaneId ? sessions.find((s) => s.real?.paneId === vs.activePaneId)?.id : undefined;
+  const anchor = vs.scrollHold === "wheel" ? undefined : span.get((vs.focused ? vs.selectedId : pinnedId) ?? "");
+  let scrollTop = vs.focused || vs.scrollHold === "wheel" ? vs.scrollTop : 0;
+  scrollTop = Math.max(0, Math.min(scrollTop, lines.length - windowHeight));
+  if (anchor && vs.focused && vs.scrollHold !== "click") {
+    // a row of margin each side of the selection, so j/k shows the row it
+    // lands on next; the first row scrolls to the very top. Skipped when the
+    // window can't fit both margins, or repaints would flip between them
+    const i = visible.findIndex((v) => v.id === vs.selectedId);
+    const lo = i === 0 ? 0 : span.get(visible[i - 1]!.id)![0];
+    const hi = span.get(visible[i + 1]?.id ?? "")?.[1] ?? anchor[1];
+    if (hi - lo < windowHeight) {
+      if (lo < scrollTop) scrollTop = lo;
+      else if (hi >= scrollTop + windowHeight) scrollTop = hi - windowHeight + 1;
+    }
+  }
+  if (anchor) {
+    // the selection itself wins when the window can't fit the margin too
+    if (anchor[0] < scrollTop) scrollTop = anchor[0];
+    else if (anchor[1] >= scrollTop + windowHeight) scrollTop = anchor[1] - windowHeight + 1;
+  }
+  // a window starting on a two-line row's branch line blanks it rather than
+  // scroll on: scrolling would add a row at the bottom, past the margin
+  const top = rowAtLine[scrollTop];
+  if (scrollTop > 0 && top && rowAtLine[scrollTop - 1] === top) {
+    lines[scrollTop] = "";
+    rowAtLine[scrollTop] = undefined;
   }
 
-  const rows = lines.slice(scrollTop, scrollTop + contentHeight);
+  // never end on a two-line row's first line: a row the window can't fit
+  // whole is hidden, and counted by the indicator
+  const end = scrollTop + windowHeight;
+  const hidden = visible.filter((v) => span.get(v.id)![1] >= end);
+  for (const v of hidden) {
+    const [first, last] = span.get(v.id)!;
+    for (let i = first; i <= last; i++) {
+      lines[i] = "";
+      rowAtLine[i] = undefined; // a click on the blank must not hit it
+    }
+  }
+  const rows = lines.slice(scrollTop, end);
+  while (rows.length < windowHeight) rows.push("");
+  const parts = SECTION_LABELS.flatMap(([section, label]) => {
+    const n = hidden.filter((v) => v.section === section).length;
+    return n ? [`${n} ${label}`] : [];
+  });
+  // drop whole trailing (least urgent) sections rather than cut one mid-count
+  while (parts.length > 1 && plainLen(`↓ ${parts.join(" · ")}`) > dims.width - 2) parts.pop();
+  const indicator = parts.length ? ` ${fg(C.dim, truncate(`↓ ${parts.join(" · ")}`, dims.width - 2))}` : "";
+  if (overflow && vs.focused) rows.push(indicator);
   while (rows.length < contentHeight) rows.push("");
   if (detail) rows.push(` ${fg(C.muted, truncate(detail, dims.width - 2))}`);
 
   if (!vs.focused) {
     // a flash still shows: opening a session moves focus to its pane, and the
     // flash naming what was cleared ("unparked — was snoozed …") must be seen
-    rows.push(vs.flash && now < vs.flashUntil ? ` ${fg(C.mint, truncate(vs.flash, dims.width - 2))}` : "");
+    rows.push(vs.flash && now < vs.flashUntil ? ` ${fg(C.mint, truncate(vs.flash, dims.width - 2))}` : indicator);
   } else if (vs.blockNoteFor) {
     const w = dims.width - 12;
     rows.push(` ${fg(C.peach, "✗")} ${truncate(vs.blockNote, Math.max(4, w))}${fg(C.peach, "▏")} ${fg(C.dim, "↵ ⎋")}`);
