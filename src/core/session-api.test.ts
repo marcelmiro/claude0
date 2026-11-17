@@ -1460,6 +1460,8 @@ test("footerFocused: the background-task item selected under the box, with or wi
 
 test("stashPresent: the marker shares the slot above the box with other hints", () => {
   expect(stashPresent(flattenStyled(fixture("viewport/stash-marker.txt"), false))).toBe(true);
+  // Claude 2.1.326 reworded the marker to `draft stashed`.
+  expect(stashPresent(flattenStyled(fixture("viewport/stash-marker-draft.txt"), false))).toBe(true);
   expect(stashPresent(flattenStyled(fixture("viewport/input-cursor-top.txt"), false))).toBe(false);
   expect(stashPresent(flattenStyled(fixture("viewport/shell-details.txt"), false))).toBe(false);
 });

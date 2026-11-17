@@ -1518,13 +1518,14 @@ async function stashInput(paneId: string): Promise<boolean> {
 }
 
 /**
- * Whether Claude holds a stashed draft: its `› stashed` marker in the slot above the input
- * box, where it shares the row with other hints (`Ctrl+Y to paste deleted text · › stashed`).
+ * Whether Claude holds a stashed draft: its marker in the slot above the input box, where it
+ * shares the row with other hints (`Ctrl+Y to paste deleted text · › stashed`). Claude
+ * 2.1.326 renders it as `draft stashed`; earlier releases as `› stashed`.
  */
 export function stashPresent(capture: string): boolean {
   const lines = capture.split("\n");
   const box = inputBoxRow(lines);
-  return box >= 2 && lines[box - 2]!.includes("› stashed");
+  return box >= 2 && /(?:›|draft) stashed/.test(lines[box - 2]!);
 }
 
 /**

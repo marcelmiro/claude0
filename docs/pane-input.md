@@ -49,7 +49,7 @@ Meta+Down don't move the input's cursor (Ctrl+End scrolls the transcript, Ctrl+D
 the diff file list); End reaches only the row end; Ctrl+L doesn't clear the input.
 
 Pinned by styled lab captures in `test/fixtures/viewport/` (`input-cursor-top`,
-`input-cursor-wrapped`, `footer-focused`, `footer-focused-draft`, `stash-marker`,
+`input-cursor-wrapped`, `footer-focused`, `footer-focused-draft`, `stash-marker`, `stash-marker-draft` (2.1.326),
 `shell-details`). Recapture a fixture when a Claude release changes the rendering.
 
 ## Interrupts (Claude Code ~2.1.x)
