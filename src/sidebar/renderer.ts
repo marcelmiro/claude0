@@ -1097,7 +1097,8 @@ export function runSidebarRenderer(): void {
         paint(win);
         break;
       }
-      case "enter": {
+      case "enter":
+      case " ": {
         const s = findSession(row?.id);
         if (s) await enterRow(win, s);
         paint(win);

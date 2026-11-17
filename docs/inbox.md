@@ -106,7 +106,8 @@ before painting (a killed window's tty can be reused by a new pane at once).
   session in this window's active pane; the *selector* (row background) only while focused.
 - **Clicks and Enter are select-then-commit.** A click on an unfocused sidebar focuses and
   highlights the row hit (no row → the window's active session); a focused click on another
-  row moves the highlight; a click on the highlighted row navigates. Enter on a row in
+  row moves the highlight; a click on the highlighted row navigates. Enter (or Space — the
+  same action, for a thumb-on-space j/k grip) on a row in
   another window shows that window and lands focused in *its* sidebar with the row
   selected; Enter on the current window's row commits into the session pane. A pane-less
   Parked or Recent row opens the [preview](preview.md) instead; any other pane-less
