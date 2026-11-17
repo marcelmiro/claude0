@@ -16,7 +16,7 @@ test("ensureUserConfig materializes complete defaults and the editor schema", as
   expect(config).toMatchObject({
     $schema: "./config.schema.json",
     schemaVersion: 1,
-    repositories: { roots: ["~/dev"], priority: [] },
+    repositories: { roots: ["~/dev"] },
   });
   expect(readFileSync(PATHS.configSchema, "utf8")).toContain('"schemaVersion"');
 

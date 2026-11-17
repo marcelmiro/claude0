@@ -82,7 +82,6 @@ function md(text) {
 
 const authed = signal(false);
 const sessions = signal([]);
-const repositoryPriority = signal([]); // read-only projection of config repositories.priority
 const selectedId = signal(null);
 const transcript = signal(null);
 const error = signal("");
@@ -102,6 +101,11 @@ const shellRuns = signal(null); // scrollback from GET /shell: null = loading, [
 const shellPending = signal(""); // command in flight (one at a time — the bridge refuses a second)
 const repos = signal(loadSavedRepos()); // null = loading, [] = loaded; hydrated from the last fetch
 const launching = signal(""); // repo name while waiting for a just-launched session to register
+// The picker's in-flight or failed launch: { path, error? } — the row it came from shows it.
+const pickerLaunch = signal(null);
+// A picker launch that finished after the picker was left: { label, repo, sessionId?, error? } —
+// Home offers "open" (never yanks you off another screen) or "retry".
+const launchNotice = signal(null);
 const restoring = signal(false); // true while a /restore request is in flight (blocks the button)
 const menuText = signal(null); // long-pressed user message → action sheet (null = closed)
 const sessionMenu = signal(null); // long-pressed session ROW → session action sheet (null = closed)
@@ -424,19 +428,6 @@ async function refreshSessions() {
     listStale.value = false; // a direct GET is fresh-enough by construction (bounded staleness)
   } catch {
     error.value = "bridge unreachable";
-  }
-}
-
-async function refreshPreferences() {
-  try {
-    const r = await fetch("/preferences");
-    if (!r.ok) return;
-    const value = await r.json();
-    repositoryPriority.value = Array.isArray(value.repositoryPriority)
-      ? value.repositoryPriority.map((name) => String(name).toLowerCase())
-      : [];
-  } catch {
-    // Session refresh owns connection feedback; preferences safely fall back to alphabetical.
   }
 }
 
@@ -867,7 +858,8 @@ async function connect() {
   error.value = "";
   loadingAuth.value = true;
   try {
-    await Promise.all([refreshSessions(), refreshPreferences()]);
+    refreshRepos(); // History chips rank by Recent before the picker is ever opened
+    await refreshSessions();
     if (authed.value) {
       connectStream();
       initPush();
@@ -1035,6 +1027,7 @@ function clearAttachments() {
 }
 
 function open(id) {
+  if (launchNotice.value?.sessionId === id) launchNotice.value = null;
   // Leaving a session before its read-grace elapsed: that glance doesn't count as read.
   if (selectedId.value && selectedId.value !== id) cancelReadTimer(selectedId.value);
   selectedId.value = id;
@@ -1255,8 +1248,12 @@ function loadSavedRepos() {
     return null;
   }
 }
-async function openNewSession() {
+function openNewSession() {
+  if (pickerLaunch.value?.error) pickerLaunch.value = null; // a pending launch survives a reopen
   showNewSession.value = true;
+  refreshRepos();
+}
+async function refreshRepos() {
   try {
     const r = await fetch("/repos");
     if (!r.ok) throw new Error(String(r.status));
@@ -1273,11 +1270,14 @@ async function openNewSession() {
 }
 async function launchSession(repo) {
   // The /sessions/new request blocks until claude boots and its SessionStart hook
-  // registers the new session id (~1-4s), so show a "launching…" hint meanwhile, then
-  // open exactly that session — server-determined id, no fragile before/after diffing.
+  // registers the new session id (~1-4s). The picker stays up meanwhile with the tapped
+  // row pending (and every row locked, so a second tap can't launch twice), then opens
+  // exactly that session — server-determined id, no fragile before/after diffing. A
+  // failure stays on the row, where a second tap retries.
+  if (pickerLaunch.value && !pickerLaunch.value.error) return;
   error.value = "";
-  showNewSession.value = false;
-  launching.value = repo.name;
+  launchNotice.value = null;
+  pickerLaunch.value = { path: repo.path, label: launchLabel(repo) };
   try {
     const r = await fetch("/sessions/new", {
       method: "POST",
@@ -1288,15 +1288,27 @@ async function launchSession(repo) {
     const data = await r.json().catch(() => ({}));
     if (r.ok && data.ok !== false) {
       await refreshSessions();
-      if (data.sessionId) open(data.sessionId);
+      pickerLaunch.value = null;
+      if (showNewSession.value) {
+        showNewSession.value = false;
+        if (data.sessionId) open(data.sessionId);
+      } else {
+        launchNotice.value = { label: launchLabel(repo), repo, sessionId: data.sessionId };
+      }
     } else {
-      error.value = `launch failed: ${data.reason || r.status}`;
+      launchFailed(repo, `launch failed: ${data.reason || r.status}`);
     }
   } catch {
-    error.value = "bridge unreachable";
-  } finally {
-    launching.value = "";
+    launchFailed(repo, "bridge unreachable");
   }
+}
+// The picker shows a failure on its row; if the picker was left meanwhile, Home shows it.
+function launchFailed(repo, reason) {
+  pickerLaunch.value = { path: repo.path, label: launchLabel(repo), error: reason };
+  if (!showNewSession.value) launchNotice.value = { label: launchLabel(repo), repo, error: reason };
+}
+function launchLabel(repo) {
+  return repo.isWorktree ? `${repo.name} ${repo.branch === "detached" ? repo.path.split("/").pop() : repo.branch}` : repo.name;
 }
 // Resume an archived session from the phone. The request BLOCKS until Claude's prompt is live
 // (~7-12s), so show a "Restoring…" state meanwhile; on success the session is now live
@@ -1635,9 +1647,10 @@ function dotStyle(s) {
   return s.unread ? `${base};box-shadow:0 0 0 4px ${g}, 0 0 9px 2px ${g}` : base;
 }
 
+// Recent rank from the repo list (`recent` on base rows); everything else after.
 function repoRank(repo) {
-  const i = repositoryPriority.value.indexOf(repo.toLowerCase());
-  return i === -1 ? repositoryPriority.value.length : i;
+  const r = (repos.value || []).find((x) => !x.isWorktree && x.name === repo && x.recent != null);
+  return r ? r.recent : Number.MAX_SAFE_INTEGER;
 }
 
 // A raw filesystem path or a generic branch is noise as a subtitle — drop it so the
@@ -1932,10 +1945,39 @@ function List() {
               <path d="M12 17h7" />
             </svg>
           </button>
-          <button class="newbtn" onClick=${openNewSession} aria-label="New session">+</button>
+          <button
+            class=${"newbtn" + (pickerLaunch.value && !pickerLaunch.value.error ? " pending" : "")}
+            onClick=${openNewSession}
+            aria-label="New session"
+            aria-description=${pickerLaunch.value && !pickerLaunch.value.error ? `launching ${pickerLaunch.value.label}` : undefined}
+          >
+            +
+          </button>
         </div>
         ${error.value && error.value !== "bridge unreachable" && html`<div class="err">${error.value}</div>`}
         ${launching.value && html`<div class="sub" style="padding:4px 4px 10px">launching ${launching.value}…</div>`}
+        ${pickerLaunch.value &&
+        !pickerLaunch.value.error &&
+        !showNewSession.value &&
+        html`<div class="sub" role="status" style="padding:4px 4px 10px">launching ${pickerLaunch.value.label}…</div>`}
+        ${launchNotice.value &&
+        html`<div class=${"launchnotice" + (launchNotice.value.error ? " failed" : "")} role=${launchNotice.value.error ? "alert" : "status"}>
+          <button
+            type="button"
+            class="lnmain"
+            onClick=${() => {
+              const n = launchNotice.value;
+              launchNotice.value = null;
+              if (n.error) launchSession(n.repo);
+              else if (n.sessionId) open(n.sessionId);
+            }}
+          >
+            ${launchNotice.value.error
+              ? html`${launchNotice.value.error} · ${launchNotice.value.label}<span class="act">retry</span>`
+              : html`${launchNotice.value.label} is ready<span class="act">open</span>`}
+          </button>
+          <button type="button" class="lnclose" aria-label="Dismiss" onClick=${() => (launchNotice.value = null)}>✕</button>
+        </div>`}
         ${inboxStale.value &&
         html`<div class="staleband">inbox snapshot is stale — showing last known state</div>`}
         ${listStale.value &&
@@ -1974,9 +2016,6 @@ function List() {
 }
 
 
-// New-session repo picker: tap a base repo to launch `claude` in a new tmux window on
-// its current branch; tap a nested worktree to launch there instead. Worktrees render
-// indented under their base repo (the list arrives base-then-worktrees, in order).
 async function openShell() {
   showShell.value = true;
   shellRuns.value = null;
@@ -2096,42 +2135,233 @@ function Shell() {
   `;
 }
 
+// New-session picker: Recent first (the thumb is already at the top after +), then every
+// repo A–Z, names only. A repo's name launches its base checkout in one tap; its trailing
+// count opens the worktrees (newest commit first), each launchable. The one warning is a
+// base checkout off main/master — a session started there lands on someone's branch.
+// Search: every word must match; a query the repo name answers alone keeps worktrees
+// folded ("pulse"), otherwise worktrees match on repo + branch + folder + short sha ("pulse
+// wh", "second-ask") under their repo. Results rank name-prefix, then Recent, then A–Z;
+// Return launches a lone target, or the top repo when its name starts a one-word query.
 function NewSession() {
   const list = repos.value;
-  const { rootRef } = useSwipeBack(() => (showNewSession.value = false));
+  const close = () => (showNewSession.value = false);
+  const { rootRef } = useSwipeBack(close);
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(() => new Set());
+  const [announce, setAnnounce] = useState("");
+  const headRef = useRef(null);
+  const launch = pickerLaunch.value;
+  const busy = !!launch && !launch.error;
+
+  // Screen readers land on the heading; leaving returns focus to Home's + button.
+  useEffect(() => {
+    headRef.current?.focus({ preventScroll: true });
+    return () => setTimeout(() => document.querySelector('[aria-label="New session"]')?.focus({ preventScroll: true }), 0);
+  }, []);
+
+  const groups = [];
+  for (const r of list || []) {
+    if (!r.isWorktree) groups.push({ base: r, wts: [] });
+    else if (groups.length) groups[groups.length - 1].wts.push(r);
+  }
+  for (const g of groups) g.wts.sort((a, b) => (b.committedAt || 0) - (a.committedAt || 0));
+  const sortKey = (n) => n.replace(/^[^a-z0-9]+/i, ""); // ".dotfiles" sorts under d
+  const all = [...groups].sort((a, b) => sortKey(a.base.name).localeCompare(sortKey(b.base.name)));
+  const recent = groups.filter((g) => g.base.recent != null).sort((a, b) => a.base.recent - b.base.recent);
+
+  const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const hit = (text) => words.every((w) => text.toLowerCase().includes(w));
+  const results = [];
+  const targets = [];
+  if (words.length) {
+    for (const g of groups) {
+      const baseHit = hit(g.base.name);
+      const wtHits = baseHit ? [] : g.wts.filter((w) => hit(`${g.base.name} ${w.branch} ${dirName(w.path)} ${shortSha(w)}`));
+      if (!baseHit && !wtHits.length) continue;
+      results.push({ ...g, hits: wtHits, baseHit });
+    }
+    const q0 = words[0];
+    const tier = (g) => (g.base.name.toLowerCase().startsWith(q0) ? 0 : g.base.recent != null ? 1 : 2);
+    const rec = (g) => (g.base.recent != null ? g.base.recent : Infinity);
+    results.sort((a, b) => tier(a) - tier(b) || rec(a) - rec(b) || a.base.name.localeCompare(b.base.name));
+    for (const g of results) targets.push(...(g.baseHit ? [g.base] : g.hits));
+  }
+  const enterTarget =
+    targets.length === 1 || (targets[0] && !targets[0].isWorktree && words.length === 1 && targets[0].name.toLowerCase().startsWith(words[0]))
+      ? targets[0]
+      : null;
+
+  const summary = !words.length
+    ? ""
+    : targets.length
+      ? `${targets.length} match${targets.length === 1 ? "" : "es"}${enterTarget ? `, return opens ${launchLabel(enterTarget)}` : ""}`
+      : `no repo or branch matches ${query.trim()}`;
+  useEffect(() => {
+    const t = setTimeout(() => setAnnounce(summary), 400); // one announcement per typing pause
+    return () => clearTimeout(t);
+  }, [summary]);
+
+  const toggle = (g) => {
+    const opening = !open.has(g.base.path);
+    setOpen((prev) => {
+      const next = new Set(prev);
+      opening ? next.add(g.base.path) : next.delete(g.base.path);
+      return next;
+    });
+    // Bring the opened worktrees into view, but never scroll their repo row off the top.
+    if (opening) {
+      setTimeout(() => {
+        const wl = document.getElementById(wtListId(g.base));
+        const sc = wl?.closest(".scroll");
+        if (!wl || !sc || !wl.previousElementSibling) return;
+        const view = sc.getBoundingClientRect();
+        const below = wl.lastElementChild.getBoundingClientRect().bottom - view.bottom;
+        const headroom = wl.previousElementSibling.getBoundingClientRect().top - view.top;
+        if (below > 0) sc.scrollBy({ top: Math.min(below + 8, headroom) });
+      }, 60);
+    }
+  };
+
+  // The first match of each query word in bold.
+  const hl = (text) => {
+    if (!words.length) return text;
+    const on = new Array(text.length).fill(false);
+    const lower = text.toLowerCase();
+    for (const w of words) {
+      const i = lower.indexOf(w);
+      if (i !== -1) on.fill(true, i, i + w.length);
+    }
+    const parts = [];
+    for (let i = 0; i < text.length; ) {
+      let j = i;
+      while (j < text.length && on[j] === on[i]) j++;
+      parts.push(on[i] ? html`<b>${text.slice(i, j)}</b>` : text.slice(i, j));
+      i = j;
+    }
+    return parts;
+  };
+  const rowState = (r) => (launch && launch.path === r.path ? launch : null);
+  const errLine = (st) => html`<span class="nssub nserr"><span class="vh">, </span>${st.error} — tap to retry</span>`;
+  const spinner = html`<span class="nsspin" role="img" aria-label="launching"></span>`;
+
+  const wtRow = (w, pre) => {
+    const st = rowState(w);
+    const label =
+      w.branch === "detached"
+        ? html`${hl(dirName(w.path))}<span class="nsdim"> detached</span>`
+        : html`${pre && html`<span class="vh">${pre}</span>`}${hl(w.branch.slice(pre.length))}`;
+    return html`
+      <button type="button" class="nswt" key=${w.path} disabled=${busy && !st} onClick=${() => launchSession(w)}>
+        <span class="nstext"><span class="nsname">${label}</span>${st?.error && errLine(st)}</span>
+        ${st && !st.error
+          ? spinner
+          : w.committedAt &&
+            html`<span class="nsage"><span class="vh">, committed </span>${formatTimeAgo(w.committedAt, { now: tick.value })}<span class="vh"> ago</span></span>`}
+      </button>
+    `;
+  };
+  const wtList = (b, wts) => {
+    const pre = sharedPrefix(wts);
+    return html`<div class="nswts" role="group" id=${wtListId(b)} aria-label=${`${b.name} worktrees`}>
+      ${pre && html`<div class="nswtpre" aria-hidden="true">${pre}</div>`}${wts.map((w) => wtRow(w, pre))}
+    </div>`;
+  };
+  // `disclose`: the All list's rows carry the worktree count; Recent and results don't.
+  const baseRow = (g, disclose) => {
+    const b = g.base;
+    const st = rowState(b);
+    const opened = disclose && open.has(b.path);
+    const total = g.wts.length;
+    return html`
+      <div class=${"nsrow" + (opened ? " open" : "")} key=${b.path}>
+        <button type="button" class="nsmain" disabled=${busy && !st} onClick=${() => launchSession(b)}>
+          <span class="nsname">${hl(b.name)}</span>
+          ${st?.error
+            ? errLine(st)
+            : b.branch &&
+              b.branch !== "main" &&
+              b.branch !== "master" &&
+              html`<span class="nssub nswarn"><span class="vh">, </span>on ${b.branch}</span>`}
+        </button>
+        ${st && !st.error
+          ? spinner
+          : disclose &&
+            total > 0 &&
+            html`<button
+              type="button"
+              class="nsdisc"
+              aria-expanded=${opened}
+              aria-controls=${wtListId(b)}
+              aria-label=${`${total} worktree${total === 1 ? "" : "s"} in ${b.name}`}
+              onClick=${() => toggle(g)}
+            >
+              ${total}<svg width="8" height="13" viewBox="0 0 8 13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 1.5l5 5-5 5" /></svg>
+            </button>`}
+      </div>
+      ${opened && wtList(b, g.wts)}
+    `;
+  };
+
   return html`
-    <div class="screen" ref=${rootRef}>
+    <div class="screen newsession" ref=${rootRef}>
       <div class="listhead">
-        <button class="iconbtn" onClick=${() => (showNewSession.value = false)} aria-label="Back">‹</button>
-        <h1 style="margin:0">new session</h1>
+        <button class="iconbtn" onClick=${close} aria-label="Back">‹</button>
+        <h1 tabindex="-1" ref=${headRef}>new session</h1>
       </div>
-      <div class="scroll">
+      <div class="histsearch">
+        <input
+          type="search"
+          enterkeyhint="go"
+          aria-label="Search repos and branches"
+          placeholder="search repos and branches…"
+          autocapitalize="none"
+          autocorrect="off"
+          spellcheck=${false}
+          value=${query}
+          onInput=${(e) => setQuery(e.target.value)}
+          onKeyDown=${(e) => {
+            if (e.key === "Enter" && enterTarget) {
+              e.preventDefault();
+              launchSession(enterTarget);
+            }
+          }}
+        />
+      </div>
+      <main class="scroll nsscroll">
+        <div class="vh" role="status" aria-live="polite">${busy ? `launching ${launch.label}…` : announce}</div>
+        <div class="vh" role="alert">${launch?.error ? `${launch.error}, ${launch.label}. Tap it again to retry.` : ""}</div>
         ${error.value && error.value !== "bridge unreachable" && html`<div class="err">${error.value}</div>`}
-        ${list === null && html`<div class="sub" style="padding:8px">loading repos…</div>`}
-        ${list && list.length === 0 && html`<div class="sub" style="padding:8px">no repos found</div>`}
-        ${list &&
-        list.map((r) => {
-          // Worktree: just the branch name, indented under its base repo (left-rail + indent
-          // signal the nesting — no marker, no path).
-          if (r.isWorktree) {
-            return html`
-              <button type="button" class="row wt" key=${r.path} onClick=${() => launchSession(r)}>
-                <span class="grow"><span class="name">${r.branch}</span></span>
-              </button>
-            `;
-          }
-          // Base repo: a "+" marker + the name.
-          return html`
-            <button type="button" class="row" key=${r.path} onClick=${() => launchSession(r)}>
-              <span class="addmark">+</span>
-              <span class="grow"><span class="name">${r.name}</span></span>
-            </button>
-          `;
-        })}
-      </div>
+        ${list === null && html`<div class="nsload" role="img" aria-label="loading repos"></div>`}
+        ${list && list.length === 0 && html`<div class="nsempty">No repos found</div>`}
+        ${words.length > 0 &&
+        list &&
+        (results.length
+          ? html`<h2 class="repo">results</h2>
+              <div class="nsgroup">${results.map((g) => html`${baseRow(g, false)}${g.hits.length > 0 && wtList(g.base, g.hits)}`)}</div>`
+          : html`<div class="nsempty">No repo or branch matches<br /><b>“${query.trim()}”</b></div>`)}
+        ${!words.length &&
+        list &&
+        list.length > 0 &&
+        html`${recent.length > 0 &&
+          html`<h2 class="repo">recent</h2>
+            <div class="nsgroup">${recent.map((g) => baseRow(g, false))}</div>`}
+          <h2 class="repo nsallcap">all</h2>
+          <div class="nsgroup">${all.map((g) => baseRow(g, true))}</div>`}
+      </main>
     </div>
   `;
 }
+// The leading path segment ("marcelmiro/") every named branch in a group shares, shown once
+// above the group instead of on each row; "" when fewer than two rows share one.
+function sharedPrefix(wts) {
+  const named = wts.filter((w) => w.branch !== "detached");
+  const first = named[0]?.branch.match(/^[^/]+\//)?.[0];
+  return named.length > 1 && first && named.every((w) => w.branch.startsWith(first)) ? first : "";
+}
+const dirName = (p) => p.split("/").filter(Boolean).pop() || p;
+const shortSha = (r) => (r.head || "").slice(0, 7);
+const wtListId = (base) => `wts-${base.path.replace(/[^a-zA-Z0-9]/g, "-")}`;
 
 // Day bucket label for History browse mode: today / yesterday / "fri 18 jul".
 function dayLabel(iso, now) {
@@ -2168,7 +2398,7 @@ function History() {
   const { rootRef } = useSwipeBack(() => (showHistory.value = false));
   const rows = h ? h.rows : [];
 
-  // Chips: pinned repos first (same order the list uses), then by match count. The
+  // Chips: Recent repos first (the new-session picker's order), then by match count. The
   // server only facets repos under configured repository roots — temp/scratch clones get no chip.
   const chips = h
     ? [...h.repos].sort((a, b) => repoRank(a.repo) - repoRank(b.repo) || b.count - a.count || a.repo.localeCompare(b.repo))
@@ -5427,7 +5657,8 @@ try {
 }
 
 let bootTimeout;
-Promise.all([refreshSessions(), refreshPreferences()])
+refreshRepos();
+refreshSessions()
   .then(() => {
     clearTimeout(bootTimeout);
     if (authed.value) {

@@ -48,7 +48,7 @@ describe("discoverRepos root entries", () => {
       await Bun.$`git -C ${repoRoot} init -b main`.quiet();
       // Nested repo inside a repo-root must NOT be discovered (vendored, not yours).
       await Bun.$`git init -b main ${repoRoot}/vendored`.quiet();
-      const repos = await discoverRepos([], [dir, repoRoot], []);
+      const repos = await discoverRepos([], [dir, repoRoot]);
       const paths = repos.map((r) => r.path);
       expect(paths).toContain(child);
       expect(paths).toContain(repoRoot);
@@ -66,11 +66,14 @@ describe("discoverRepos session entries", () => {
     await initRepo();
     const wt = `${dir}/.claude/worktrees/tf-1`;
     await git("worktree", "add", wt, "-b", "tf-1");
-    const repos = await discoverRepos([{ name: "tf-1", path: wt }], [], []);
+    const repos = await discoverRepos([{ name: "tf-1", path: wt }], []);
     const name = dir.split("/").pop()!;
     expect(repos.map((r) => [r.path, r.name, !!r.isWorktree])).toEqual([
       [dir, name, false],
       [wt, name, true],
     ]);
+    const head = (await Bun.$`git -C ${wt} rev-parse HEAD`.quiet().text()).trim();
+    const ct = Number((await Bun.$`git -C ${wt} log -1 --format=%ct`.quiet().text()).trim()) * 1000;
+    expect([repos[1]!.head, repos[1]!.committedAt]).toEqual([head, ct]);
   });
 });

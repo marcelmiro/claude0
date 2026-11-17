@@ -58,6 +58,7 @@ import { pendingScriptsAt, backgroundLead, screenTotal, withScreenTotals, type B
 import { isValidSessionId, resolveTranscriptPath, resolveTranscriptPaths } from "../core/last-turn";
 import { homedir } from "os";
 import { discoverRepos, getBaseRepoPath } from "../core/git";
+import { recentRepos } from "../core/recent-repos";
 import { listSlashCommands } from "../core/skills";
 import { repoRootForSession, safeRepoPath, fileDiff, rangeDiff, branchChanges } from "../core/repo-files";
 import { branchPullRequest, type PullRequestInfo } from "../core/pull-request";
@@ -417,19 +418,30 @@ async function markSessionRead(sessionId: string): Promise<void> {
 // session set from the discovery snapshot computeSessionsPayload already produced
 // (repo membership changes on human timescales — no need for a dedicated sweep), and
 // falls back to a real discovery only before the first projection exists.
-async function reposPayload(): Promise<Array<{ name: string; path: string; branch: string; isWorktree: boolean }>> {
+// Base rows you've worked in lately carry `recent` (0 = most used) — the picker's Recent
+// section, ranked from transcript activity (`recentRepos`).
+async function reposPayload(): Promise<
+  Array<{ name: string; path: string; branch: string; isWorktree: boolean; recent?: number; head?: string; committedAt?: number }>
+> {
   const cfg = await loadConfig();
   const sessions = lastDiscovered ?? (await discoverSessions({})).sessions;
   const sessionRepos = sessions
     .filter((s) => s.repoPath)
     .map((s) => ({ name: s.repo, path: s.repoPath }));
-  const repos = await discoverRepos(sessionRepos, cfg.repositories.roots, cfg.repositories.priority);
-  return repos.map((r) => ({
-    name: r.name,
-    path: r.path,
-    branch: r.currentBranch,
-    isWorktree: !!r.isWorktree,
-  }));
+  const repos = await discoverRepos(sessionRepos, cfg.repositories.roots);
+  const recent = await recentRepos(repos.filter((r) => !r.isWorktree).map((r) => r.path));
+  return repos.map((r) => {
+    const rank = r.isWorktree ? -1 : recent.indexOf(r.path);
+    return {
+      name: r.name,
+      path: r.path,
+      branch: r.currentBranch,
+      isWorktree: !!r.isWorktree,
+      ...(rank === -1 ? {} : { recent: rank }),
+      ...(r.head ? { head: r.head } : {}),
+      ...(r.committedAt ? { committedAt: r.committedAt } : {}),
+    };
+  });
 }
 
 let sessionsCache: { ts: number; value: unknown } | null = null;
@@ -1315,10 +1327,6 @@ async function route(req: Request): Promise<Response> {
   }
 
   if (method === "GET" && path === "/sessions") return json(await sessionsPayload());
-  if (method === "GET" && path === "/preferences") {
-    const cfg = await loadConfig();
-    return json({ repositoryPriority: cfg.repositories.priority });
-  }
   if (method === "GET" && path === "/pending") return json(listPendingApprovals());
   // EventSource can't set headers, so the deviceId rides a query param here.
   if (method === "GET" && path === "/stream") {

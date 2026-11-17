@@ -167,6 +167,8 @@ export interface WizardRepo {
   isLastWorktree?: boolean; // true = last worktree child of its base (tree connector)
   hasSession?: boolean;   // true = base repo has an active/recent session (sorts to top)
   worktreeCount?: number; // linked worktrees under this base (from git worktree list); drives the collapsed-row badge
+  head?: string;          // worktree rows: checked-out commit sha
+  committedAt?: number;   // worktree rows: that commit's time (epoch ms)
 }
 
 /** The three configurable tmux bindings, resolved (defaults filled) by `tmuxKeys()`. */
@@ -192,7 +194,6 @@ export interface Config {
   };
   repositories: {
     roots: string[];          // dirs to scan 1-level deep for canonical git repos
-    priority: string[];       // repo names pinned at top of lists
   };
   terminal: {
     defaultTarget: "local" | "remote";

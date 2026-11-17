@@ -22,18 +22,13 @@
     "repositories": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["roots", "priority"],
+      "required": ["roots"],
       "properties": {
         "roots": {
           "type": "array",
           "minItems": 1,
           "items": { "type": "string", "minLength": 1 },
           "description": "Directories scanned one level deep for canonical Git repositories."
-        },
-        "priority": {
-          "type": "array",
-          "items": { "type": "string", "minLength": 1 },
-          "description": "Repository names pinned to the top of Claude0 lists."
         }
       }
     },

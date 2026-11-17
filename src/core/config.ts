@@ -27,7 +27,6 @@ export const DEFAULT_CONFIG = {
   schemaVersion: 1,
   repositories: {
     roots: ["~/dev"],
-    priority: [],
   },
   terminal: {
     defaultTarget: "local",
@@ -118,10 +117,9 @@ export function validateConfig(value: unknown): Config {
   }
 
   if (!isObject(value.repositories)) throw new Error("repositories must be an object");
-  onlyKeys(value.repositories, ["roots", "priority"], "repositories");
+  onlyKeys(value.repositories, ["roots"], "repositories");
   const roots = stringsAt(value.repositories.roots, "repositories.roots", { nonEmpty: true });
   if (roots.length === 0) throw new Error("repositories.roots must contain at least one directory");
-  const priority = stringsAt(value.repositories.priority, "repositories.priority", { nonEmpty: true });
 
   if (!isObject(value.terminal)) throw new Error("terminal must be an object");
   onlyKeys(value.terminal, ["defaultTarget", "remoteHost", "localSession", "remoteSession", "imagePasteKey"], "terminal");
@@ -204,7 +202,7 @@ export function validateConfig(value: unknown): Config {
     ...(value.$schema === undefined ? {} : { $schema: value.$schema }),
     schemaVersion: 1,
     ...(deployment === undefined ? {} : { deployment }),
-    repositories: { roots, priority },
+    repositories: { roots },
     terminal: {
       defaultTarget: value.terminal.defaultTarget,
       remoteHost: value.terminal.remoteHost,

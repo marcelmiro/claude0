@@ -567,12 +567,17 @@ const FIXTURE_DIALOG = {
 };
 
 export const FIXTURE_REPOS = [
-  { name: "throxy", path: "/Users/throxy/dev/throxy", branch: "main", isWorktree: false },
-  { name: "throxy", path: "/Users/throxy/dev/throxy/.claude/worktrees/add-tomba-as-enrichment-provider", branch: "add-tomba-as-enrichment-provider", isWorktree: true },
-  { name: "throxy", path: "/Users/throxy/dev/throxy/.claude/worktrees/workspace-cleanup", branch: "feature/workspace-context-cleanup", isWorktree: true },
-  { name: "claude0", path: "/Users/throxy/dev/claude0", branch: "main", isWorktree: false },
-  { name: "customeros", path: "/Users/throxy/dev/customeros", branch: "main", isWorktree: false },
-  { name: "customeros", path: "/Users/throxy/dev/customeros/.claude/worktrees/ticket-output-piping", branch: "ticket-output-piping", isWorktree: true },
+  { name: "throxy", path: "/Users/throxy/dev/throxy", branch: "main", isWorktree: false, recent: 0 },
+  { name: "throxy", path: "/Users/throxy/dev/throxy/.claude/worktrees/add-tomba-as-enrichment-provider", branch: "marcelmiro/tf-1498-add-tomba-as-enrichment-provider", isWorktree: true, head: "3f9a1c0e5b7d2a41c8e0f6b19d2a7c4e5f3b8a10", committedAt: agoMs(2 * 3600_000) },
+  { name: "throxy", path: "/Users/throxy/dev/throxy/.claude/worktrees/second-ask", branch: "detached", isWorktree: true, head: "9b2e4d1a7c3f5e8b0a6d2c4f1e3b5a7d9c0e2f4b", committedAt: agoMs(26 * 3600_000) },
+  { name: "throxy", path: "/Users/throxy/dev/throxy/.claude/worktrees/workspace-cleanup", branch: "feature/workspace-context-cleanup", isWorktree: true, head: "c4e5f3b8a103f9a1c0e5b7d2a41c8e0f6b19d2a7", committedAt: agoMs(5 * 86400_000) },
+  { name: "chat", path: "/Users/throxy/dev/chat", branch: "main", isWorktree: false, recent: 3 },
+  { name: "claude0", path: "/Users/throxy/dev/claude0", branch: "main", isWorktree: false, recent: 1 },
+  { name: "customeros", path: "/Users/throxy/dev/customeros", branch: "main", isWorktree: false, recent: 2 },
+  { name: "customeros", path: "/Users/throxy/dev/customeros/.claude/worktrees/ticket-output-piping", branch: "ticket-output-piping", isWorktree: true, head: "e0f6b19d2a7c4e5f3b8a103f9a1c0e5b7d2a41c8", committedAt: agoMs(3 * 86400_000) },
+  { name: "falcon", path: "/Users/throxy/dev/falcon", branch: "feat/client-channel-drafts", isWorktree: false },
+  { name: "ink", path: "/Users/throxy/dev/ink", branch: "main", isWorktree: false, recent: 4 },
+  { name: "maestro", path: "/Users/throxy/dev/maestro", branch: "main", isWorktree: false, recent: 5 },
   { name: "wiki", path: "/Users/throxy/dev/wiki", branch: "main", isWorktree: false },
 ];
 

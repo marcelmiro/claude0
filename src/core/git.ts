@@ -51,60 +51,67 @@ async function inferManagedBaseRepo(repoPath: string): Promise<string | null> {
 
 /**
  * List all worktrees for a repo via `git worktree list --porcelain`.
- * Returns `{ path, branch }` for every working tree, main first (`branch` is the
- * short name, or "detached"). Returns null when `basePath` isn't a git repo (e.g.
- * a session running in a non-repo dir like ~) so the caller can skip it.
+ * Returns `{ path, branch, head }` for every working tree, main first (`branch` is the
+ * short name, or "detached"; `head` the checked-out commit). Returns null when
+ * `basePath` isn't a git repo (e.g. a session running in a non-repo dir like ~) so
+ * the caller can skip it.
  */
-async function listWorktrees(basePath: string): Promise<Array<{ path: string; branch: string }> | null> {
+async function listWorktrees(basePath: string): Promise<Array<{ path: string; branch: string; head: string }> | null> {
   try {
     const out = await Bun.$`git -C ${basePath} worktree list --porcelain`.quiet().text();
-    const entries: Array<{ path: string; branch: string }> = [];
-    let cur: { path?: string; branch?: string } = {};
+    const entries: Array<{ path: string; branch: string; head: string }> = [];
+    let cur: { path?: string; branch?: string; head?: string } = {};
     for (const line of out.split("\n")) {
       if (line.startsWith("worktree ")) {
-        if (cur.path) entries.push({ path: cur.path, branch: cur.branch || "detached" });
+        if (cur.path) entries.push({ path: cur.path, branch: cur.branch || "detached", head: cur.head || "" });
         cur = { path: line.slice("worktree ".length) };
+      } else if (line.startsWith("HEAD ")) {
+        cur.head = line.slice("HEAD ".length);
       } else if (line.startsWith("branch refs/heads/")) {
         cur.branch = line.slice("branch refs/heads/".length);
       } else if (line === "detached") {
         cur.branch = "detached";
       }
     }
-    if (cur.path) entries.push({ path: cur.path, branch: cur.branch || "detached" });
+    if (cur.path) entries.push({ path: cur.path, branch: cur.branch || "detached", head: cur.head || "" });
     return entries.length ? entries : null;
   } catch {
     return null;
   }
 }
 
-/**
- * Base-repo ordering: priority repos first (in configured order), then repos with an
- * active session, then alphabetical.
- */
-function compareRepos(
-  a: { name: string; hasSession?: boolean },
-  b: { name: string; hasSession?: boolean },
-  priorityRepos: string[],
-): number {
-  const ap = priorityRepos.indexOf(a.name.toLowerCase());
-  const bp = priorityRepos.indexOf(b.name.toLowerCase());
-  if (ap !== -1 && bp !== -1) return ap - bp;
-  if (ap !== -1) return -1;
-  if (bp !== -1) return 1;
+/** Base-repo ordering: repos with an active session first, then alphabetical. */
+function compareRepos(a: { name: string; hasSession?: boolean }, b: { name: string; hasSession?: boolean }): number {
   if (!!a.hasSession !== !!b.hasSession) return a.hasSession ? -1 : 1;
   return a.name.localeCompare(b.name);
+}
+
+/** Commit time (epoch ms) of each sha, in one `git log` call; empty on failure. */
+async function commitTimes(repoPath: string, shas: string[]): Promise<Map<string, number>> {
+  const times = new Map<string, number>();
+  const unique = [...new Set(shas.filter(Boolean))];
+  if (!unique.length) return times;
+  try {
+    const out = await Bun.$`git -C ${repoPath} log --no-walk=unsorted --format=${"%H %ct"} ${unique}`.quiet().text();
+    for (const line of out.split("\n")) {
+      const [sha, ct] = line.split(" ");
+      if (sha && ct) times.set(sha, Number(ct) * 1000);
+    }
+  } catch {
+    // unreadable repo — rows just go without an age
+  }
+  return times;
 }
 
 /**
  * Discover git repos from session display rows + configured paths.
  * Returns a flat, display-ordered list: each base repo followed by its linked
- * worktrees (nested rows). Order: priority repos first, then repos with active
- * sessions, then alphabetical. Worktrees sort alphabetically under their base.
+ * worktrees (nested rows). Order: repos with active sessions first, then
+ * alphabetical. Worktrees sort alphabetically under their base.
  */
 export async function discoverRepos(
   sessionRepos: Array<{ name: string; path: string }>,
   repositoryRoots: string[],
-  priorityRepos: string[],
 ): Promise<WizardRepo[]> {
   const bases = new Map<string, { name: string; path: string; hasSession: boolean }>();
 
@@ -145,8 +152,8 @@ export async function discoverRepos(
     }
   }
 
-  // Order bases: priority first, then active-session repos, then alphabetical.
-  const ordered = [...bases.values()].sort((a, b) => compareRepos(a, b, priorityRepos));
+  // Order bases: active-session repos first, then alphabetical.
+  const ordered = [...bases.values()].sort(compareRepos);
 
   // Flatten: each base repo followed by its worktrees (nested rows).
   const repos: WizardRepo[] = [];
@@ -157,6 +164,7 @@ export async function discoverRepos(
     const linked = worktrees
       .filter((w) => w !== main)
       .sort((a, b) => a.branch.localeCompare(b.branch));
+    const committed = await commitTimes(base.path, linked.map((w) => w.head));
 
     repos.push({ name: base.name, path: base.path, currentBranch: main?.branch || "main", hasSession: base.hasSession, worktreeCount: linked.length });
     linked.forEach((w, i) => {
@@ -166,6 +174,8 @@ export async function discoverRepos(
         currentBranch: w.branch,
         isWorktree: true,
         isLastWorktree: i === linked.length - 1,
+        head: w.head,
+        committedAt: committed.get(w.head),
       });
     });
   }

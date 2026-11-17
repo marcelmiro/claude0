@@ -253,7 +253,7 @@ export function runSidebarRenderer(): void {
     const sessionRepos = sessions.flatMap((s) => (s.repoPath ? [{ name: s.repo, path: s.repoPath }] : []));
     let repos: WinState["repos"] = [];
     try {
-      repos = (await discoverRepos(sessionRepos, cfg.repositories.roots, cfg.repositories.priority)).map((r) => ({
+      repos = (await discoverRepos(sessionRepos, cfg.repositories.roots)).map((r) => ({
         name: r.name,
         path: r.path,
         branch: r.currentBranch,

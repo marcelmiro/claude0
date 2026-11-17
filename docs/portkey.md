@@ -13,6 +13,36 @@ browser: [portkey-design-loop.md](portkey-design-loop.md). Home is the inbox:
 | Slash-command turns are a normal user bubble with the `/name` in mono; long-press is copy-only. Queued and sending bubbles of a command render the same way. A queued command's bare-text record (written at dequeue, before its runner record) parses as a command turn too (`core/transcript.ts`) | `Turn`, `commandBody` |
 | An optimistic send bubble is faded and grows a "sending…" tag after ~5s; a server-confirmed queue entry is full-strength text in a dashed peach outline with a `◷ queued` tag — they never share a look | `SendingTag`, `.bubble.queued` |
 
+## New session picker
+
+A plain list of names in Portkey's page chrome (the `‹` back header with swipe-back,
+History's search field, `.repo` section labels): **Recent** first, because the thumb is
+already at the top after tapping +, then **All** repos A–Z (`NewSession`).
+
+- **Recent** is up to 6 base repos ranked by transcripts touched in the last 14 days,
+  counting each repo's project folder in `~/.claude/projects` plus its managed worktrees'
+  (`recentRepos`, `core/recent-repos.ts`). It is stat-only and runs inside the `/repos`
+  cache, which sets `recent` (rank) on those base rows. History's repo chips use the same
+  rank (`repoRank`). There is no config pin: Recent replaced `repositories.priority`.
+- **A repo's name launches its base checkout in one tap.** In All, a trailing count is a
+  separate 64px target that opens the worktrees in place. They are newest HEAD commit first
+  (`discoverRepos` → `commitTimes`), each launchable. A detached worktree is named by its
+  folder. A leading segment every named branch in the group shares ("marcelmiro/") shows
+  once above the group (`sharedPrefix`).
+- **The only warning** is a base checkout off main/master ("on <branch>" in peach): a
+  session started there lands on someone's branch.
+- **Search:** every word must match. A query the repo name answers alone keeps worktrees
+  folded; otherwise worktrees match on repo + branch + folder + short sha, under their repo.
+  Results rank name-prefix, then Recent, then A–Z. Return launches a lone target, or the top
+  repo when its name starts a one-word query (`enterTarget`).
+- **Launch** keeps the picker open: the tapped row shows a spinner, and every other row is
+  disabled so a second tap can't launch twice. A failure shows on the row and a tap retries
+  it (`launchSession`, `pickerLaunch`). If the picker was left meanwhile, the session is not
+  auto-opened: Home shows "launching…", then a ready/failed card with open, retry or dismiss
+  (`launchNotice`), and the + button pulses while a launch is pending.
+- The sidebar's `n` mode is a separate surface: it keeps `discoverRepos` order (repos with a
+  live session, then A–Z) and has no Recent section.
+
 ## iOS status bar (installed PWA, iOS 27)
 
 The fix is the `.status-bar-background` strip (`index.html`; its comment explains the
