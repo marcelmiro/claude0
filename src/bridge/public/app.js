@@ -3439,9 +3439,20 @@ function Composer({ disabled, status }) {
     slash.current.open = false;
     rerender();
   }
-  async function onPick(e) {
+  function onPick(e) {
     const files = [...(e.target.files || [])];
     e.target.value = ""; // allow re-picking the same file
+    addImages(files);
+  }
+  // A copied image arrives as a clipboard file. Text paste keeps the browser default, and so
+  // does a mixed clipboard (e.g. an image copied off a web page also carries text).
+  function onPaste(e) {
+    const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith("image/"));
+    if (!files.length) return;
+    if (!e.clipboardData.getData("text/plain")) e.preventDefault();
+    addImages(files);
+  }
+  async function addImages(files) {
     const added = [];
     for (const f of files) {
       if (!f.type.startsWith("image/")) continue;
@@ -3720,6 +3731,7 @@ function Composer({ disabled, status }) {
               autocapitalize="none"
               disabled=${disabled}
               onInput=${onInput}
+              onPaste=${onPaste}
             ></textarea>`}
         ${!hasText && attachments.value.length === 0 && status === "running" && !disabled
           ? html`<button
