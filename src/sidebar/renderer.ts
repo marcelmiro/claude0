@@ -46,6 +46,8 @@ const AUTOSTART = `${PATHS.dir}/inbox-sidebar-autostart-default`;
 const HIDDEN = `${PATHS.dir}/inbox-sidebar-hidden-default`;
 /** start_command marker for stub panes (what discovery greps for). */
 const STUB_MARK = "sidebar-pane";
+/** An unfocused wheel scroll returns to the top this long after the last wheel event. */
+const GLANCE_WHEEL_HOLD_MS = 10_000;
 /**
  * Field separator for tmux -F output. NOT \t: tmux sanitizes control
  * characters to `_` when the client runs OUTSIDE tmux (no TMUX env) — which
@@ -72,10 +74,8 @@ interface WinState extends ViewState {
   width: number;
   height: number;
   clickArmed: boolean;
-  /** Screen line of the click that set the "click" hold. The repaint can still shift the clicked row (the
-   * focused window loses a line to the ↓ count or a detail line), so a second click on this line commits
-   * the selection whatever is under it now. */
-  clickY: number;
+  /** When the last wheel event landed — an unfocused wheel hold releases GLANCE_WHEEL_HOLD_MS after it. */
+  wheelAt: number;
   /** Selector landed by focus on the pane-you-came-from's session, untouched since (`seedFallback`). */
   seededId: string | null;
   confirmKillId: string | null;
@@ -100,7 +100,7 @@ function freshWin(windowId: string): WinState {
     height: 24,
     focused: false,
     clickArmed: false,
-    clickY: 0,
+    wheelAt: 0,
     seededId: null,
     selectedId: null,
     activePaneId: null,
@@ -1249,7 +1249,6 @@ export function runSidebarRenderer(): void {
 
   async function handleEvent(win: WinState, ev: InputEvent): Promise<void> {
     // a wheel or click hold lasts until you do anything else; then the list re-anchors
-    const held = win.scrollHold;
     if (ev.type !== "wheel") win.scrollHold = null;
     if (ev.type === "focus") {
       if (ev.in) gainFocusSoon(win);
@@ -1271,6 +1270,7 @@ export function runSidebarRenderer(): void {
       if (win.mode !== "inbox" && win.focused) win.modeCursor = Math.max(0, win.modeCursor + ev.dir);
       else {
         win.scrollHold = "wheel";
+        win.wheelAt = Date.now();
         win.scrollTop = Math.max(0, win.scrollTop + ev.dir * 2);
       }
       paint(win);
@@ -1304,17 +1304,15 @@ export function runSidebarRenderer(): void {
         if (id && win.visible.some((v) => v.id === id)) win.selectedId = id;
         else seedSelection(win);
         win.scrollHold = "click";
-        win.clickY = ev.y;
         paint(win);
         return;
       }
-      const s = findSession(held === "click" && ev.y === win.clickY ? win.selectedId : id);
+      const s = findSession(id);
       if (!s) return;
       if (win.selectedId === s.id) await enterRow(win, s, true);
       else {
         win.selectedId = s.id;
         win.scrollHold = "click";
-        win.clickY = ev.y;
       }
       paint(win);
       return;
@@ -1823,6 +1821,11 @@ export function runSidebarRenderer(): void {
     } catch {}
     const minute = Math.floor(Date.now() / 60_000);
     if (minute !== lastMinute) lastMinute = minute;
+    // an unfocused wheel hold has no next key to end it: release it so the
+    // glance surface returns to Needs You
+    for (const win of wins.values()) {
+      if (win.scrollHold === "wheel" && !win.focused && Date.now() - win.wheelAt > GLANCE_WHEEL_HOLD_MS) win.scrollHold = null;
+    }
     // paint() diffs per line, so ticking every second is cheap
     phase = "paint";
     paintAll();

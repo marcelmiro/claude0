@@ -96,11 +96,13 @@ before painting (a killed window's tty can be reused by a new pane at once).
   either side so j/k shows where it lands next; else the top, scrolled just far enough to
   keep the pinned session (this window's) in view, no margin. The margin is dropped when
   the window can't fit the rows either side. A wheel scroll holds wherever it lands until
-  the next key, click or focus change; a click selects with no margin, and a second click
-  on the same screen line commits even if the window shrank under it (`scrollHold`,
-  `clickY`). An overflowing list never shows half a two-line row; a `↓` line counts the
-  sessions hidden below, by section — the bottom row unfocused (a flash takes it over),
-  right above the hints focused (`renderView`).
+  the next key, click or focus change, or unfocused, 10s without a wheel event
+  (`GLANCE_WHEEL_HOLD_MS`). A click selects with no margin, so the row stays under the
+  pointer for the commit click (`scrollHold`) — unless the click focuses the sidebar and
+  the window shrinks by the `↓` line or a detail row: then the row shifts up and you
+  click the highlight. An overflowing list never shows half a two-line row; a `↓` line
+  counts the sessions hidden below, by section — the bottom row unfocused (a flash takes
+  it over), the list's last line focused, above the detail row and hints (`renderView`).
 - **Unfocused**, the sidebar is a glance surface (no chrome, top-anchored). **Focus**
   (`sidebarFocus`, default `M-s`) is instant: the toggle signals the renderer directly, and
   the selector lands on the session of the pane you came from — and if that row leaves

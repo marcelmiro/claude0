@@ -329,7 +329,7 @@ export function renderView(
   }
 
   // chrome: hints bottom-most, detail row above it ONLY when the selected row
-  // has authored info. Unfocused = pure glance surface, no chrome, top-pinned.
+  // has authored info. Unfocused = pure glance surface, no chrome, top-anchored.
   const sel = sessions.find((s) => s.id === vs.selectedId);
   const detail = vs.focused && sel ? detailFor(sel, now) : null;
   // the snooze form spends a second chrome line (unit blocks + amount/preview)
@@ -337,8 +337,8 @@ export function renderView(
   const contentHeight = Math.max(1, height - chromeRows);
 
   // overflow: a line names what's hidden below the list — unfocused, the
-  // bottom row (blank but for a flash); focused, the line above the hints,
-  // which shortens the list window by one
+  // bottom row (blank but for a flash); focused, the list window's last line,
+  // above the detail row and hints
   const overflow = lines.length > contentHeight;
   const windowHeight = overflow && vs.focused ? Math.max(1, contentHeight - 1) : contentHeight;
 
