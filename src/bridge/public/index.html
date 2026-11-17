@@ -1251,9 +1251,24 @@
         white-space: nowrap;
       }
       .agentspill:active { background: var(--hover); }
-      .agentspill .run { color: var(--mint); font-weight: 700; }
+      .agentspill { position: relative; display: inline-flex; gap: 5px; }
+      /* 44px-tall hit area without growing the pill or reaching the ⋯ button beside it */
+      .agentspill::after { content: ""; position: absolute; inset: -9px 0; }
+      .agentspill .run { color: var(--mint); font-weight: 700; margin-left: 1px; }
+      /* narrow phones: the title keeps its room; the pill shows its first slot and "+" */
+      .agentspill .more { display: none; }
+      @media (max-width: 359px) {
+        .agentspill .slot + .slot { display: none; }
+        .agentspill .slot + .slot ~ .more { display: inline; }
+      }
+      .agentspill .run.stalled { color: var(--peach); }
+      /* the attention button also wants the navbar: the pill gives way, not the title */
+      .navbar:has(.attn) .agentspill .slot + .slot { display: none; }
+      .navbar:has(.attn) .agentspill .slot + .slot ~ .more { display: inline; }
+      /* read by screen readers, not shown: a word the dot colour already says visually */
+      .vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
       /* nothing running: the pill is an archive entry point, not a status — dim it */
-      .agentspill.archive { color: var(--dim); border-color: var(--border); }
+      .agentspill.archive { color: var(--muted); border-color: var(--muted); }
 
       /* subagent list (an action sheet over the detail) — rows reuse the sheet surface but
          lay out left-aligned like list rows (.sheet .agent-row outspecifies the centered
@@ -1269,11 +1284,30 @@
         color: var(--fg);
       }
       .agents-sheet > .agent-row:first-child { border-top: none; }
-      .agent-row .chev { flex: none; color: var(--dim); font-size: 18px; }
-      /* collapsed "N earlier agents" divider row — a toggle, not a drill-in target */
-      .agent-row.older-toggle { color: var(--dim); }
-      /* pending-script row — same anatomy as agent rows but inert (no drill-in) */
-      .agent-row.script .scripthint { flex: none; font-size: 13px; }
+      /* inert rows are divs, which .sheetgroup button's divider rule doesn't reach */
+      .agents-sheet > .agent-row + .agent-row { border-top: 1px solid var(--sheet-line); }
+      .agent-row .chev { flex: none; color: var(--muted); font-size: 18px; }
+      /* collapsed "N earlier" row — a toggle, not a drill-in target; the empty dot keeps its
+         label in the name column */
+      .sheet .agent-row.older-toggle { min-height: 44px; color: var(--muted); font-size: 13px; }
+      .agent-row.older-toggle .dot { background: none; }
+      .agent-row .warn, .row .sub .warn, .bgsec .warn { color: var(--peach); }
+      .agent-row .bad { color: var(--red); }
+      /* Home's row anatomy: a time on the right (elapsed under Running, since under Finished) */
+      .agent-row .when { flex: none; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+      /* inert rows keep a chevron-wide gap so their times line up with tappable rows' */
+      .agent-row .chev.ghost { visibility: hidden; }
+      /* a script's label is its only content: names may take two lines here */
+      .agents-sheet .agent-row .name {
+        white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+      }
+      /* section headings styled like Home's (RUNNING mint, FINISHED muted) */
+      .bgsec {
+        color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+        padding: 14px 16px 6px;
+      }
+      .bgsec.run { color: var(--mint); }
+      .agents-sheet > .bgsec + .agent-row { border-top: none; }
 
       /* subagent drill-in — a full-screen push over the detail (iOS-style slide-in) */
       .subagent-view {
@@ -1298,6 +1332,9 @@
         border-bottom: 1px solid var(--border);
       }
       .subagent-head .name { font-size: 15px; }
+      .subagent-head h2.name { margin: 0; font-weight: 500; outline: none; }
+      /* an inert row's visible parts sit in one aria-hidden wrapper that lays out like the row */
+      .agent-row .inert-body { display: contents; }
       .subagent-view .scroll { padding: 12px; padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
       .brief { margin-bottom: 10px; }
       .brief-toggle {

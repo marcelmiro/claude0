@@ -15,6 +15,10 @@
  *   agentId: <id>" for Agent. Without it no notification will ever come: an
  *   Agent result without the confirmation ran synchronously (the result is its
  *   final report), and a Bash launch without it was denied or failed to start.
+ *   A Workflow is confirmed by "Workflow launched in background. Task ID: <id>",
+ *   whose "Transcript dir:" line names the run dir holding its agents' transcripts
+ *   (`workflowProgress`). Nothing holds a workflow's output file open, so it has
+ *   no runner probe: it is pending until its notification or a `TaskStop`.
  *   Gating on the result of a known background tool_use also means a foreground
  *   command that merely PRINTS launch-shaped text can't false-positive.
  * - A foreground command that outlives its timeout is moved to the background by
@@ -28,10 +32,13 @@
  *   queued_command `attachment` record (session was mid-turn). Paired by
  *   task-id or tool-use-id; unmatched notifications (nested-agent completions
  *   routed to the parent, launches on the far side of a /clear split) are ignored.
+ *   One notice can carry several `<task-id>`s: after a restart the harness reports
+ *   every task the previous process left unfinished in one notice, and each ends.
  * - A `Monitor` call is a script, confirmed by "Monitor started (task <id>". It
  *   streams one notification per event, so only a notification carrying a
  *   `<status>` (its stream ended, or it was stopped) or an `[Monitor expired`
- *   event ends it. It has no output file to probe while it runs, so its liveness
+ *   event ends it; the newest line of each earlier event is kept as its `lastEvent`. It
+ *   has no output file to probe while it runs, so its liveness
  *   is its own `timeoutMs` deadline (≤30m) instead of the runner probe.
  * - A successful `TaskStop` result (`{"message":"Successfully stopped task: <id>`)
  *   kills that task: a stopped Monitor gets no notification at all. Only a result
@@ -43,12 +50,13 @@
 
 import { resolveVerdicts, runnersAlive, type RunnerProbe } from "./runner-verdicts";
 import { jsonlLines } from "./jsonl-reader";
+import { subagentStatus } from "./agent-status";
 
 export type BackgroundTaskKind = "script" | "agent" | "workflow";
 export type BackgroundTaskStatus = "pending" | "completed" | "killed";
 
 export interface BackgroundTask {
-  /** Harness task id (`b7cxqdaxr` for Bash, hex agentId for Agent); Workflow launches may lack one. */
+  /** Harness task id (`b7cxqdaxr` for Bash, hex agentId for Agent); a Workflow launch without one isn't counted. */
   taskId?: string;
   /** The launching tool_use — or the task id for a user `!` command, which has none. */
   toolUseId: string;
@@ -63,6 +71,33 @@ export interface BackgroundTask {
   service?: true;
   /** A Monitor's expiry (epoch ms): it is live only before this, and is never runner-probed. */
   deadline?: number;
+  /** A Monitor's latest event line: the one progress signal a watch has. */
+  lastEvent?: string;
+  /** A workflow's run dir (`…/subagents/workflows/<runId>`), from its launch confirmation. */
+  runDir?: string;
+  /** A workflow's agent counts, attached per read by `withWorkflowProgress`. */
+  progress?: WorkflowProgress;
+  /** When a workflow ended: its completion notice, or the `TaskStop` that killed it. */
+  endedAt?: string;
+  /** A completed workflow's totals, from its notice's `<usage>` block. */
+  outcome?: WorkflowOutcome;
+}
+
+export interface WorkflowProgress {
+  /** Phase of the most recently started agent; absent for a script without phases. */
+  phase?: string;
+  /** Agents that finished. */
+  done: number;
+  /** When an agent last finished (epoch ms), or the run's launch while none has. */
+  lastAt: number;
+  /** Agents the script has asked for so far, read off Claude Code's screen (`screenTotal`); absent when the read fails. */
+  total?: number;
+}
+
+export interface WorkflowOutcome {
+  done: number;
+  failed: number;
+  durationMs: number;
 }
 
 const LABEL_CAP = 160;
@@ -73,14 +108,23 @@ const TIMEOUT_LAUNCH_RE = new RegExp(`^${TIMEOUT_NOTICE}`);
 const BANG_TIMEOUT_LAUNCH_RE = new RegExp(`(?:^<bash-stdout>|\n)${TIMEOUT_NOTICE}`);
 const BASH_INPUT_RE = /<bash-input>([\s\S]*?)<\/bash-input>/;
 const AGENT_LAUNCH_RE = /Async agent launched successfully[\s\S]*?agentId: (\w+)/;
-const NOTIF_TASK_ID_RE = /<task-id>(\S+?)<\/task-id>/;
+const NOTIF_TASK_ID_RE = /<task-id>(\S+?)<\/task-id>/g;
 const NOTIF_TOOL_USE_RE = /<tool-use-id>(\S+?)<\/tool-use-id>/;
 const NOTIF_STATUS_RE = /<status>(\w+)<\/status>/;
 const MONITOR_LAUNCH_RE = /^Monitor started \(task (\w+)/;
 const MONITOR_EXPIRED = "[Monitor expired";
+const MONITOR_EVENT_RE = /<event>([\s\S]*?)<\/event>/;
+const EVENT_CAP = 120;
 /** Claude Code's cap on a Monitor's `timeoutMs`, used when the launch record omits it. */
 const MONITOR_MAX_MS = 30 * 60 * 1000;
 const TASK_STOP_RE = /^\{"message":"Successfully stopped task: (\w+)/;
+const WORKFLOW_LAUNCH_RE = /^Workflow launched in background\. Task ID: (\w+)/;
+const WORKFLOW_DIR_RE = /^Transcript dir: (\S+)$/m;
+const WORKFLOW_SUMMARY_RE = /^Summary: (.+)$/m;
+const USAGE_FIELD = (name: string) => new RegExp(`<${name}>(\\d+)</${name}>`);
+const USAGE_DONE_RE = USAGE_FIELD("agents_done");
+const USAGE_ERRORS_RE = USAGE_FIELD("agents_error");
+const USAGE_DURATION_RE = USAGE_FIELD("duration_ms");
 
 function blockText(content: unknown): string {
   if (typeof content === "string") return content;
@@ -211,7 +255,10 @@ function taskLineParser(): { feed: (line: string) => void; tasks: () => Backgrou
             const timedOut = text.match(TIMEOUT_LAUNCH_RE);
             if (fg && timedOut) launch(toolUseId, "script", fg.label, fg.command, timedOut[1], text, ts);
             const stopped = stops.has(toolUseId) ? byTaskId.get(text.match(TASK_STOP_RE)?.[1] ?? "") : undefined;
-            if (stopped) stopped.status = "killed";
+            if (stopped) {
+              stopped.status = "killed";
+              if (stopped.kind === "workflow" && ts) stopped.endedAt ??= ts;
+            }
             continue;
           }
           candidates.delete(toolUseId);
@@ -223,12 +270,21 @@ function taskLineParser(): { feed: (line: string) => void; tasks: () => Backgrou
             task.deadline = (ts ? Date.parse(ts) : 0) + (typeof timeoutMs === "number" ? timeoutMs : MONITOR_MAX_MS);
             continue;
           }
+          if (use.name === "Workflow") {
+            const started = text.match(WORKFLOW_LAUNCH_RE);
+            if (!started) continue; // denied / failed to start
+            const name = (rec["toolUseResult"] as { workflowName?: unknown } | undefined)?.workflowName;
+            const label = typeof name === "string" && name ? name : (text.match(WORKFLOW_SUMMARY_RE)?.[1] ?? use.label);
+            const task = launch(toolUseId, "workflow", label.slice(0, LABEL_CAP), "", started[1], text, ts);
+            const runDir = text.match(WORKFLOW_DIR_RE)?.[1];
+            if (runDir) task.runDir = runDir;
+            continue;
+          }
           const bash = text.match(BASH_LAUNCH_RE);
           const agent = text.match(AGENT_LAUNCH_RE);
           if (use.name === "Bash" && !bash) continue; // denied / failed to start
           if (use.name === "Agent" && !agent) continue; // ran synchronously
-          const kind = use.name === "Bash" ? "script" : use.name === "Agent" ? "agent" : "workflow";
-          launch(toolUseId, kind, use.label, use.command, bash?.[1] ?? agent?.[1], text, ts);
+          launch(toolUseId, use.name === "Bash" ? "script" : "agent", use.label, use.command, bash?.[1] ?? agent?.[1], text, ts);
         }
       }
     }
@@ -246,13 +302,32 @@ function taskLineParser(): { feed: (line: string) => void; tasks: () => Backgrou
       (typeof rec["content"] === "string" ? (rec["content"] as string) : "") +
       (typeof attachment?.prompt === "string" ? attachment.prompt : "");
     if (notifText.includes("<task-notification>")) {
-      const taskId = notifText.match(NOTIF_TASK_ID_RE)?.[1];
+      // One notice can name several tasks: after a restart the harness reports every task
+      // the previous process left unfinished in a single notice, one <task-id> each.
+      const byId = [...notifText.matchAll(NOTIF_TASK_ID_RE)].flatMap((m) => byTaskId.get(m[1]!) ?? []);
       const toolUseId = notifText.match(NOTIF_TOOL_USE_RE)?.[1];
-      const task = (taskId && byTaskId.get(taskId)) || (toolUseId && byToolUse.get(toolUseId)) || undefined;
+      const fallback = toolUseId ? byToolUse.get(toolUseId) : undefined;
       const status = notifText.match(NOTIF_STATUS_RE)?.[1];
-      // A Monitor's per-event notifications carry no <status>; only its end does.
-      const ends = task?.deadline === undefined || status !== undefined || notifText.includes(MONITOR_EXPIRED);
-      if (task && ends) task.status = status === "killed" ? "killed" : "completed";
+      for (const task of byId.length > 0 ? byId : fallback ? [fallback] : []) {
+        // A Monitor's per-event notifications carry no <status>; only its end does.
+        const ends = task.deadline === undefined || status !== undefined || notifText.includes(MONITOR_EXPIRED);
+        if (!ends) {
+          // Lines arriving close together are batched into one event, oldest first.
+          const event = notifText.match(MONITOR_EVENT_RE)?.[1]?.split("\n").findLast((l) => l.trim());
+          if (event) task.lastEvent = event.trim().slice(0, EVENT_CAP);
+          continue;
+        }
+        task.status = status === "killed" ? "killed" : "completed";
+        // The same notice can land twice (queued, then delivered): the first one dates it.
+        if (task.kind === "workflow" && !task.endedAt) {
+          if (ts) task.endedAt = ts;
+          const done = notifText.match(USAGE_DONE_RE)?.[1];
+          const duration = notifText.match(USAGE_DURATION_RE)?.[1];
+          if (done && duration) {
+            task.outcome = { done: +done, failed: +(notifText.match(USAGE_ERRORS_RE)?.[1] ?? 0), durationMs: +duration };
+          }
+        }
+      }
     }
   };
 
@@ -260,22 +335,33 @@ function taskLineParser(): { feed: (line: string) => void; tasks: () => Backgrou
 }
 
 /**
- * The scripts a session is waiting on per the TRANSCRIPT — launched, no notification
- * yet. Agents/workflows are excluded: running subagents are already surfaced from the
- * `subagents/` directory, and a workflow's child agents appear there too. Callers that
- * render should use `liveScripts` — the transcript can lie (an orphaned task's
- * notification never arrives); the runner-liveness probe is what makes it honest.
+ * The scripts and workflows a session is waiting on per the TRANSCRIPT — launched, no
+ * notification yet. Agents are excluded: running subagents are already surfaced from
+ * the `subagents/` directory. A workflow's own agents live a level deeper, under its run
+ * dir, so the workflow itself is what shows. Callers that render should use
+ * `liveScripts` — the transcript can lie (an orphaned task's notification never
+ * arrives); the runner-liveness probe is what makes it honest.
  */
 export function pendingScripts(tasks: BackgroundTask[]): BackgroundTask[] {
-  return tasks.filter((t) => t.kind === "script" && t.status === "pending");
+  return tasks.filter((t) => (t.kind === "script" || t.kind === "workflow") && t.status === "pending");
+}
+
+/** Up to `limit` ended workflows, newest first — the sheet keeps them like finished agents. */
+export function endedWorkflows(tasks: BackgroundTask[], limit = 10): BackgroundTask[] {
+  return tasks
+    .filter((t) => t.kind === "workflow" && t.status !== "pending")
+    .sort((a, b) => (b.endedAt ?? "").localeCompare(a.endedAt ?? ""))
+    .slice(0, limit);
 }
 
 // A script Claude launched to keep running (a dev server, a tunnel) rather than to wait
 // on. The label (the model-written description) names it, or the command binds a port,
 // opens a tunnel or runs a dev server. A label that opens with a wait verb is a wait
 // even when it names a service ("Wait for the preview deploy").
-const SERVICE_NOUN = /\b(dev server|server(?!-)|serve|tunnels?|port[- ]forward|ssm|vite|next dev|localhost|proxy|preview|embedded postgres)\b|\bon port \d+/i;
-const SERVICE_COMMAND = /(?<![A-Z0-9_])PORT=\d+|--port[ =]\d+|\bssm start-session\b|-L \d+:|\b(vite|next dev|serve)\b|\bngrok (http|tcp|tls|start)\b|\brun dev\b|\bconvex[: ]dev\b|(?:^|\s)bridge\s*(?:$|[;&|>])/;
+const SERVICE_NOUN = /\b(dev server|server(?!-)|serve|tunnels?|port[- ]forward|ssm|vite|next dev|localhost|proxy|embedded postgres)\b|\bon port \d+/i;
+// "Play the call through the real server": the server is the route, the run is a wait.
+const THROUGH_SERVER = /\bthrough (?:the|a|its)\b[^.]*\bserver\b/i;
+const SERVICE_COMMAND = /(?<![A-Z0-9_])PORT=\d+|--port[ =]\d+|\bssm start-session\b|-L \d+:|\bvite\b(?!\s+build)|\b(next dev|serve)\b|\bngrok (http|tcp|tls|start)\b|\brun dev\b|\bconvex[: ]dev\b|(?:^|\s)bridge\s*(?:$|[;&|>])/;
 const WAIT_VERB = /^\s*(background[- ])?(wait|poll|watch|monitor)\b/i;
 
 /**
@@ -284,7 +370,7 @@ const WAIT_VERB = /^\s*(background[- ])?(wait|poll|watch|monitor)\b/i;
  */
 export function isServiceScript(label: string, command: string): boolean {
   if (WAIT_VERB.test(label)) return false;
-  return SERVICE_NOUN.test(label) || SERVICE_COMMAND.test(command);
+  return (SERVICE_NOUN.test(label) && !THROUGH_SERVER.test(label)) || SERVICE_COMMAND.test(command);
 }
 
 /** The verdict-store key for a task: the harness task id, or the tool use it came from. */
@@ -382,7 +468,11 @@ export async function scanAgentScripts(transcriptPath: string, prev?: AgentScrip
   const pending = (prev?.pending ?? []).filter((t) => present.has(t.src) && !reparsed.has(t.src));
   for (const { name } of changed) {
     try {
-      for (const t of pendingScripts(await parseBackgroundTasksFile(`${dir}/${name}`))) pending.push({ ...t, src: name });
+      // Scripts only: a workflow has no runner probe, so one whose notice went to the
+      // parent would never resolve.
+      for (const t of pendingScripts(await parseBackgroundTasksFile(`${dir}/${name}`))) {
+        if (t.kind === "script") pending.push({ ...t, src: name });
+      }
     } catch {
       // unreadable agent transcript — no tasks from it
     }
@@ -413,16 +503,141 @@ const pathCache = new Map<string, { size: number; mtimeMs: number; tasks: Backgr
  */
 export async function pendingScriptsAt(path: string): Promise<BackgroundTask[]> {
   try {
-    const file = Bun.file(path);
-    const stat = await file.stat();
-    if (!stat) return [];
-    let hit = pathCache.get(path);
-    if (!hit || hit.size !== stat.size || hit.mtimeMs !== stat.mtimeMs) {
-      hit = { size: stat.size, mtimeMs: stat.mtimeMs, tasks: await parseBackgroundTasksFile(path) };
-      pathCache.set(path, hit);
-    }
-    return liveScripts([...hit.tasks, ...(await agentScriptsAt(path))]);
+    return liveScripts([...(await cachedTasks(path)), ...(await agentScriptsAt(path))]);
   } catch {
     return [];
   }
+}
+
+async function cachedTasks(path: string): Promise<BackgroundTask[]> {
+  const stat = await Bun.file(path).stat();
+  let hit = pathCache.get(path);
+  if (!hit || hit.size !== stat.size || hit.mtimeMs !== stat.mtimeMs) {
+    hit = { size: stat.size, mtimeMs: stat.mtimeMs, tasks: await parseBackgroundTasksFile(path) };
+    pathCache.set(path, hit);
+  }
+  return hit.tasks;
+}
+
+/**
+ * A workflow's progress from its run dir, where every agent it starts gets an
+ * `agent-<id>.meta.json` (with its `workflowPhase`) and a transcript. An agent is done by
+ * the same rule as any subagent (`subagentStatus`: a workflow agent ends with its
+ * `StructuredOutput` result), so a done transcript's mtime is when it finished. The
+ * harness's `journal.jsonl` is not read: on a real run it stopped 20 minutes before the
+ * run did, which froze the count and read a healthy run as stalled. No planned total is
+ * recorded while a run lives (a script can spawn agents as it goes). `lastAt` is 0 until
+ * an agent finishes. Null when the dir is unreadable.
+ */
+export async function workflowProgress(runDir: string): Promise<WorkflowProgress | null> {
+  try {
+    const ids = (await Array.fromAsync(new Bun.Glob("agent-*.meta.json").scan({ cwd: runDir }))).map((n) =>
+      n.slice(0, -".meta.json".length),
+    );
+    let done = 0;
+    let lastAt = 0;
+    let newest = { at: -1, id: "" };
+    await Promise.all(
+      ids.map(async (id) => {
+        const transcript = `${runDir}/${id}.jsonl`;
+        if ((await subagentStatus(transcript)) === "done") {
+          done++;
+          lastAt = Math.max(lastAt, Bun.file(transcript).lastModified);
+        }
+        const startedAt = Bun.file(`${runDir}/${id}.meta.json`).lastModified;
+        if (startedAt > newest.at) newest = { at: startedAt, id };
+      }),
+    );
+    const phase = newest.id
+      ? ((await Bun.file(`${runDir}/${newest.id}.meta.json`).json()) as { workflowPhase?: unknown }).workflowPhase
+      : undefined;
+    return { ...(typeof phase === "string" && { phase }), done, lastAt };
+  } catch {
+    return null;
+  }
+}
+
+/** `tasks` with each workflow's current `progress` attached — copies, so cached tasks stay untouched. */
+export async function withWorkflowProgress(tasks: BackgroundTask[]): Promise<BackgroundTask[]> {
+  return Promise.all(
+    tasks.map(async (t) => {
+      if (t.kind !== "workflow" || !t.runDir) return t;
+      const progress = await workflowProgress(t.runDir);
+      if (!progress) return t;
+      // Quiet is measured from the launch until the first agent finishes.
+      if (!progress.lastAt && t.launchedAt) progress.lastAt = Date.parse(t.launchedAt);
+      return { ...t, progress };
+    }),
+  );
+}
+
+// Claude Code's footer row for a running workflow: "◯ <name>  <bar>  91/165 · 12m03s · …".
+// The total (every agent() call so far, queued included) lives only in its memory while
+// the run lives: no file, hook or statusline input carries it. Only the widest layout
+// shows N/M, and the row hides under menus and dialogs.
+const FOOTER_TOTAL_RE = /^\s*\S (.+?) {2,}.*?\b\d+\/(\d+) · /;
+
+/**
+ * A running workflow's agent total read off a pane capture, best effort: undefined unless
+ * exactly one footer row names `label` (a truncated name matches by prefix) and its total
+ * is at least `done`. A failed read just leaves the total out.
+ */
+export function screenTotal(capture: string, label: string, done: number): number | undefined {
+  const totals: number[] = [];
+  for (const line of Bun.stripANSI(capture).split("\n")) {
+    const m = line.match(FOOTER_TOTAL_RE);
+    if (!m) continue;
+    const name = m[1]!.trim();
+    if (name === label || (name.endsWith("…") && label.startsWith(name.slice(0, -1)))) totals.push(+m[2]!);
+  }
+  return totals.length === 1 && totals[0]! >= done ? totals[0] : undefined;
+}
+
+/** `tasks` with each running workflow's screen-read total attached, where the read succeeds. */
+export function withScreenTotals(tasks: BackgroundTask[], capture: string): BackgroundTask[] {
+  if (!capture) return tasks;
+  return tasks.map((t) => {
+    if (t.kind !== "workflow" || !t.progress) return t;
+    const total = screenTotal(capture, t.label, t.progress.done);
+    return total === undefined ? t : { ...t, progress: { ...t.progress, total } };
+  });
+}
+
+/** No agent finishing for this long reads as stalled. The phone's `WORKFLOW_QUIET_MS` (`bridge/public/app.js`) mirrors it. */
+export const WORKFLOW_STALL_MS = 15 * 60_000;
+
+/** What a session's Home row says about its background work: the one task that matters most. */
+export interface BackgroundLead {
+  kind: "workflow" | "wait" | "agents" | "service";
+  label: string;
+  /** How many agents are running, for `agents`. */
+  count?: number;
+  launchedAt?: string;
+  progress?: WorkflowProgress;
+}
+
+/**
+ * The lead of a session's live background tasks: a workflow (a stalled one, else the
+ * newest, with its progress), else a script Claude waits on, else its running agents (in start order, so
+ * labelled by the newest), else a service it left running. A service is its own kind because it hands
+ * the turn back: the row must not read as waiting.
+ */
+export async function backgroundLead(tasks: BackgroundTask[]): Promise<BackgroundLead | undefined> {
+  const workflows = await withWorkflowProgress(tasks.filter((t) => t.kind === "workflow"));
+  const now = Date.now();
+  const workflow = workflows.find((w) => w.progress && now - w.progress.lastAt > WORKFLOW_STALL_MS) ?? workflows.at(-1);
+  if (workflow) {
+    return {
+      kind: "workflow",
+      label: workflow.label,
+      ...(workflow.launchedAt && { launchedAt: workflow.launchedAt }),
+      ...(workflow.progress && { progress: workflow.progress }),
+    };
+  }
+  const wait = tasks.find((t) => t.kind === "script" && !t.service);
+  if (wait) return { kind: "wait", label: wait.label };
+  const agents = tasks.filter((t) => t.kind === "agent");
+  if (agents.length > 0) return { kind: "agents", label: agents.at(-1)!.label, count: agents.length };
+  const service = tasks.find((t) => t.service);
+  return service && { kind: "service", label: service.label };
 }

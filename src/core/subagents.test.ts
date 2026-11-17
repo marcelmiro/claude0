@@ -19,11 +19,11 @@ import { join } from "node:path";
 import {
   subagentsDir,
   isValidAgentId,
-  subagentStatus,
   listSubagents,
   getSubagentTranscript,
   capOpeningTurn,
 } from "./session-api";
+import { subagentStatus } from "./agent-status";
 import { PATHS } from "./config";
 import type { TranscriptBlock, TranscriptTurn } from "../types";
 
@@ -119,6 +119,31 @@ test("subagentStatus: a failed SubagentHandback → running (the agent carries o
   expect(await subagentStatus(p)).toBe("running");
 });
 
+test("subagentStatus: handback called in parallel with another tool → done", async () => {
+  // Two assistant records (one per call), then their two results.
+  const p = join(WORK, "hb-parallel.jsonl");
+  writeFileSync(p, [asst([tuse("1", "Bash")]), asst([tuse("2", "SubagentHandback")]), usr([tres("1")]), usr([tres("2")])].join("\n") + "\n");
+  expect(await subagentStatus(p)).toBe("done");
+});
+
+test("subagentStatus: a workflow agent's StructuredOutput answered → done", async () => {
+  const p = join(WORK, "so.jsonl");
+  writeFileSync(p, asst([think("judging")]) + "\n" + asst([tuse("1", "StructuredOutput")]) + "\n" + usr([tres("1")]) + "\n");
+  expect(await subagentStatus(p)).toBe("done");
+});
+
+test("subagentStatus: an agent that died on an API error → stopped (no report)", async () => {
+  const p = join(WORK, "apierr.jsonl");
+  writeFileSync(p, asst([tuse("1", "Bash")]) + "\n" + usr([tres("1")]) + "\n" + JSON.stringify({ type: "assistant", isApiErrorMessage: true, message: { content: [txt("API Error: Unable to connect to API")] } }) + "\n");
+  expect(await subagentStatus(p)).toBe("stopped");
+});
+
+test("subagentStatus: interrupted by the user → stopped (no report)", async () => {
+  const p = join(WORK, "int.jsonl");
+  writeFileSync(p, asst([tuse("1", "Bash")]) + "\n" + usr([txt("[Request interrupted by user]")]) + "\n");
+  expect(await subagentStatus(p)).toBe("stopped");
+});
+
 test("subagentStatus: tool-calling assistant tail (ends in tool_use) → running", async () => {
   const p = join(WORK, "r3.jsonl");
   writeFileSync(p, asst([txt("let me"), tuse("1", "Bash")]) + "\n");
@@ -162,9 +187,10 @@ test("listSubagents: reads fields + per-agent status, sorted by (spawnDepth, des
   }); // no spawnDepth → defaults to depth 1 for the sort
   const list = await listSubagents([tx]);
   // (depth ?? 1) ties → description alpha < zeta. A done agent's jsonl is immutable, so
-  // its mtime is its completion instant — surfaced as finishedAt; running agents omit it.
+  // its mtime is its completion instant — surfaced as finishedAt. A running agent carries
+  // startedAt instead: its meta file is written once, at spawn.
   expect(list).toEqual([
-    { agentId: "aaa", agentType: "general-purpose", description: "alpha task", status: "running" },
+    { agentId: "aaa", agentType: "general-purpose", description: "alpha task", status: "running", startedAt: expect.any(String) },
     {
       agentId: "bbb",
       agentType: "Explore",
@@ -215,6 +241,18 @@ test("capOpeningTurn: truncates a >2KB opening user block, leaves the body untou
   expect(first.text.endsWith("… (truncated)")).toBe(true);
   const body = turns[1]!.content[0] as Extract<TranscriptBlock, { type: "text" }>;
   expect(body.text.length).toBe(5000); // assistant body untouched
+});
+
+test("capOpeningTurn: a fork's inherited Agent call is dropped so its brief opens (and is capped)", () => {
+  const turns: TranscriptTurn[] = [
+    { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Agent", input: {} }] },
+    { role: "user", content: [block("<fork-boilerplate>" + "b".repeat(5000))] },
+    { role: "assistant", content: [block("working")] },
+  ];
+  capOpeningTurn(turns);
+  expect(turns).toHaveLength(2);
+  expect(turns[0]!.role).toBe("user");
+  expect((turns[0]!.content[0] as Extract<TranscriptBlock, { type: "text" }>).text.endsWith("… (truncated)")).toBe(true);
 });
 
 test("capOpeningTurn: opening assistant turn (no leading user) untouched", () => {

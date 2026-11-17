@@ -6,7 +6,7 @@ import { CONFIG_DIR } from "../../test/helpers/home";
 import { describe, expect, test, beforeEach } from "bun:test";
 import { rmSync, mkdirSync, writeFileSync, utimesSync } from "node:fs";
 import { join } from "node:path";
-import { parseBackgroundTasks, pendingScripts, liveScripts, isServiceScript, scanAgentScripts } from "./background-tasks";
+import { parseBackgroundTasks, pendingScripts, liveScripts, isServiceScript, scanAgentScripts, workflowProgress, withWorkflowProgress, endedWorkflows, backgroundLead, screenTotal, withScreenTotals } from "./background-tasks";
 
 // Dead verdicts are terminal AND persisted, so they would otherwise leak between tests.
 beforeEach(() => rmSync(join(CONFIG_DIR, "verdicts"), { recursive: true, force: true }));
@@ -96,6 +96,12 @@ describe("Monitor tasks", () => {
     const launched = [...monitorLaunch("toolu_m", "bmon1"), monitorEvent("bmon1", "chunk ids-00 attempt 1 failed=0")];
     expect(parseBackgroundTasks(launched.join("\n"))[0]!.status).toBe("pending");
     expect(parseBackgroundTasks([...launched, monitorEnded("bmon1", "toolu_m")].join("\n"))[0]!.status).toBe("completed");
+  });
+
+  test("keeps the newest line of the latest event as its progress", () => {
+    // Lines that arrive together are batched into one event, oldest first.
+    const jsonl = [...monitorLaunch("toolu_m", "bmon1"), monitorEvent("bmon1", "BUILDING"), monitorEvent("bmon1", "DEPLOYING 1/3\nDEPLOYING 2/3\n")];
+    expect(parseBackgroundTasks(jsonl.join("\n"))[0]!.lastEvent).toBe("DEPLOYING 2/3");
   });
 
   test("the expiry event ends it", () => {
@@ -363,6 +369,13 @@ describe("parseBackgroundTasks", () => {
     expect(tasks[0]!.status).toBe("completed");
   });
 
+  test("a restart's notice listing several unfinished tasks ends every one of them", () => {
+    // Real shape: one notice, one <task-id> per task the previous process left running.
+    const orphans = `<task-notification>\n<task-id>bone</task-id>\n<task-id>btwo</task-id>\n<status>failed</status>\n<summary>2 background tasks didn't finish before the previous session ended</summary>\n</task-notification>`;
+    const jsonl = [...bashLaunch("toolu_1", "bone"), ...bashLaunch("toolu_2", "btwo"), ...bashLaunch("toolu_3", "bthree"), line({ type: "user", message: { content: orphans } })].join("\n");
+    expect(parseBackgroundTasks(jsonl).map((t) => t.status)).toEqual(["completed", "completed", "pending"]);
+  });
+
   test("unmatched notification (nested agent / pre-split launch) is ignored", () => {
     const jsonl = line({ type: "user", message: { content: notif("astray1", "toolu_gone") } });
     expect(parseBackgroundTasks(jsonl)).toEqual([]);
@@ -486,6 +499,16 @@ test("isServiceScript: a port-binding, tunnel or dev-server command is a service
   ]) expect(isServiceScript("Restart fixtures bridge for the prototype", command)).toBe(true);
 });
 
+test("isServiceScript: a run routed through a server, an infra preview or a vite build is a wait", () => {
+  // Real launches the classifier once filed as services, landing their session in Needs You.
+  expect(isServiceScript("Play call 185845 through the real server at the call's own pace", "node run.mjs")).toBe(false);
+  expect(isServiceScript("Replay one recorded call through the real server on its SAY NOW copy", "node run3.mjs")).toBe(false);
+  expect(isServiceScript("Preview the prod stack read-only to confirm the new schedule", "pulumi preview --stack prod")).toBe(false);
+  expect(isServiceScript("Run typecheck, the full test suite and the build", "npm run typecheck; npm test; npx vite build")).toBe(false);
+  // …while a preview server on a port stays a service.
+  expect(isServiceScript("Start the preview of main e7146a0 on port 8796", "node boot.mjs")).toBe(true);
+});
+
 test("isServiceScript: a client's port flag, an org named like a tool, or a hyphenated noun is not a service", () => {
   expect(isServiceScript(
     "Create tf738_parity DB and restore local schema",
@@ -564,6 +587,11 @@ describe("scanAgentScripts", () => {
     expect(ids(await scanAgentScripts(SESSION))).toEqual(["repo:agent-a1.jsonl:bwait"]);
   });
 
+  test("an agent's workflow is left out: with no runner probe, a notice routed to the parent would leave it pending forever", async () => {
+    agentFile("agent-a1.jsonl", [...bashLaunch("toolu_1", "bwait"), ...workflowLaunch("toolu_w", "wagent")], 1000);
+    expect(ids(await scanAgentScripts(SESSION))).toEqual(["repo:agent-a1.jsonl:bwait"]);
+  });
+
   test("unchanged files return the previous scan itself; only a modified file is re-parsed", async () => {
     agentFile("agent-a1.jsonl", bashLaunch("toolu_1", "bone"), 1000);
     agentFile("agent-a2.jsonl", bashLaunch("toolu_2", "btwo"), 1000);
@@ -594,5 +622,191 @@ describe("scanAgentScripts", () => {
     const first = await scanAgentScripts(SESSION);
     rmSync(join(PROJECTS, "repo", "sess", "subagents", "agent-a1.jsonl"));
     expect(ids(await scanAgentScripts(SESSION, first))).toEqual([]);
+  });
+});
+
+// Shapes copied from a real Claude Code workflow launch and completion (2026-11-16).
+function workflowLaunch(id: string, taskId: string | null, runDir = "/p/sess/subagents/workflows/wf_1") {
+  const use = line({
+    type: "assistant",
+    message: { content: [{ type: "tool_use", id, name: "Workflow", input: { scriptPath: "/p/sess/workflows/scripts/judge-wf_1.js" } }] },
+  });
+  const resultText = taskId
+    ? `Workflow launched in background. Task ID: ${taskId}\nSummary: Three judges rate every call\nTranscript dir: ${runDir}\nScript file: /p/sess/workflows/scripts/judge-wf_1.js\nRun ID: wf_1\n\nYou will be notified when it completes. Use /workflows to watch live progress.`
+    : "Permission for this action was denied by the auto mode classifier.";
+  const result = line({
+    type: "user",
+    timestamp: "2026-11-16T20:41:37.603Z",
+    message: { content: [{ type: "tool_result", tool_use_id: id, content: resultText }] },
+    ...(taskId && { toolUseResult: { status: "async_launched", taskId, taskType: "local_workflow", workflowName: "judge-vigil", runId: "wf_1", transcriptDir: runDir } }),
+  });
+  return [use, result];
+}
+
+describe("Workflow tasks", () => {
+  test("a confirmed launch is a pending workflow named by its workflowName, carrying its run dir", () => {
+    const [task] = parseBackgroundTasks(workflowLaunch("toolu_w", "wz3osit4v"));
+    expect(task).toEqual({
+      toolUseId: "toolu_w",
+      kind: "workflow",
+      label: "judge-vigil",
+      status: "pending",
+      taskId: "wz3osit4v",
+      launchedAt: "2026-11-16T20:41:37.603Z",
+      runDir: "/p/sess/subagents/workflows/wf_1",
+    });
+    expect(pendingScripts([task!])).toEqual([task!]);
+  });
+
+  test("a denied launch is no task", () => {
+    expect(parseBackgroundTasks(workflowLaunch("toolu_w", null))).toEqual([]);
+  });
+
+  test("its notification completes it with the outcome from <usage>, dated by the first copy", () => {
+    const usage = "<usage><agent_count>495</agent_count><agents_done>487</agents_done><agents_error>8</agents_error><agents_skipped>0</agents_skipped><duration_ms>5362144</duration_ms></usage>";
+    const notice = notif("wdone", "toolu_w").replace("</task-notification>", `${usage}\n</task-notification>`);
+    const [task] = parseBackgroundTasks([
+      ...workflowLaunch("toolu_w", "wdone"),
+      line({ type: "queue-operation", operation: "enqueue", timestamp: "2026-11-16T22:10:59.811Z", content: notice }),
+      line({ type: "user", timestamp: "2026-11-16T22:11:30.000Z", message: { content: notice } }),
+    ]);
+    expect(task).toMatchObject({
+      status: "completed",
+      endedAt: "2026-11-16T22:10:59.811Z",
+      outcome: { done: 487, failed: 8, durationMs: 5362144 },
+    });
+  });
+
+  test("a TaskStop kills it and dates its end", () => {
+    const stop = taskStop("toolu_s", "wstop").map((l) => l.replace('"type":"user"', '"type":"user","timestamp":"2026-11-14T20:07:00.000Z"'));
+    const [task] = parseBackgroundTasks([...workflowLaunch("toolu_w", "wstop"), ...stop]);
+    expect(task).toMatchObject({ status: "killed", endedAt: "2026-11-14T20:07:00.000Z" });
+    expect(task!.outcome).toBeUndefined();
+  });
+
+  test("endedWorkflows lists ended workflows newest first, never pending ones or scripts", () => {
+    const tasks = parseBackgroundTasks([
+      ...workflowLaunch("toolu_a", "wa"),
+      line({ type: "user", timestamp: "2026-11-16T10:00:00Z", message: { content: notif("wa", "toolu_a") } }),
+      ...workflowLaunch("toolu_b", "wb"),
+      line({ type: "user", timestamp: "2026-11-16T12:00:00Z", message: { content: notif("wb", "toolu_b") } }),
+      ...workflowLaunch("toolu_c", "wc"),
+      ...bashLaunch("toolu_d", "bd"),
+      line({ type: "user", message: { content: notif("bd", "toolu_d") } }),
+    ]);
+    expect(endedWorkflows(tasks).map((t) => t.taskId)).toEqual(["wb", "wa"]);
+  });
+
+  test("liveScripts keeps a pending workflow without probing (it has no output file)", async () => {
+    const tasks = parseBackgroundTasks(workflowLaunch("toolu_w", "wlive"));
+    const probe = async () => {
+      throw new Error("probed");
+    };
+    expect((await liveScripts(tasks, probe)).map((t) => t.taskId)).toEqual(["wlive"]);
+  });
+});
+
+describe("workflowProgress", () => {
+  const RUN = join(CONFIG_DIR, "wf-run");
+  const fresh = () => {
+    rmSync(RUN, { recursive: true, force: true });
+    mkdirSync(RUN, { recursive: true });
+  };
+  // One agent of the run: its meta (with the phase) and a transcript, done or still going.
+  const agent = (id: string, phase: string | null, done: boolean, startedAt: number) => {
+    writeFileSync(join(RUN, `agent-${id}.meta.json`), JSON.stringify({ agentType: "workflow-subagent", ...(phase && { workflowPhase: phase }) }));
+    utimesSync(join(RUN, `agent-${id}.meta.json`), startedAt / 1000, startedAt / 1000);
+    const records = [line({ type: "assistant", message: { content: [{ type: "tool_use", id: `so-${id}`, name: "StructuredOutput", input: {} }] } })];
+    if (done) records.push(line({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: `so-${id}`, content: "Structured output provided successfully" }] } }));
+    writeFileSync(join(RUN, `agent-${id}.jsonl`), records.join("\n") + "\n");
+  };
+
+  test("counts finished agents, names the newest agent's phase, and dates the last finish", async () => {
+    fresh();
+    agent("a1", "Review", true, 1_000_000);
+    agent("a2", "Review", false, 2_000_000);
+    agent("a3", "Verify", false, 3_000_000);
+    utimesSync(join(RUN, "agent-a1.jsonl"), 1_500, 1_500);
+    expect(await workflowProgress(RUN)).toEqual({ phase: "Verify", done: 1, lastAt: 1_500_000 });
+  });
+
+  test("before any agent finishes lastAt is 0, and a phaseless run has no phase", async () => {
+    fresh();
+    agent("a1", null, false, 1_000_000);
+    expect(await workflowProgress(RUN)).toEqual({ done: 0, lastAt: 0 });
+  });
+
+  test("a missing run dir is null, and withWorkflowProgress leaves that task bare", async () => {
+    rmSync(RUN, { recursive: true, force: true });
+    expect(await workflowProgress(RUN)).toBeNull();
+    const tasks = parseBackgroundTasks(workflowLaunch("toolu_w", "wx", RUN));
+    expect(await withWorkflowProgress(tasks)).toEqual(tasks);
+  });
+
+  test("withWorkflowProgress measures quiet from the launch until an agent finishes", async () => {
+    fresh();
+    agent("a1", "Judge", false, 1_000_000);
+    const tasks = parseBackgroundTasks(workflowLaunch("toolu_w", "wx", RUN));
+    const [withProgress] = await withWorkflowProgress(tasks);
+    expect(withProgress!.progress).toEqual({ phase: "Judge", done: 0, lastAt: Date.parse(tasks[0]!.launchedAt!) });
+    expect(tasks[0]!.progress).toBeUndefined(); // the cached task is not mutated
+  });
+});
+
+describe("backgroundLead", () => {
+  const script = (label: string, service?: true) => ({ toolUseId: label, kind: "script" as const, label, status: "pending" as const, ...(service && { service }) });
+
+  test("a workflow leads, then a wait, then a service", async () => {
+    const wf = { ...parseBackgroundTasks(workflowLaunch("toolu_w", "wlead", "/nonexistent/run"))[0]! };
+    expect(await backgroundLead([script("dev server", true), script("Wait for CI"), wf])).toEqual({ kind: "workflow", label: "judge-vigil", launchedAt: "2026-11-16T20:41:37.603Z" });
+    expect(await backgroundLead([script("dev server", true), script("Wait for CI")])).toEqual({ kind: "wait", label: "Wait for CI" });
+    expect(await backgroundLead([script("dev server", true)])).toEqual({ kind: "service", label: "dev server" });
+    const agent = (label: string) => ({ toolUseId: label, kind: "agent" as const, label, status: "pending" as const });
+    expect(await backgroundLead([script("Wait for CI"), agent("Review auth")])).toMatchObject({ kind: "wait" });
+    expect(await backgroundLead([script("dev server", true), agent("Review auth"), agent("Trace cookies")])).toEqual({ kind: "agents", label: "Trace cookies", count: 2 });
+    expect(await backgroundLead([])).toBeUndefined();
+  });
+  test("a stalled workflow leads over a newer healthy one", async () => {
+    const run = join(CONFIG_DIR, "wf-lead-stalled");
+    rmSync(run, { recursive: true, force: true });
+    mkdirSync(run, { recursive: true });
+    writeFileSync(join(run, "agent-a1.meta.json"), "{}");
+    writeFileSync(join(run, "agent-a1.jsonl"), line({ type: "assistant", message: { content: [{ type: "text", text: "done" }] } }) + "\n");
+    const hourAgo = (Date.now() - 60 * 60_000) / 1000;
+    utimesSync(join(run, "agent-a1.jsonl"), hourAgo, hourAgo);
+    const stalled = { ...parseBackgroundTasks(workflowLaunch("toolu_s", "wstall", run))[0]!, label: "stalled-run" };
+    const healthy = { ...parseBackgroundTasks(workflowLaunch("toolu_h", "whealthy", "/nonexistent/run"))[0]!, label: "healthy-run" };
+    expect(await backgroundLead([stalled, healthy])).toMatchObject({ kind: "workflow", label: "stalled-run", progress: { done: 1 } });
+  });
+});
+
+describe("screenTotal", () => {
+  // Claude Code's footer row for a running workflow, in its widest layout.
+  const footer = (name: string, done: number, total: number) => `  ◯ ${name}  \x1b[32m▰▰▰▰▱▱▱▱\x1b[0m  ${done}/${total} · 12m03s · ↓ 1.2M tokens`;
+  const screen = (...rows: string[]) => ["❯ ", "────────", ...rows, ""].join("\n");
+
+  test("reads the total off the named workflow's row", () => {
+    expect(screenTotal(screen(footer("judge-vigil", 91, 165)), "judge-vigil", 91)).toBe(165);
+    expect(screenTotal(screen(footer("review-auth", 3, 12), footer("judge-vigil", 91, 165)), "review-auth", 3)).toBe(12);
+  });
+
+  test("a truncated name matches by prefix", () => {
+    expect(screenTotal(screen(footer("judge-vi…", 91, 165)), "judge-vigil", 91)).toBe(165);
+  });
+
+  test("gives up quietly: no row, no N/M, two rows for one name, or a total below done", () => {
+    expect(screenTotal(screen(), "judge-vigil", 91)).toBeUndefined();
+    expect(screenTotal(screen("  ◯ judge-vigil  ▰▰▰▱  12m03s · ↓ 1.2M tokens"), "judge-vigil", 91)).toBeUndefined();
+    expect(screenTotal(screen(footer("judge-vigil", 91, 165), footer("judge-vigil", 4, 165)), "judge-vigil", 91)).toBeUndefined();
+    expect(screenTotal(screen(footer("judge-vigil", 91, 165)), "judge-vigil", 200)).toBeUndefined();
+    expect(screenTotal(screen(footer("other-run", 91, 165)), "judge-vigil", 91)).toBeUndefined();
+  });
+
+  test("withScreenTotals attaches it to running workflows only, as copies", () => {
+    const wf = { ...parseBackgroundTasks(workflowLaunch("toolu_w", "wst"))[0]!, label: "judge-vigil", progress: { done: 91, lastAt: 1 } };
+    const [withTotal] = withScreenTotals([wf], screen(footer("judge-vigil", 91, 165)));
+    expect(withTotal!.progress).toEqual({ done: 91, lastAt: 1, total: 165 });
+    expect(wf.progress).toEqual({ done: 91, lastAt: 1 });
+    expect(withScreenTotals([wf], "")[0]).toBe(wf);
   });
 });
