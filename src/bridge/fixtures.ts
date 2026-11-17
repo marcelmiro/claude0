@@ -60,7 +60,10 @@ export const FIXTURE_SESSIONS = [
     summary: "Retry Web Push sends with backoff",
     statusSource: "fixture",
     modified: ago(9 * 60_000),
-    // A snooze that came due: files under needs-you with the ☾ woken mark.
+    // A snooze that came due: files under needs-you with the ☾ woken mark. A dev server it
+    // left running is a service: named on the sub-line, never the ⏳ wait mark.
+    pendingScripts: 1,
+    background: { kind: "service", label: "Run the ink dev server on port 3000" },
     inbox: { section: "needs-you", since: agoMs(9 * 60_000), woken: true },
   },
   {
@@ -76,6 +79,8 @@ export const FIXTURE_SESSIONS = [
     summary: "Extract session-api helpers from sessions.ts",
     statusSource: "fixture",
     modified: ago(40_000),
+    // Mid-turn with background agents out: the sub-line counts them and names the newest.
+    background: { kind: "agents", label: "Trace the cookie exchange path", count: 3 },
     inbox: { section: "running", since: agoMs(40_000) },
   },
   {
@@ -93,7 +98,10 @@ export const FIXTURE_SESSIONS = [
     modified: ago(11 * 60_000),
     // Reads ready but waits on a background script → inline ⏳ after the name,
     // counted into the header's 🔄 chip; the inbox files script-waits under running.
-    pendingScripts: 1,
+    pendingScripts: 2,
+    // Its lead task names itself on the sub-line: its stalled workflow, which outranks the
+    // newer healthy one, so Home matches the sheet.
+    background: { kind: "workflow", label: "migrate-fixtures", launchedAt: ago(48 * 60_000), progress: { phase: "Migrate", done: 12, lastAt: Date.now() - 20 * 60_000 } },
     inbox: { section: "running", since: agoMs(11 * 60_000) },
   },
   {
@@ -441,6 +449,61 @@ export const FIXTURE_TRANSCRIPT = {
       taskId: "bfixture1",
       launchedAt: new Date(Date.now() - 12 * 60_000).toISOString(),
     },
+    // A Monitor: its latest event is its progress.
+    {
+      toolUseId: "toolu_fixture_mon",
+      kind: "script",
+      label: "Deploy of e5c1cfb to Railway",
+      status: "pending",
+      taskId: "bfixturemon",
+      launchedAt: new Date(Date.now() - 6 * 60_000).toISOString(),
+      deadline: Date.now() + 24 * 60_000,
+      lastEvent: "DEPLOYING (build 2/3)",
+    },
+    // A workflow mid-run: one row with its progress, never its agents.
+    {
+      toolUseId: "toolu_fixture_wf",
+      kind: "workflow",
+      label: "review-auth-changes",
+      status: "pending",
+      taskId: "wfixture1",
+      launchedAt: new Date(Date.now() - 21 * 60_000).toISOString(),
+      runDir: "/fixture/subagents/workflows/wf_fixture",
+      progress: { phase: "Verify", done: 91, total: 165, get lastAt() { return Date.now() - 20_000; } },
+    },
+    // A stalled workflow: no agent finished past the stall threshold.
+    {
+      toolUseId: "toolu_fixture_wf_stall",
+      kind: "workflow",
+      label: "migrate-fixtures",
+      status: "pending",
+      taskId: "wfixture4",
+      launchedAt: new Date(Date.now() - 48 * 60_000).toISOString(),
+      runDir: "/fixture/subagents/workflows/wf_fixture_stall",
+      progress: { phase: "Migrate", done: 12, lastAt: Date.now() - 20 * 60_000 },
+    },
+  ],
+  // Ended workflows: one finished since the last prompt with failed agents, one stopped earlier.
+  endedWorkflows: [
+    {
+      toolUseId: "toolu_fixture_wf_done",
+      kind: "workflow",
+      label: "judge-cookie-variants",
+      status: "completed",
+      taskId: "wfixture2",
+      launchedAt: new Date(Date.now() - 100 * 60_000).toISOString(),
+      endedAt: new Date(Date.now() - 4 * 60_000).toISOString(),
+      outcome: { done: 162, failed: 3, durationMs: 89 * 60_000 },
+    },
+    {
+      toolUseId: "toolu_fixture_wf_stop",
+      kind: "workflow",
+      label: "survey-token-storage",
+      status: "killed",
+      taskId: "wfixture3",
+      launchedAt: new Date(Date.now() - 5 * 60 * 60_000).toISOString(),
+      endedAt: new Date(Date.now() - 4.5 * 60 * 60_000).toISOString(),
+    },
   ],
   // Worktree cwd: chips strip this prefix so paths render repo-relative.
   cwd: "/Users/throxy/dev/claude0/.claude/worktrees/eng-2687",
@@ -451,6 +514,7 @@ export const FIXTURE_TRANSCRIPT = {
       agentType: "Explore",
       description: "Trace the cookie exchange path",
       status: "running",
+      startedAt: new Date(Date.now() - 7 * 60_000).toISOString(),
     },
     {
       agentId: "afix2",

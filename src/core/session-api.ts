@@ -40,7 +40,8 @@ import { recoverWorktreeTranscript } from "./recover";
 import { buildBaseName } from "./notifications";
 import { inheritName, loadNameCache, saveNameCache, slugify } from "./names";
 import { getLatestUserPrompt } from "./sessions";
-import { parseBackgroundTasks, liveScripts, agentScriptsAt, type BackgroundTask } from "./background-tasks";
+import { subagentStatus } from "./agent-status";
+import { parseBackgroundTasks, liveScripts, agentScriptsAt, withWorkflowProgress, endedWorkflows, type BackgroundTask } from "./background-tasks";
 import { decideQuestion, declineQuestion, buildAnswersMap } from "./approval";
 import { nativeStatus, parkedJobSessions } from "./session-state";
 import { jsonlLines, type PendingQuestion, type PendingToolCall } from "./jsonl-reader";
@@ -70,6 +71,8 @@ export interface SessionTranscript {
    * wait runs for tens of minutes. Omitted when none.
    */
   pendingScripts?: BackgroundTask[];
+  /** Workflows that ended (completed or stopped), newest first, with their outcome. Omitted when none. */
+  endedWorkflows?: BackgroundTask[];
   /**
    * Messages sitting in Claude Code's input queue — sent while the session was mid-turn
    * and not yet consumed. The phone renders these as dim "queued" bubbles: they are not
@@ -99,10 +102,13 @@ export interface SubagentSummary {
   agentId: string;
   agentType: string;
   description: string;
-  status: "done" | "running";
+  /** `stopped`: the user interrupted it, or (phone-side only) its session's process is gone. */
+  status: "done" | "running" | "stopped";
   spawnDepth?: number;
-  /** When a done agent's jsonl last grew (its completion instant, as mtime ISO). */
+  /** When a done or stopped agent's jsonl last grew (its end, as mtime ISO). */
   finishedAt?: string;
+  /** When a running agent started: its meta file is written once, at spawn (mtime ISO). */
+  startedAt?: string;
 }
 
 /** Context-window usage for the mobile status-bar readout (mirrors the Mac statusline). */
@@ -605,103 +611,6 @@ export function isValidAgentId(agentId: string): boolean {
   return AGENT_ID_RE.test(agentId);
 }
 
-interface TailRecord {
-  type?: string;
-  message?: { content?: unknown };
-}
-
-const TAIL_START = 65536; // 64KB initial window
-const TAIL_CAP = 4 * 1024 * 1024; // 4MB ceiling — final records reach ~99KB; this is slack
-
-/**
- * Backward chunked tail-read of a JSONL file: parse the complete records at its END
- * without reading the whole thing. Starts at the last 64KB and doubles the window (up
- * to 4MB) until ≥1 complete record is recovered — a subagent's final record can reach
- * ~99KB, so a fixed window would truncate it and misclassify a done agent as running.
- * When we didn't read from byte 0 the first line is a partial record (dropped); a
- * half-written trailing line is skipped by the per-line try/parse. Returns [] on a
- * missing/unreadable file or when the final record exceeds the 4MB cap.
- */
-async function tailRecords(path: string): Promise<TailRecord[]> {
-  try {
-    const file = Bun.file(path);
-    const size = file.size;
-    if (!size) return [];
-    for (let window = TAIL_START; ; window *= 2) {
-      const start = Math.max(0, size - window);
-      const text = await file.slice(start, size).text();
-      const lines = text.split("\n");
-      if (start > 0) lines.shift(); // first line is a partial record — drop it
-      const records: TailRecord[] = [];
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          records.push(JSON.parse(line) as TailRecord);
-        } catch {
-          // torn trailing fragment (file mid-write) — skip
-        }
-      }
-      if (records.length > 0 || start === 0 || window >= TAIL_CAP) return records;
-    }
-  } catch {
-    return []; // missing/unreadable
-  }
-}
-
-// A done agent's jsonl is terminal/immutable, so its (size, mtime) never changes again —
-// cache that verdict to bound re-reads to still-running agents. `running` is never cached
-// (the file is still growing).
-const subagentDoneCache = new Map<string, { size: number; mtimeMs: number }>();
-
-/**
- * A subagent's status from its OWN jsonl — `done` iff the last conversational record is an
- * `assistant` turn whose last content block is `text`, or the agent handed back (see
- * `handedBack`); else `running`. The text rule was validated against
- * ≈680 agents (0 false positives): this rescues the 22% of done agents whose `stop_reason`
- * is `null`, while a running tail is always a `thinking`-only assistant turn or a
- * `tool_result` user record (a tool-calling turn ends in `tool_use`, never `[…text]`). A
- * killed agent that never wrote a terminal turn reads `running` (accepted in v1).
- */
-export async function subagentStatus(jsonlPath: string): Promise<"done" | "running"> {
-  let stat: { size: number; mtimeMs: number } | null;
-  try {
-    stat = await Bun.file(jsonlPath).stat();
-  } catch {
-    return "running"; // missing/unreadable → not yet terminal
-  }
-  if (!stat) return "running";
-  const cached = subagentDoneCache.get(jsonlPath);
-  if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) return "done";
-
-  const records = await tailRecords(jsonlPath);
-  const convo = records.filter((r) => r.type === "user" || r.type === "assistant");
-  const last = convo[convo.length - 1];
-  const lastBlocks = tailBlocks(last);
-  const endsInText = last?.type === "assistant" && lastBlocks[lastBlocks.length - 1]?.type === "text";
-  const done = endsInText || handedBack(convo[convo.length - 2], last);
-  if (done) subagentDoneCache.set(jsonlPath, { size: stat.size, mtimeMs: stat.mtimeMs });
-  return done ? "done" : "running";
-}
-
-type TailBlock = { type?: string; id?: string; name?: string; tool_use_id?: string; is_error?: boolean };
-
-function tailBlocks(r: TailRecord | undefined): TailBlock[] {
-  const content = r?.message?.content;
-  return Array.isArray(content) ? (content as TailBlock[]) : [];
-}
-
-/**
- * Newer Claude Code ends an agent with a `SubagentHandback` tool call (the report is its
- * `message`) instead of a final text turn, so the tail is that call's successful
- * tool_result. A later prompt (a resumed agent) or a failed handback leaves it running.
- */
-function handedBack(prev: TailRecord | undefined, last: TailRecord | undefined): boolean {
-  if (prev?.type !== "assistant" || last?.type !== "user") return false;
-  const call = tailBlocks(prev).findLast((b) => b.type === "tool_use");
-  if (call?.name !== "SubagentHandback") return false;
-  return tailBlocks(last).some((b) => b.type === "tool_result" && b.tool_use_id === call.id && !b.is_error);
-}
-
 interface SubagentMeta {
   agentType?: unknown;
   description?: unknown;
@@ -725,17 +634,24 @@ export async function listSubagents(transcriptPaths: string[]): Promise<Subagent
   return out;
 }
 
+// An agent's meta file is written once, at spawn, so its parse is kept for the process:
+// Home lists every live session's agents on each refresh.
+const metaCache = new Map<string, SubagentMeta>();
+
 async function listSubagentsIn(dir: string): Promise<SubagentSummary[]> {
   const out: SubagentSummary[] = [];
   try {
     for await (const name of new Glob("agent-*.meta.json").scan({ cwd: dir })) {
       const agentId = name.slice("agent-".length, -".meta.json".length);
       if (!agentId) continue;
-      let meta: SubagentMeta;
-      try {
-        meta = JSON.parse(await Bun.file(`${dir}/${name}`).text()) as SubagentMeta;
-      } catch {
-        continue; // corrupt/unreadable meta — skip this row
+      let meta = metaCache.get(`${dir}/${name}`);
+      if (!meta) {
+        try {
+          meta = JSON.parse(await Bun.file(`${dir}/${name}`).text()) as SubagentMeta;
+        } catch {
+          continue; // corrupt/unreadable (or half-written) meta — skip this row
+        }
+        metaCache.set(`${dir}/${name}`, meta);
       }
       const jsonlPath = `${dir}/agent-${agentId}.jsonl`;
       const status = await subagentStatus(jsonlPath);
@@ -746,7 +662,11 @@ async function listSubagentsIn(dir: string): Promise<SubagentSummary[]> {
         status,
       };
       if (typeof meta.spawnDepth === "number") summary.spawnDepth = meta.spawnDepth;
-      if (status === "done") {
+      if (status === "running") {
+        const spawned = Bun.file(`${dir}/${name}`).lastModified;
+        if (spawned) summary.startedAt = new Date(spawned).toISOString();
+      }
+      if (status !== "running") {
         // A done agent's jsonl is immutable, so its mtime IS the completion instant —
         // the phone groups "finished since your last prompt" vs older with it.
         try {
@@ -766,7 +686,13 @@ async function listSubagentsIn(dir: string): Promise<SubagentSummary[]> {
 // drill-in payload stays small — the body (the agent's actual work) is what matters.
 const OPENING_TURN_CAP = 2048;
 
+// A fork's transcript opens on the parent's own `Agent` call, inherited with its context,
+// and its brief is the turn after: that call is dropped so the brief is the opening turn.
 export function capOpeningTurn(turns: TranscriptTurn[]): void {
+  const lead = turns[0];
+  if (lead?.role === "assistant" && turns[1]?.role === "user" && lead.content.length > 0 && lead.content.every((b) => b.type === "tool_use" && b.name === "Agent")) {
+    turns.shift();
+  }
   const first = turns[0];
   if (!first || first.role !== "user") return;
   first.content = first.content.map((b) =>
@@ -1031,6 +957,16 @@ export async function transcriptRevAt(
 }
 
 /**
+ * The live background scripts and workflows for a session's transcript files — the
+ * transcript payload's `pendingScripts`, for the `?rev=` fast path to ship fresh: a
+ * runner dying, an agent launching a script and a workflow's progress all change it
+ * while the files don't.
+ */
+export async function pendingScriptsFor(paths: string[]): Promise<BackgroundTask[]> {
+  return (await readActiveBranchCached(paths)).pendingScripts;
+}
+
+/**
  * Replay a transcript's `queue-operation` records into the messages still queued at EOF.
  * These are op-log lines, not tree nodes (no `uuid`), so this cannot be derived from the
  * active-branch turns — it mirrors `parseBackgroundTasks`'s linear scan instead. Observed
@@ -1149,6 +1085,7 @@ function lastCwd(lines: string[]): string | null {
 interface BranchRead {
   turns: TranscriptTurn[];
   pendingScripts: BackgroundTask[];
+  endedWorkflows: BackgroundTask[];
   queuedPending: string[];
   usage: ContextUsage | null;
   rev: string | null;
@@ -1157,7 +1094,7 @@ interface BranchRead {
 
 // Fresh object per call — callers hold and slim these arrays, so no shared singleton.
 function emptyBranch(): BranchRead {
-  return { turns: [], pendingScripts: [], queuedPending: [], usage: null, rev: null, cwd: null };
+  return { turns: [], pendingScripts: [], endedWorkflows: [], queuedPending: [], usage: null, rev: null, cwd: null };
 }
 
 /**
@@ -1183,13 +1120,15 @@ async function readActiveBranchCached(allPaths: string[]): Promise<BranchRead> {
     // keep running while the files — and thus the cache entry — sit still, or a wait
     // whose runner died would stay visible until the transcript next changes. The
     // agents' scripts join here for the same reason: their launches are in the agents'
-    // own files (`scanAgentScripts`), which change without these files changing.
+    // own files (`scanAgentScripts`), which change without these files changing, and so
+    // does a workflow's progress (its run dir).
     const live = async (tasks: BackgroundTask[]) =>
-      liveScripts([...tasks, ...(await agentScriptsAt(files[files.length - 1]!.path))]);
+      withWorkflowProgress(await liveScripts([...tasks, ...(await agentScriptsAt(files[files.length - 1]!.path))]));
     if (hit && hit.statKey === statKey)
       return {
         turns: hit.turns,
         pendingScripts: await live(hit.backgroundTasks),
+        endedWorkflows: endedWorkflows(hit.backgroundTasks),
         queuedPending: hit.queuedPending,
         usage: hit.usage,
         rev: hit.rev,
@@ -1216,6 +1155,7 @@ async function readActiveBranchCached(allPaths: string[]): Promise<BranchRead> {
     return {
       turns: entry.turns,
       pendingScripts: await live(entry.backgroundTasks),
+      endedWorkflows: endedWorkflows(entry.backgroundTasks),
       queuedPending: entry.queuedPending,
       usage: entry.usage,
       rev: entry.rev,
@@ -1248,6 +1188,7 @@ export async function getTranscript(sessionId: string): Promise<SessionTranscrip
   ]);
   const result = buildSessionTranscript(slimTurns(branch.turns), pendingToolCall(sessionId));
   if (branch.pendingScripts.length > 0) result.pendingScripts = branch.pendingScripts;
+  if (branch.endedWorkflows.length > 0) result.endedWorkflows = branch.endedWorkflows;
   if (branch.queuedPending.length > 0) result.queuedPending = branch.queuedPending;
   if (branch.rev) result.rev = branch.rev;
   // Usage rides the same cached read — no separate tail read of the file.

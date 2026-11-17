@@ -1,7 +1,7 @@
 # 26. Background work is one visibility-only surface
 
 Date: 2026-08-24 (records decisions made when the feature shipped, 2026-07-21 → 27)
-Status: accepted; amended 2026-10-24 (a script Claude waits on holds inbox placement), 2026-11-06 (the hold lasts 12h, not 2h), 2026-11-08 (a Monitor is a script, live until its deadline), 2026-11-12 (scripts the session's agents launched count too, read from the agents' transcripts)
+Status: accepted; amended 2026-10-24 (a script Claude waits on holds inbox placement), 2026-11-06 (the hold lasts 12h, not 2h), 2026-11-08 (a Monitor is a script, live until its deadline), 2026-11-12 (scripts the session's agents launched count too, read from the agents' transcripts), 2026-11-17 (a running workflow is a wait: its runner is the session's own Claude process)
 
 How detection, the runner-liveness probe, the caches and the phone sheet work:
 [docs/background-work.md](../background-work.md).
@@ -53,6 +53,11 @@ forever. Real data had a 3-day-old wait on a live pane.
   counts as live until then or until its end record (a `<status>` notice, an expiry event,
   a `TaskStop`), so a missed end record costs at most 30m. Work a Monitor watches but the
   harness didn't launch (`setsid -f`) is visible only through that Monitor.
+  A `Workflow` runs inside the session's own Claude process, so nothing holds a file open
+  for it either. Every surface checks it only for a session with a live Claude process (⏳ and
+  placement: `ready`; Home and the pill: running, ready or waiting), and that process is its
+  runner, so a workflow counts as a wait until its notice or a `TaskStop`. Its launch carries a task
+  id, so a restart notice ends one the previous process left behind.
 - **Liveness verdicts are one file per task.** The monitor, daemon and bridge probe
   overlapping task sets at the same time. A shared file loses a writer's slice, and with
   it a terminal dead verdict.
