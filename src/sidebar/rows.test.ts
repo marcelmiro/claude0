@@ -331,6 +331,12 @@ describe("renderView", () => {
     expect(view.scrollTop).toBe(37);
   });
 
+  test("unfocused: the scroll stays put while the pin is in view", () => {
+    // r1 at 46-47 already sits in the 39-49 window: snapping to the top would scroll to 37
+    const view = renderView(CROWD, vs({ activePaneId: "%1", scrollTop: 39 }), { width: 30, height: 12 }, NOW);
+    expect(view.scrollTop).toBe(39);
+  });
+
   test("glance mode without a pinned session on screen stays at the top", () => {
     expect(renderView(CROWD, vs(), { width: 30, height: 11 }, NOW).scrollTop).toBe(0);
   });

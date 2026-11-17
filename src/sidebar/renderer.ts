@@ -76,6 +76,8 @@ interface WinState extends ViewState {
   clickArmed: boolean;
   /** When the last wheel event landed — an unfocused wheel hold releases GLANCE_WHEEL_HOLD_MS after it. */
   wheelAt: number;
+  /** The window is on screen in an attached tmux session, as of the last topology sync. */
+  shown: boolean;
   /** Selector landed by focus on the pane-you-came-from's session, untouched since (`seedFallback`). */
   seededId: string | null;
   confirmKillId: string | null;
@@ -101,6 +103,7 @@ function freshWin(windowId: string): WinState {
     focused: false,
     clickArmed: false,
     wheelAt: 0,
+    shown: false,
     seededId: null,
     selectedId: null,
     activePaneId: null,
@@ -439,9 +442,21 @@ export function runSidebarRenderer(): void {
     await landInSidebar(from, target, sessionId);
   }
 
+  // Every sidebar shows the same list, so the window you arrive in takes the
+  // scroll of the one you left. Navigation calls this before repainting the
+  // window it leaves (unfocused, that one would scroll to its own session);
+  // the topology sync catches every other arrival (tmux keys, portkey).
+  let shownWin: string | null = null;
+  function arrive(target: WinState): void {
+    const prev = shownWin ? wins.get(shownWin) : undefined;
+    if (prev && prev !== target) target.scrollTop = prev.scrollTop;
+    shownWin = target.windowId;
+  }
+
   // Focus a window's sidebar with the row selected. The FROM sidebar drops
   // its chrome eagerly — its focus-out escape can lag a tick.
   async function landInSidebar(from: WinState, target: WinState, sessionId: string): Promise<void> {
+    arrive(target);
     if (target !== from && from.focused) {
       from.focused = false;
       from.clickArmed = false;
@@ -496,6 +511,7 @@ export function runSidebarRenderer(): void {
       await Bun.$`tmux select-window -t ${targetWin}`.quiet();
       const target = wins.get(targetWin);
       if (!target?.stubPane) return;
+      arrive(target);
       target.focused = true;
       target.clickArmed = true;
       target.scrollHold = null;
@@ -599,6 +615,8 @@ export function runSidebarRenderer(): void {
         // resuming would spawn a duplicate window for a live session
         try {
           if (focusPane) {
+            const target = wins.get(loc.windowId);
+            if (target) arrive(target);
             await Bun.$`tmux select-window -t ${loc.windowId}`.quiet();
             await Bun.$`tmux select-pane -t ${s.real.paneId}`.quiet();
             await showToClients(loc.session);
@@ -670,8 +688,10 @@ export function runSidebarRenderer(): void {
     // window while claude was its only pane): reopening a session means typing
     // in it next. Split its sidebar now — `ensure` splits detached — with the
     // row selected but unfocused, and drop this sidebar's chrome (its focus-out
-    // escape can lag a tick).
+    // escape can lag a tick). The new sidebar takes this one's scroll from
+    // before that repaint, which may scroll to this window's own session.
     try {
+      const scroll = win.scrollTop;
       if (win.focused) {
         win.focused = false;
         win.clickArmed = false;
@@ -681,6 +701,8 @@ export function runSidebarRenderer(): void {
       syncTopology(await listAllPanes());
       const target = wins.get(spawned);
       if (target?.stubPane) {
+        arrive(target);
+        target.scrollTop = scroll;
         // selection set explicitly — seedSelection can't find it, `real` lags discovery
         if (cleared) showFlash(target, cleared);
         if (toSidebar) await landInSidebar(win, target, id);
@@ -1610,6 +1632,9 @@ export function runSidebarRenderer(): void {
       const work = winPanes.filter((p) => !p.startCmd.includes(STUB_MARK));
       const activeWork = work.find((p) => p.paneActive) ?? (!win.activePaneId && work.length === 1 ? work[0] : undefined);
       if (activeWork) win.activePaneId = activeWork.paneId;
+      const shown = stub.windowActive && stub.attached;
+      if (shown && !win.shown) arrive(win);
+      win.shown = shown;
       // focus fallback (focus escapes are the fast path): sidebar pane active
       // in the active window ⇔ focused
       const nowFocused = stub.paneActive && stub.windowActive;
@@ -1822,7 +1847,7 @@ export function runSidebarRenderer(): void {
     const minute = Math.floor(Date.now() / 60_000);
     if (minute !== lastMinute) lastMinute = minute;
     // an unfocused wheel hold has no next key to end it: release it so the
-    // glance surface returns to Needs You
+    // glance surface brings this window's own session back into view
     for (const win of wins.values()) {
       if (win.scrollHold === "wheel" && !win.focused && Date.now() - win.wheelAt > GLANCE_WHEEL_HOLD_MS) win.scrollHold = null;
     }

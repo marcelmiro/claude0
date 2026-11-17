@@ -92,9 +92,11 @@ before painting (a killed window's tty can be reused by a new pane at once).
 
 ### Interaction grammar
 
-- **Scroll.** The list anchors on a row: the selection when focused, with a row of margin
-  either side so j/k shows where it lands next; else the top, scrolled just far enough to
-  keep the pinned session (this window's) in view, no margin. The margin is dropped when
+- **Scroll.** The list stays where it is, scrolling just far enough to keep a row in view:
+  the selection when focused, with a row of margin either side so j/k shows where it lands
+  next; else the pinned session (this window's), no margin. Every sidebar shows the same
+  list, so the window you arrive in takes the scroll of the one you left (`arrive`, before
+  the window you leave repaints unfocused). The margin is dropped when
   the window can't fit the rows either side. A wheel scroll holds wherever it lands until
   the next key, click or focus change, or unfocused, 10s without a wheel event
   (`GLANCE_WHEEL_HOLD_MS`). A click selects with no margin, so the row stays under the
@@ -103,7 +105,7 @@ before painting (a killed window's tty can be reused by a new pane at once).
   click the highlight. An overflowing list never shows half a two-line row; a `↓` line
   counts the sessions hidden below, by section — the bottom row unfocused (a flash takes
   it over), the list's last line focused, above the detail row and hints (`renderView`).
-- **Unfocused**, the sidebar is a glance surface (no chrome, top-anchored). **Focus**
+- **Unfocused**, the sidebar is a glance surface (no chrome). **Focus**
   (`sidebarFocus`, default `M-s`) is instant: the toggle signals the renderer directly, and
   the selector lands on the session of the pane you came from — and if that row leaves
   Needs You before you press a key or click (you just submitted, so it turns Running), the

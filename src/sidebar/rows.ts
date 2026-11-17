@@ -329,7 +329,7 @@ export function renderView(
   }
 
   // chrome: hints bottom-most, detail row above it ONLY when the selected row
-  // has authored info. Unfocused = pure glance surface, no chrome, top-anchored.
+  // has authored info. Unfocused = pure glance surface, no chrome.
   const sel = sessions.find((s) => s.id === vs.selectedId);
   const detail = vs.focused && sel ? detailFor(sel, now) : null;
   // the snooze form spends a second chrome line (unit blocks + amount/preview)
@@ -342,12 +342,12 @@ export function renderView(
   const overflow = lines.length > contentHeight;
   const windowHeight = overflow && vs.focused ? Math.max(1, contentHeight - 1) : contentHeight;
 
-  // scroll: after a wheel, wherever the wheel left it. Otherwise anchored —
-  // focused keeps the selection in view; glance mode shows the top (Needs
-  // you), scrolled just far enough to keep this window's own session in view
+  // scroll: after a wheel, wherever the wheel left it. Otherwise it stays put,
+  // moving just far enough to keep a row in view — focused, the selection;
+  // glance mode, this window's own session
   const pinnedId = vs.activePaneId ? sessions.find((s) => s.real?.paneId === vs.activePaneId)?.id : undefined;
   const anchor = vs.scrollHold === "wheel" ? undefined : span.get((vs.focused ? vs.selectedId : pinnedId) ?? "");
-  let scrollTop = vs.focused || vs.scrollHold === "wheel" ? vs.scrollTop : 0;
+  let scrollTop = vs.scrollTop;
   scrollTop = Math.max(0, Math.min(scrollTop, lines.length - windowHeight));
   if (anchor && vs.focused && vs.scrollHold !== "click") {
     // a row of margin each side of the selection, so j/k shows the row it
