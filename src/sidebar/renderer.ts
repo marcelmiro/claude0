@@ -72,6 +72,10 @@ interface WinState extends ViewState {
   width: number;
   height: number;
   clickArmed: boolean;
+  /** Screen line of the click that set the "click" hold. The repaint can still shift the clicked row (the
+   * focused window loses a line to the ↓ count or a detail line), so a second click on this line commits
+   * the selection whatever is under it now. */
+  clickY: number;
   /** Selector landed by focus on the pane-you-came-from's session, untouched since (`seedFallback`). */
   seededId: string | null;
   confirmKillId: string | null;
@@ -96,6 +100,7 @@ function freshWin(windowId: string): WinState {
     height: 24,
     focused: false,
     clickArmed: false,
+    clickY: 0,
     seededId: null,
     selectedId: null,
     activePaneId: null,
@@ -909,6 +914,7 @@ export function runSidebarRenderer(): void {
     win.focusPending = setTimeout(() => {
       win.focusPending = null;
       win.focused = true;
+      win.scrollHold = null;
       seedSelection(win);
       paint(win);
     }, 80);
@@ -1243,6 +1249,7 @@ export function runSidebarRenderer(): void {
 
   async function handleEvent(win: WinState, ev: InputEvent): Promise<void> {
     // a wheel or click hold lasts until you do anything else; then the list re-anchors
+    const held = win.scrollHold;
     if (ev.type !== "wheel") win.scrollHold = null;
     if (ev.type === "focus") {
       if (ev.in) gainFocusSoon(win);
@@ -1297,15 +1304,17 @@ export function runSidebarRenderer(): void {
         if (id && win.visible.some((v) => v.id === id)) win.selectedId = id;
         else seedSelection(win);
         win.scrollHold = "click";
+        win.clickY = ev.y;
         paint(win);
         return;
       }
-      const s = findSession(id);
+      const s = findSession(held === "click" && ev.y === win.clickY ? win.selectedId : id);
       if (!s) return;
       if (win.selectedId === s.id) await enterRow(win, s, true);
       else {
         win.selectedId = s.id;
         win.scrollHold = "click";
+        win.clickY = ev.y;
       }
       paint(win);
       return;
@@ -1609,6 +1618,7 @@ export function runSidebarRenderer(): void {
       if (win.focused && !nowFocused) {
         win.focused = false;
         win.clickArmed = false;
+        win.scrollHold = null;
         win.helpVisible = false;
         win.blockNoteFor = null;
         exitMode(win);
