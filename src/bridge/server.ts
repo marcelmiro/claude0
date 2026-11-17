@@ -50,11 +50,12 @@ import {
   answerDialog,
   isModelArg,
   isEffortArg,
+  pendingScriptsFor,
   type SendResult,
 } from "../core/session-api";
 import { nativeStatus, parkedJobSessions } from "../core/session-state";
-import { pendingScriptsAt } from "../core/background-tasks";
-import { isValidSessionId, resolveTranscriptPath } from "../core/last-turn";
+import { pendingScriptsAt, backgroundLead, screenTotal, withScreenTotals, type BackgroundTask, type BackgroundLead } from "../core/background-tasks";
+import { isValidSessionId, resolveTranscriptPath, resolveTranscriptPaths } from "../core/last-turn";
 import { homedir } from "os";
 import { discoverRepos, getBaseRepoPath } from "../core/git";
 import { listSlashCommands } from "../core/skills";
@@ -333,6 +334,7 @@ function projectSession(
   unread: boolean,
   restorable?: RestoreState,
   pendingScriptCount?: number,
+  background?: BackgroundLead,
 ) {
   // Pending = blocked-on-USER, sourced from the hook log (not status): discovery can
   // mislabel a live blocked session as `archived`, but it must stay reachable from the
@@ -374,6 +376,8 @@ function projectSession(
     // ≥1 background script still awaited (live sessions only) — the list's ⏳ badge, so
     // a `ready` session mid-wait doesn't read as done from the list.
     ...(pendingScriptCount ? { pendingScripts: pendingScriptCount } : {}),
+    // The task the row's sub-line names: a workflow's progress, a wait's or a service's label.
+    ...(background ? { background } : {}),
   };
 }
 
@@ -794,17 +798,29 @@ async function computeSessionsPayload(): Promise<unknown> {
   // A parked job's scripts run in the session's pane but are recorded in the JOB's
   // transcript, so both are counted against the session the phone lists.
   const scriptCounts = new Map<string, number>();
+  const leads = new Map<string, BackgroundLead>();
   await Promise.all(
     tracked
       .filter((s) => s.status === "running" || s.status === "ready" || s.status === "waiting")
       .map(async (s) => {
         const ids = [s.id, parkedJobs.get(s.id)].filter((id): id is string => !!id);
-        const counts = await Promise.all(ids.map(async (id) => {
-          const path = await resolveTranscriptPath(id);
-          return path ? (await pendingScriptsAt(path)).length : 0;
-        }));
-        const n = counts.reduce((a, b) => a + b, 0);
-        if (n > 0) scriptCounts.set(s.id, n);
+        const paths = (await Promise.all(ids.map((id) => resolveTranscriptPath(id)))).filter((p): p is string => !!p);
+        const tasks = (await Promise.all(paths.map(pendingScriptsAt))).flat();
+        // Running agents from their own files, the sheet's source: an agent resumed with
+        // SendMessage has no Agent launch in the parent transcript to count.
+        const agents: BackgroundTask[] = (await Promise.all(ids.map(async (id) => listSubagents(await resolveTranscriptPaths(id)))))
+          .flat()
+          .filter((a) => a.status === "running")
+          .sort((a, b) => (a.startedAt ?? "").localeCompare(b.startedAt ?? ""))
+          .map((a) => ({ toolUseId: a.agentId, kind: "agent", label: a.description || a.agentType, status: "pending" }));
+        if (tasks.length > 0) scriptCounts.set(s.id, tasks.length);
+        const lead = await backgroundLead([...tasks, ...agents]);
+        // The workflow's total, read off the pane capture status detection already took.
+        if (lead?.kind === "workflow" && lead.progress && s.lastCapture) {
+          const total = screenTotal(s.lastCapture, lead.label, lead.progress.done);
+          if (total !== undefined) lead.progress = { ...lead.progress, total };
+        }
+        if (lead) leads.set(s.id, lead);
       }),
   );
   const value = tracked.map((s) =>
@@ -816,6 +832,7 @@ async function computeSessionsPayload(): Promise<unknown> {
       !!(s.tmuxPane && unread.has(s.tmuxPane.paneId)),
       restorableMap.get(s.id),
       scriptCounts.get(s.id),
+      leads.get(s.id),
     ),
   );
   // Inbox (ADR 0013): the store decides every row's section (composeSessions →
@@ -1239,6 +1256,7 @@ async function composeTranscriptPayload(id: string): Promise<Record<string, unkn
   // The live statusline + permission mode, scraped from the pane (the only faithful
   // source for the user's custom statusline and the auto/plan mode).
   const statusline = pane ? await readPaneStatusline(pane, capture) : {};
+  if (tx.pendingScripts) tx.pendingScripts = withScreenTotals(tx.pendingScripts, capture);
   return { ...tx, approval, dialog, ...statusline };
 }
 
@@ -1407,15 +1425,20 @@ async function route(req: Request): Promise<Response> {
     // Fast path: the client holds this exact file revision (`?rev=`), so skip rebuilding
     // and re-shipping the turns — the payload that scales with thread length. Everything
     // that can change WITHOUT the file changing still ships fresh: the pending
-    // tool/question (hook events log), approval + statusline (pane scrape), and the
+    // tool/question (hook events log), approval + statusline (pane scrape), the
     // subagent list (separate per-agent files — an agent finishing doesn't bump the
-    // session file). The client merges these over its held turns.
+    // session file), and the pending scripts (runner liveness, agents' files, workflow
+    // run dirs, the screen-read workflow total). The client merges these over its held turns.
     const wantRev = url.searchParams.get("rev");
     if (wantRev) {
       const txId = (await parkedJobSessions()).get(id) ?? id;
       const at = await transcriptRevAt(txId);
       if (at && at.rev === wantRev) {
-        const [pane, subagents] = await Promise.all([resolveSessionPane(id), listSubagents(at.paths)]);
+        const [pane, subagents, pendingScripts] = await Promise.all([
+          resolveSessionPane(id),
+          listSubagents(at.paths),
+          pendingScriptsFor(at.paths),
+        ]);
         const capture = pane ? await capturePane(pane) : "";
         const pt = pendingToolCall(txId);
         const statusline = pane ? await readPaneStatusline(pane, capture) : {};
@@ -1425,6 +1448,7 @@ async function route(req: Request): Promise<Response> {
           rev: at.rev,
           ...pendingToolFields(pt),
           subagents, // always present here ([] clears) — the client overwrites its copy
+          ...(pendingScripts.length > 0 && { pendingScripts: withScreenTotals(pendingScripts, capture) }), // omitted clears, as in the full payload
           approval,
           dialog: pane ? resolveDialog(await nativeStatus(id), approval, pt, capture) : null,
           ...statusline,

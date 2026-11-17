@@ -441,9 +441,9 @@ async function refreshPreferences() {
 }
 
 // Volatile transcript fields — everything that can change while the JSONL doesn't (hook
-// events, pane scrape, per-agent files). On an `unchanged` response these are replaced
-// wholesale from the fresh payload; the file-derived bulk (turns, usage, pendingScripts,
-// lastPromptAt, rev) is kept from the copy we already hold.
+// events, pane scrape, per-agent files, runner liveness, workflow run dirs). On an
+// `unchanged` response these are replaced wholesale from the fresh payload; the
+// file-derived bulk (turns, usage, lastPromptAt, rev) is kept from the copy we already hold.
 const VOLATILE_FIELDS = [
   "approval",
   "dialog",
@@ -451,6 +451,7 @@ const VOLATILE_FIELDS = [
   "openQuestion",
   "openQuestions",
   "subagents",
+  "pendingScripts",
   "statusline",
   "mode",
   "model",
@@ -627,7 +628,11 @@ async function refreshSubagent() {
   if (!o || !id) return;
   try {
     const r = await fetch(`/sessions/${encodeURIComponent(id)}/subagents/${encodeURIComponent(o.agentId)}`);
-    if (!r.ok) return flashError("✗ transcript unavailable");
+    // Shown inside the drill-in: a flash would sit behind it. A refresh keeps last-known.
+    if (!r.ok) {
+      if (!subTranscript.value && openSubagent.value?.agentId === o.agentId) subTranscript.value = { turns: [], unavailable: true };
+      return;
+    }
     const data = await r.json();
     if (openSubagent.value?.agentId !== o.agentId || id !== selectedId.value) return;
     subTranscript.value = data;
@@ -1106,6 +1111,9 @@ function closeAgents() {
 function closeSubagent() {
   openSubagent.value = null;
   subTranscript.value = null;
+  // Back on the detail: hand focus to the pill the drill-in was reached from.
+  const pill = document.querySelector(".agentspill");
+  if (pill) pill.focus();
 }
 
 // Reading a session clears its unread glow — but only after a 3s grace period, never
@@ -1822,13 +1830,34 @@ function List() {
     const parked = ib.section === "parked";
     const blocked = ib.note != null;
     const repo = s.repo === "~" ? "home" : s.repo;
+    // Background work names itself on the sub-line whatever the status — a workflow by
+    // its progress (the same words as the sheet), a script by its label, running agents
+    // by count and the newest one's label — so a session that looks idle shows it isn't.
+    // A service reads as one, never as a wait.
+    const bg = s.background;
+    const bgProgress = bg && bg.kind === "workflow" && bg.progress;
+    // A stalled workflow leads with it, the same rule as the sheet's row.
+    const bgStalled = bgProgress && workflowStalled(bgProgress, tick.value);
+    const bgDetail = !bg
+      ? ""
+      : bg.kind === "workflow"
+        ? bgProgress
+          ? // the count first, so truncation drops the phase name, never the count
+            [workflowCount(bgProgress), bgProgress.phase].filter(Boolean).join(" · ")
+          : `🧩 ${bg.label}`
+        : bg.kind === "agents"
+          ? `🤖 ${bg.count > 1 ? `${bg.count} agents · ` : ""}${bg.label}`
+        : bg.kind === "service"
+          ? `serving · ${bg.label}`
+          : // mid-turn the name's ⏳ mark is suppressed, so the sub-line carries it instead
+            `${s.status === "running" ? "⏳ " : ""}${bg.label}`;
     const detail = parked
       ? blocked
         ? ib.note
         : ib.wakeAt
           ? `in ${formatWakeIn(ib.wakeAt, tick.value)}`
           : ""
-      : "";
+      : bgDetail;
     const sub = detail ? `${repo} · ${detail}` : repo;
     // Marks are inline prefixes of the name (like ⏳/☾ always were) — a reserved dot
     // column read as an empty gutter on rows with nothing to say. Pending/unread keep
@@ -1847,8 +1876,9 @@ function List() {
         ? html`<span class="markdot" style=${dotStyle(s)}></span>`
         : null;
     const zap = s.unread && html`<span class="zapmark" title="unread">⚡</span>`;
-    // mid-turn ⏳ contradicts nothing — same rule as the window prefix (desiredPrefix)
-    const script = s.status !== "running" && s.pendingScripts > 0;
+    // mid-turn ⏳ contradicts nothing — same rule as the window prefix (desiredPrefix);
+    // a service hands the turn back, so it never earns the "still working" mark
+    const script = s.status !== "running" && s.pendingScripts > 0 && !(bg && bg.kind === "service");
     return html`
       <button
         type="button"
@@ -1860,9 +1890,13 @@ function List() {
         <span class="grow">
           <span class="name"
             >${zap}${mark}${ib.woken && html`<span class="wokemark" title="snooze came due">☾</span>`}${script &&
-            html`<span class="scriptmark" title="waiting on a background script">⏳</span>`}${listTitle(s)}</span
+            html`<span class="scriptmark" title="waiting on background work">⏳</span>`}${listTitle(s)}</span
           >
-          ${sub && html`<span class="sub">${sub}</span>`}
+          ${sub &&
+          html`<span class="sub"
+            >${repo}${detail && html` · ${bgProgress ? "🧩 " : ""}${bgStalled &&
+              html`<span class="warn">stalled ${formatTimeAgo(bgProgress.lastAt, { now: tick.value })}</span> · `}${detail}`}</span
+          >`}
         </span>
         ${pending &&
         html`<span class="pendingbadge ${pending === "question" ? "q" : "a"}"
@@ -3668,10 +3702,30 @@ function Detail() {
   // navbar pill (glance) → the AgentList sheet (labels). A script wait is the case
   // where status honestly reads "ready" while work is in flight — the mint pill is
   // the in-detail tell, same affordance as running agents.
-  const agents = (t && t.subagents) || [];
+  // Every slot counts live items of one kind (🧩 workflows, 🤖 agents, ⏳ waits, ◉ services:
+  // a service hands the turn back, so it isn't a ⏳). With nothing live the pill is a bare
+  // entry point to the finished list: an all-time total is noise.
+  const bgp = bgParts(t);
+  const agents = bgp.agents;
   const runningAgents = agents.filter((a) => a.status === "running").length;
-  const scripts = (t && t.pendingScripts) || [];
-  const activeWork = runningAgents + scripts.length;
+  const workflowsLive = bgp.workflows;
+  const waits = bgp.scripts.filter((sc) => !sc.service).length;
+  const services = bgp.scripts.length - waits;
+  const activeWork = runningAgents + workflowsLive.length + bgp.scripts.length;
+  const shownLive = activeWork;
+  const workflowsStalled = workflowsLive.filter((wf) => workflowStalled(wf.progress, tick.value)).length;
+  const pillLabel =
+    shownLive > 0
+      ? [
+          workflowsLive.length > 0 &&
+            `${plural(workflowsLive.length, "workflow")} running${workflowsStalled > 0 ? `, ${workflowsStalled} stalled` : ""}`,
+          runningAgents > 0 && `${plural(runningAgents, "agent")} running`,
+          waits > 0 && `${plural(waits, "wait")} running`,
+          services > 0 && `${plural(services, "service")} up`,
+        ]
+          .filter(Boolean)
+          .join(", ")
+      : "nothing running";
 
   // 15s safety poll while any background work is live — covers agent hard-kills (which
   // fire no SubagentStop hook) and a script wake that produces no immediate hook edge.
@@ -4008,18 +4062,21 @@ function Detail() {
               ${t && !transcriptFresh.value &&
               html`<span class="syncing"><span class="livedot">⦿</span> syncing…</span>`}
             </div>
-            ${(agents.length > 0 || scripts.length > 0) &&
+            ${(agents.length > 0 || activeWork > 0 || bgp.ended.length > 0) &&
             html`<button
-              class="agentspill${activeWork > 0 ? "" : " archive"}"
+              class="agentspill${shownLive > 0 ? "" : " archive"}"
               onClick=${() => (showAgents.value = true)}
-              aria-label="Background work"
+              aria-label=${`Background work: ${pillLabel}`}
+              aria-haspopup="dialog"
+              aria-expanded=${showAgents.value}
             >
-              ${activeWork > 0
-                ? html`${runningAgents > 0 && html`🤖 <span class="run">${runningAgents}</span>`}${runningAgents >
-                      0 && scripts.length > 0
-                      ? " "
-                      : ""}${scripts.length > 0 && html`⏳ <span class="run">${scripts.length}</span>`}`
-                : html`🤖 ${agents.length}`}
+              ${shownLive > 0
+                ? html`${workflowsLive.length > 0 &&
+                    html`<span class="slot">🧩<span class="run${workflowsStalled > 0 ? " stalled" : ""}">${workflowsLive.length}</span></span>`}${runningAgents > 0 &&
+                    html`<span class="slot">🤖<span class="run">${runningAgents}</span></span>`}${waits > 0 &&
+                    html`<span class="slot">⏳<span class="run">${waits}</span></span>`}${services > 0 &&
+                    html`<span class="slot">◉<span class="run">${services}</span></span>`}`
+                : html`<span class="slot">${agents.length > 0 ? "🤖" : "🧩"}</span>`}<span class="more" aria-hidden="true">+</span>
             </button>`}
             ${session &&
             html`<button
@@ -4290,85 +4347,256 @@ function SessionSheet() {
 }
 
 // Background-work sheet — everything the session runs beside the main conversation, in one
-// list. Pending background scripts first (they explain a session that reads "ready" while
-// mid-work, and have no other surface — script rows aren't tappable, there's no conversation
-// behind a shell loop), then running agents, then agents that finished SINCE YOUR LAST
-// PROMPT (fresh reports — likely why the sheet was opened), then everything older collapsed
-// behind one "earlier" row: fan-out-heavy sessions pile up dozens of stale rows, but
-// finished reports must stay reachable — the drill-in is the only place a phone user can
-// read them (tool_results are stripped from the thread).
+// list. In-flight work first: workflows (one row each with its progress; their own
+// agents never get rows), background scripts (they explain a session that reads "ready"
+// while mid-work, and have no other surface — no conversation behind a shell loop), then
+// running agents. Then work that finished SINCE YOUR LAST PROMPT (fresh reports — likely
+// why the sheet was opened), then everything older collapsed behind one "earlier" row:
+// fan-out-heavy sessions pile up dozens of stale rows, but finished reports must stay
+// reachable — the drill-in is the only place a phone user can read them (tool_results are
+// stripped from the thread). Running rows show elapsed time on the right, finished ones
+// time since.
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+// A workflow with no agent finishing this long reads as stalled. Across 51 real runs the
+// longest healthy gap was 9.5m (the wait for the first agent); runs whose agents all
+// failed finished none, and retries alone never count as progress. Mirrors the server's
+// WORKFLOW_STALL_MS (core/background-tasks.ts), which picks Home's lead by it.
+const WORKFLOW_QUIET_MS = 15 * 60_000;
+
+// Modal keyboard rules for a sheet or push: Escape closes, and Tab wraps between the
+// container's first and last buttons (Shift+Tab from the focused title too), so focus
+// can't walk into the session behind it.
+function useDialogKeys(active, titleRef, container, onClose) {
+  useEffect(() => {
+    if (!active) return;
+    const onKey = (e) => {
+      if (e.key === "Escape") return onClose();
+      if (e.key !== "Tab") return;
+      const buttons = [...document.querySelectorAll(`${container} button`)];
+      const first = buttons[0];
+      const last = buttons[buttons.length - 1];
+      if (!first || !last) return;
+      const atStart = document.activeElement === first || document.activeElement === titleRef.current;
+      if (e.shiftKey && atStart) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [active]);
+}
+
+// "91/165" when the total was read off Claude Code's screen this time, else "91 done".
+const workflowCount = (p) => (p.total ? `${p.done}/${p.total}` : `${p.done} done`);
+
+function workflowStalled(p, now) {
+  return !!p && now - p.lastAt > WORKFLOW_QUIET_MS;
+}
+
+// Background work runs inside its session's Claude process: with none (an archived or
+// History session) a "running" agent was killed with it and a pending workflow will never
+// report, whatever their own files say. Scripts and monitors are dropped; the rest are
+// shown stopped.
+function bgParts(t) {
+  const session =
+    sessions.value.find((s) => s.id === selectedId.value) ||
+    (historySession.value && historySession.value.id === selectedId.value ? historySession.value : null);
+  const live = !session || session.status === "running" || session.status === "ready" || session.status === "waiting";
+  const agents = (t && t.subagents) || [];
+  const pending = (t && t.pendingScripts) || [];
+  const ended = (t && t.endedWorkflows) || [];
+  if (live) {
+    return {
+      agents,
+      workflows: pending.filter((sc) => sc.kind === "workflow"),
+      scripts: pending.filter((sc) => sc.kind !== "workflow"),
+      ended,
+    };
+  }
+  return {
+    agents: agents.map((a) => (a.status === "running" ? { ...a, status: "stopped" } : a)),
+    workflows: [],
+    scripts: [],
+    ended: [...pending.filter((sc) => sc.kind === "workflow").map((wf) => ({ ...wf, status: "killed" })), ...ended],
+  };
+}
+
 function AgentList() {
   const [showOlder, setShowOlder] = useState(false);
-  if (!showAgents.value) return null;
+  const titleRef = useRef(null);
+  const open = showAgents.value;
+  const close = () => {
+    showAgents.value = false;
+    setShowOlder(false);
+    // Hand focus back to the pill that opened the sheet, not to <body>.
+    const pill = document.querySelector(".agentspill");
+    if (pill) pill.focus();
+  };
+  useEffect(() => {
+    if (open && titleRef.current) titleRef.current.focus();
+  }, [open]);
+  useDialogKeys(open, titleRef, ".sheet[role=dialog]", close);
+  if (!open) return null;
+  const now = tick.value;
   const t = transcript.value;
-  const list = (t && t.subagents) || [];
-  const scripts = (t && t.pendingScripts) || [];
-  const close = () => ((showAgents.value = false), setShowOlder(false));
-  // Boundary unknown (no prompt yet / no finishedAt) → err toward fresh: hiding a report
+  const { agents: list, workflows, scripts, ended } = bgParts(t);
+  // Boundary unknown (no prompt yet / no finish time) → err toward fresh: hiding a report
   // is worse than one extra row.
   const lastPrompt = t && t.lastPromptAt ? new Date(t.lastPromptAt).getTime() : null;
-  const isFresh = (a) =>
-    !lastPrompt || !a.finishedAt || new Date(a.finishedAt).getTime() >= lastPrompt;
+  const isFreshAt = (at) => !lastPrompt || !at || new Date(at).getTime() >= lastPrompt;
   const running = list.filter((a) => a.status === "running");
-  const fresh = list.filter((a) => a.status !== "running" && isFresh(a));
-  const older = list.filter((a) => a.status !== "running" && !isFresh(a));
+  // Finished agents and ended workflows interleave, newest first.
+  const finished = [
+    ...list.filter((a) => a.status !== "running").map((a) => ({ at: a.finishedAt || a.startedAt, agent: a })),
+    ...ended.map((wf) => ({ at: wf.endedAt || wf.launchedAt, workflow: wf })),
+  ].sort((x, y) => (y.at || "").localeCompare(x.at || ""));
+  const fresh = finished.filter((f) => isFreshAt(f.at));
+  const notFresh = finished.filter((f) => !isFreshAt(f.at));
+  // With nothing running or new, the newest few stay open instead of one collapsed row.
+  const quiet = fresh.length === 0 && running.length + workflows.length + scripts.length === 0;
+  const recent = quiet ? notFresh.slice(0, 3) : [];
+  const older = notFresh.slice(recent.length);
   // Drill-in prev/next walks the DISPLAY order, older included, so nothing is unreachable.
-  const ordered = [...running, ...fresh, ...older];
-  const row = (a) => html`
-    <button
-      type="button"
-      class="agent-row"
-      key=${a.agentId}
-      onClick=${() => openAgent(a, ordered)}
-      style=${a.spawnDepth > 1 ? `padding-left:${12 + Math.min(a.spawnDepth - 1, 4) * 14}px` : ""}
-    >
-      <span class="dot" style=${`background:${a.status === "running" ? "var(--mint)" : "var(--peach)"}`}></span>
-      <span class="grow">
-        <span class="name">${a.description || a.agentType}</span>
-        <span class="sub">
-          ${a.agentType}${a.status === "running"
-            ? " · running"
-            : a.finishedAt
-              ? ` · ${formatTimeAgo(a.finishedAt)}`
-              : ""}
-        </span>
+  const ordered = [...running, ...finished.filter((f) => f.agent).map((f) => f.agent)];
+  const ago = (at) => (at ? formatTimeAgo(at, { now }) : "");
+  const elapsed = (at) => formatTimeAgo(at, { now, verbose: true }) || "now";
+  const dot = (color) => html`<span class="dot" aria-hidden="true" style=${`background:${color}`}></span>`;
+  const warn = (text) => html`<span class="warn">${text}</span>`;
+  const bad = (text) => html`<span class="bad">${text}</span>`;
+  const join = (parts) => parts.filter(Boolean).map((part, i) => html`${i > 0 ? " · " : ""}${part}`);
+  // Every row has Home's shape: dot, name, one short sub-line, a time on the right (elapsed
+  // under Running, time since under Finished — the section says which), › when tappable.
+  // Dots: mint running, white new since your last prompt, dim older; peach only warns.
+  // Inert rows (no drill-in target) are divs with an invisible chevron so times line up,
+  // and carry their sentence as visually-hidden text with the visible parts aria-hidden:
+  // one screen-reader stop. Real text, not an aria-label on a group — iOS VoiceOver can
+  // skip a group whose children are all hidden.
+  const inert = (key, spoken, color, name, sub, time) => html`
+    <div class="agent-row script" key=${key}>
+      <span class="vh">${spoken.filter(Boolean).join(", ")}</span>
+      <span class="inert-body" aria-hidden="true">
+        ${dot(color)}
+        <span class="grow"><span class="name">${name}</span><span class="sub">${sub}</span></span>
+        <span class="when">${time}</span>
+        <span class="chev ghost">›</span>
       </span>
-      <span class="chev">›</span>
-    </button>
-  `;
-  // Script row — same anatomy as agent rows (dot / name / sub) so the sheet reads as one
-  // list, but a div (not a button): no drill-in target exists.
-  const scriptRow = (sc) => html`
-    <div class="agent-row script" key=${sc.toolUseId}>
-      <span class="dot" style="background:var(--mint)"></span>
-      <span class="grow">
-        <span class="name">${sc.label}</span>
-        <span class="sub">script · ${formatTimeAgo(sc.launchedAt) || "running"}</span>
-      </span>
-      <span class="scripthint">⏳</span>
     </div>
   `;
-  // Header = state summary, not a bare noun: "1 waiting · 2 running · 5 done".
-  const doneCount = fresh.length + older.length;
-  const headParts = [
-    scripts.length > 0 && `${scripts.length} waiting on script${scripts.length === 1 ? "" : "s"}`,
-    running.length > 0 && `${running.length} running`,
-    doneCount > 0 && `${doneCount} done`,
-  ].filter(Boolean);
+  const agentRow = (a, isFresh) => {
+    const live = a.status === "running";
+    const stopped = a.status === "stopped";
+    const time = live ? a.startedAt && elapsed(a.startedAt) : ago(a.finishedAt);
+    return html`
+      <button
+        type="button"
+        class="agent-row"
+        key=${a.agentId}
+        onClick=${() => openAgent(a, ordered)}
+        style=${a.spawnDepth > 1 ? `padding-left:${12 + Math.min(a.spawnDepth - 1, 4) * 14}px` : ""}
+      >
+        ${dot(live ? "var(--mint)" : isFresh ? "var(--fg)" : "var(--dim)")}
+        <span class="grow">
+          <span class="name">${a.description || a.agentType}</span>
+          <span class="sub">${a.agentType}${stopped ? " · stopped" : html`<span class="vh">, ${live ? "running" : "done"}</span>`}</span>
+        </span>
+        ${time && html`<span class="when">${time}<span class="vh">${live ? " elapsed" : " ago"}</span></span>`}
+        <span class="chev" aria-hidden="true">›</span>
+      </button>
+    `;
+  };
+  // A monitor's latest event is its progress; a plain script has only its label.
+  const scriptRow = (sc) => {
+    const monitor = sc.deadline != null;
+    const kind = sc.service ? "service" : monitor ? "monitor" : "script";
+    return inert(
+      sc.toolUseId,
+      [sc.label, sc.service ? "service, up" : `${kind}, running`, monitor && sc.lastEvent && `last event: ${sc.lastEvent}`, `${elapsed(sc.launchedAt)} elapsed`],
+      "var(--mint)",
+      sc.label,
+      monitor && sc.lastEvent ? `${kind} · ${sc.lastEvent}` : kind,
+      elapsed(sc.launchedAt),
+    );
+  };
+  // A live workflow's sub-line: a stall first, then agents done, then the phase, so
+  // truncation only ever cuts the phase. No planned total is recorded while a run lives.
+  const workflowRow = (wf) => {
+    const p = wf.progress;
+    const stalled = workflowStalled(p, now);
+    const sub = !p
+      ? "🧩 workflow"
+      : html`🧩 ${join([stalled && warn(`stalled ${ago(p.lastAt)}`), p.total || p.done > 0 || stalled ? workflowCount(p) : "starting", p.phase])}`;
+    return inert(
+      wf.toolUseId,
+      [
+        wf.label,
+        stalled ? `workflow stalled, no agent finished in ${ago(p.lastAt)}` : "workflow running",
+        p && (p.total ? `${p.done} of ${p.total} agents done` : `${p.done} agents done`),
+        p && p.phase && `${p.phase} phase`,
+        `${elapsed(wf.launchedAt)} elapsed`,
+      ],
+      stalled ? "var(--peach)" : "var(--mint)",
+      wf.label,
+      sub,
+      elapsed(wf.launchedAt),
+    );
+  };
+  const endedRow = (wf, isFresh) => {
+    const o = wf.outcome;
+    const stopped = wf.status === "killed";
+    // Every agent failing is a failed run, whatever the notice's status word says.
+    const failed = !!o && o.done === 0 && o.failed > 0;
+    // Only the outcome: how it ended and whether agents failed. Counts and run time don't
+    // change what you do next.
+    const outcome = stopped ? "stopped" : failed ? "failed" : "completed";
+    return inert(
+      wf.toolUseId,
+      [wf.label, `workflow ${outcome}${wf.endedAt ? ` ${ago(wf.endedAt)} ago` : ""}`, !failed && o && o.failed > 0 && `${o.failed} agents failed`],
+      failed ? "var(--red)" : isFresh ? "var(--fg)" : "var(--dim)",
+      wf.label,
+      html`🧩 ${join([failed ? bad(outcome) : outcome, !failed && o && o.failed > 0 && bad(`${o.failed} failed`)])}`,
+      ago(wf.endedAt),
+    );
+  };
+  const finishedRow = (f, isFresh) => (f.agent ? agentRow(f.agent, isFresh) : endedRow(f.workflow, isFresh));
+  const stalledCount = workflows.filter((wf) => workflowStalled(wf.progress, now)).length;
+  const liveCount = workflows.length + scripts.length + running.length;
+  const finishedCount = finished.length;
+  const olderCount = older.length;
   return html`
     <div class="scrim" onClick=${close}>
-      <div class="sheet" onClick=${(e) => e.stopPropagation()}>
+      <div
+        class="sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="bgwork-title"
+        onClick=${(e) => e.stopPropagation()}
+      >
         <div class="sheetgroup">
-          <div class="sheethead">
-            <span class="grow"><span class="name">${headParts.join(" · ") || "background work"}</span></span>
-          </div>
+          <h2 class="vh" id="bgwork-title" tabindex="-1" ref=${titleRef}>Background work</h2>
           <div class="agents-sheet">
-            ${scripts.map(scriptRow)} ${running.map(row)} ${fresh.map(row)}
-            ${older.length > 0 &&
-            html`<button type="button" class="agent-row older-toggle" onClick=${() => setShowOlder(!showOlder)}>
-              <span class="grow"><span class="sub">${showOlder ? "▾" : "▸"} ${older.length} earlier agent${older.length === 1 ? "" : "s"}</span></span>
+            ${liveCount > 0 &&
+            html`<div class="bgsec run">
+              running · ${liveCount}${stalledCount > 0 && html`<span class="warn"> · ${stalledCount} stalled</span>`}
+            </div>`}
+            ${[...workflows].sort((x, y) => workflowStalled(y.progress, now) - workflowStalled(x.progress, now)).map(workflowRow)}
+            ${scripts.map(scriptRow)} ${running.map((a) => agentRow(a, true))}
+            ${finishedCount > 0 && html`<div class="bgsec">finished · ${finishedCount}</div>`}
+            ${fresh.map((f) => finishedRow(f, true))} ${recent.map((f) => finishedRow(f, false))}
+            ${olderCount > 0 &&
+            html`<button
+              type="button"
+              class="agent-row older-toggle"
+              aria-expanded=${showOlder}
+              onClick=${() => setShowOlder(!showOlder)}
+            >
+              <span class="dot" aria-hidden="true"></span>
+              <span class="grow"><span aria-hidden="true">${showOlder ? "▾" : "▸"} </span>${olderCount} earlier</span>
             </button>`}
-            ${showOlder && older.map(row)}
+            ${showOlder && older.map((f) => finishedRow(f, false))}
           </div>
           <button class="sheetcancel" onClick=${close}>Close</button>
         </div>
@@ -4399,6 +4627,12 @@ function SubagentView() {
     const last = scrollRef.current && scrollRef.current.lastElementChild;
     if (last) last.scrollIntoView({ block: "start" });
   }, [data, o ? o.agentId : null]);
+  // Focus follows the push: the drill-in's title, once per agent opened.
+  const titleRef = useRef(null);
+  useEffect(() => {
+    if (o && titleRef.current) titleRef.current.focus();
+  }, [o ? o.agentId : null]);
+  useDialogKeys(!!o, titleRef, ".subagent-view", closeSubagent);
 
   if (!o) return null;
   const turns = (data && data.turns) || [];
@@ -4410,11 +4644,11 @@ function SubagentView() {
   const prev = idx > 0 ? sibs[idx - 1] : null;
   const next = idx >= 0 && idx < sibs.length - 1 ? sibs[idx + 1] : null;
   return html`
-    <div class="screen subagent-view" ref=${rootRef}>
+    <div class="screen subagent-view" ref=${rootRef} role="dialog" aria-modal="true" aria-labelledby="subagent-title">
       <div class="subagent-head">
         <button class="iconbtn" onClick=${closeSubagent} aria-label="Back to session">‹</button>
         <span class="grow">
-          <span class="name">${o.description || o.agentType}</span>
+          <h2 class="name" id="subagent-title" tabindex="-1" ref=${titleRef}>${o.description || o.agentType}</h2>
           <span class="sub">${o.agentType}</span>
         </span>
       </div>
@@ -4428,15 +4662,17 @@ function SubagentView() {
           ${showBrief && html`<${Turn} turn=${opening} upCount=${0} canCode=${false} />`}
         </div>`}
         ${body.map((turn, i) => html`<${Turn} key=${i} turn=${turn} upCount=${0} canCode=${false} />`)}
-        ${data && turns.length === 0 && html`<div class="sub" style="padding:8px">no conversation</div>`}
+        ${data &&
+        turns.length === 0 &&
+        html`<div class="sub" style="padding:8px">${data.unavailable ? "transcript unavailable" : "no conversation"}</div>`}
       </div>
       ${(prev || next) &&
       html`<div class="subagent-foot">
         ${prev
-          ? html`<button class="sibnav" onClick=${() => openAgent(prev, sibs)}>‹ ${prev.description || prev.agentType}</button>`
+          ? html`<button class="sibnav" onClick=${() => openAgent(prev, sibs)}><span aria-hidden="true">‹ </span>${prev.description || prev.agentType}</button>`
           : html`<span class="sibnav-spacer"></span>`}
         ${next
-          ? html`<button class="sibnav" onClick=${() => openAgent(next, sibs)}>${next.description || next.agentType} ›</button>`
+          ? html`<button class="sibnav" onClick=${() => openAgent(next, sibs)}>${next.description || next.agentType}<span aria-hidden="true"> ›</span></button>`
           : html`<span class="sibnav-spacer"></span>`}
       </div>`}
     </div>
