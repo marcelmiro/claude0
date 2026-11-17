@@ -109,7 +109,7 @@ function freshWin(windowId: string): WinState {
     flash: "",
     flashUntil: 0,
     scrollTop: 0,
-    wheeled: false,
+    scrollHold: null,
     lastRows: [],
     modesWritten: false,
     visible: [],
@@ -445,6 +445,7 @@ export function runSidebarRenderer(): void {
     cancelPendingFocus(target);
     target.focused = true;
     target.clickArmed = true;
+    target.scrollHold = null;
     target.selectedId = sessionId;
     await Bun.$`tmux select-pane -t ${target.stubPane}`.quiet();
     paint(target);
@@ -492,6 +493,7 @@ export function runSidebarRenderer(): void {
       if (!target?.stubPane) return;
       target.focused = true;
       target.clickArmed = true;
+      target.scrollHold = null;
       if (nextId) target.selectedId = nextId;
       else seedSelection(target);
       await Bun.$`tmux select-pane -t ${target.stubPane}`.quiet();
@@ -1240,8 +1242,8 @@ export function runSidebarRenderer(): void {
   }
 
   async function handleEvent(win: WinState, ev: InputEvent): Promise<void> {
-    // a wheel scroll holds until you do anything else; then the list re-anchors
-    if (ev.type !== "wheel") win.wheeled = false;
+    // a wheel or click hold lasts until you do anything else; then the list re-anchors
+    if (ev.type !== "wheel") win.scrollHold = null;
     if (ev.type === "focus") {
       if (ev.in) gainFocusSoon(win);
       else {
@@ -1261,7 +1263,7 @@ export function runSidebarRenderer(): void {
     if (ev.type === "wheel") {
       if (win.mode !== "inbox" && win.focused) win.modeCursor = Math.max(0, win.modeCursor + ev.dir);
       else {
-        win.wheeled = true;
+        win.scrollHold = "wheel";
         win.scrollTop = Math.max(0, win.scrollTop + ev.dir * 2);
       }
       paint(win);
@@ -1294,13 +1296,17 @@ export function runSidebarRenderer(): void {
         win.clickArmed = true;
         if (id && win.visible.some((v) => v.id === id)) win.selectedId = id;
         else seedSelection(win);
+        win.scrollHold = "click";
         paint(win);
         return;
       }
       const s = findSession(id);
       if (!s) return;
       if (win.selectedId === s.id) await enterRow(win, s, true);
-      else win.selectedId = s.id;
+      else {
+        win.selectedId = s.id;
+        win.scrollHold = "click";
+      }
       paint(win);
       return;
     }
@@ -1333,7 +1339,7 @@ export function runSidebarRenderer(): void {
     cancelPendingFocus(win);
     win.focused = true;
     win.clickArmed = true;
-    win.wheeled = false;
+    win.scrollHold = null;
     reloadSessions();
     const from = sessions.find((s) => s.real?.paneId === invokerPane);
     if (from) win.selectedId = win.seededId = from.id;

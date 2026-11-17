@@ -67,8 +67,10 @@ export interface ViewState {
   flash: string;
   flashUntil: number;
   scrollTop: number;
-  /** The wheel moved the list: scrollTop is honored as-is instead of anchoring on the selection / pinned row. */
-  wheeled: boolean;
+  /** The mouse holds the list. "wheel": scrollTop is honored as-is, no anchoring on the selection / pinned row.
+   * "click": the selection stays in view but gets no margin — a margin scroll would move the clicked row out
+   * from under the pointer, and the commit click would land on its neighbour. */
+  scrollHold: "wheel" | "click" | null;
   /** `/` search and `n` new-session take over the pane (modes.ts); inbox = the lifecycle list. */
   mode: Mode;
   query: string;
@@ -344,17 +346,20 @@ export function renderView(
   // focused keeps the selection in view; glance mode shows the top (Needs
   // you), scrolled just far enough to keep this window's own session in view
   const pinnedId = vs.activePaneId ? sessions.find((s) => s.real?.paneId === vs.activePaneId)?.id : undefined;
-  const anchor = vs.wheeled ? undefined : span.get((vs.focused ? vs.selectedId : pinnedId) ?? "");
-  let scrollTop = vs.focused || vs.wheeled ? vs.scrollTop : 0;
+  const anchor = vs.scrollHold === "wheel" ? undefined : span.get((vs.focused ? vs.selectedId : pinnedId) ?? "");
+  let scrollTop = vs.focused || vs.scrollHold === "wheel" ? vs.scrollTop : 0;
   scrollTop = Math.max(0, Math.min(scrollTop, lines.length - windowHeight));
-  if (anchor && vs.focused) {
+  if (anchor && vs.focused && vs.scrollHold !== "click") {
     // a row of margin each side of the selection, so j/k shows the row it
-    // lands on next; the first row scrolls to the very top
+    // lands on next; the first row scrolls to the very top. Skipped when the
+    // window can't fit both margins, or repaints would flip between them
     const i = visible.findIndex((v) => v.id === vs.selectedId);
     const lo = i === 0 ? 0 : span.get(visible[i - 1]!.id)![0];
     const hi = span.get(visible[i + 1]?.id ?? "")?.[1] ?? anchor[1];
-    if (lo < scrollTop) scrollTop = lo;
-    else if (hi >= scrollTop + windowHeight) scrollTop = hi - windowHeight + 1;
+    if (hi - lo < windowHeight) {
+      if (lo < scrollTop) scrollTop = lo;
+      else if (hi >= scrollTop + windowHeight) scrollTop = hi - windowHeight + 1;
+    }
   }
   if (anchor) {
     // the selection itself wins when the window can't fit the margin too

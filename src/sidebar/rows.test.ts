@@ -25,7 +25,7 @@ function vs(over: Partial<ViewState> = {}): ViewState {
     flash: "",
     flashUntil: 0,
     scrollTop: 0,
-    wheeled: false,
+    scrollHold: null,
     mode: "inbox",
     query: "",
     modeCursor: 0,
@@ -303,6 +303,27 @@ describe("renderView", () => {
     expect(view.scrollTop).toBe(0);
   });
 
+  test("focused: a click on the bottom row selects it without scrolling, so the commit click hits it", () => {
+    // 20-line window shows n19..n12; n12 is the last row on screen
+    const dims = { width: 30, height: 20 };
+    const before = renderView(CROWD, vs({ focused: true, selectedId: "n19" }), dims, NOW);
+    const y = before.rowAtLine.lastIndexOf("n12");
+    expect(y).toBeGreaterThan(0);
+    const clicked = renderView(CROWD, vs({ focused: true, selectedId: "n12", scrollHold: "click", scrollTop: before.scrollTop }), dims, NOW);
+    expect(clicked.rowAtLine[clicked.scrollTop + y - before.scrollTop]).toBe("n12");
+  });
+
+  test("focused: a window too short for both margins doesn't flip between them on repaint", () => {
+    const dims = { width: 30, height: 6 };
+    let top = 0;
+    const tops: number[] = [];
+    for (let i = 0; i < 4; i++) {
+      top = renderView(CROWD, vs({ focused: true, selectedId: "n10", scrollTop: top }), dims, NOW).scrollTop;
+      tops.push(top);
+    }
+    expect(new Set(tops.slice(1)).size).toBe(1);
+  });
+
   test("unfocused: the pin gets no margin", () => {
     // Running sorts oldest first: r2 44-45, r1 46-47, r0 48-49. An 11-line window
     // ending on r1 starts at 37; a margin would show r0 and start at 39
@@ -315,14 +336,14 @@ describe("renderView", () => {
   });
 
   test("a wheel scroll holds even when it moves the selection off screen", () => {
-    const focused = renderView(CROWD, vs({ focused: true, selectedId: "n19", wheeled: true, scrollTop: 20 }), { width: 30, height: 11 }, NOW);
+    const focused = renderView(CROWD, vs({ focused: true, selectedId: "n19", scrollHold: "wheel", scrollTop: 20 }), { width: 30, height: 11 }, NOW);
     expect(focused.scrollTop).toBe(20);
-    const glance = renderView(CROWD, vs({ wheeled: true, scrollTop: 20 }), { width: 30, height: 11 }, NOW);
+    const glance = renderView(CROWD, vs({ scrollHold: "wheel", scrollTop: 20 }), { width: 30, height: 11 }, NOW);
     expect(glance.scrollTop).toBe(20);
   });
 
   test("a window starting on a row's branch line blanks it instead of showing it orphaned", () => {
-    const view = renderView(CROWD, vs({ wheeled: true, scrollTop: 3 }), { width: 30, height: 11 }, NOW);
+    const view = renderView(CROWD, vs({ scrollHold: "wheel", scrollTop: 3 }), { width: 30, height: 11 }, NOW);
     expect(view.scrollTop).toBe(3);
     expect(view.rows[0]).toBe("");
     expect(view.rowAtLine[3]).toBeUndefined();

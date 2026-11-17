@@ -95,7 +95,9 @@ before painting (a killed window's tty can be reused by a new pane at once).
 - **Scroll.** The list anchors on a row: the selection when focused, with a row of margin
   either side so j/k shows where it lands next; else the top, scrolled just far enough to
   keep the pinned session (this window's) in view, no margin. A wheel scroll
-  holds wherever it lands until the next key, click or focus change (`wheeled`). An
+  holds wherever it lands until the next key, click or focus change; a click keeps the
+  clicked row where it is, with no margin, so the commit click hits it (`scrollHold`).
+  The margin is dropped when the window can't fit the rows either side. An
   overflowing list never shows half a two-line row; a `↓` line counts the sessions hidden
   below, by section — the bottom row unfocused, right above the hints focused (`renderView`).
 - **Unfocused**, the sidebar is a glance surface (no chrome, top-anchored). **Focus**
@@ -109,7 +111,8 @@ before painting (a killed window's tty can be reused by a new pane at once).
   (`sidebarToggle`, default `M-S`) is global: hide kills every sidebar pane and stands
   down self-heal until shown; the state survives server restarts.
 - **Two marks.** The *pin* (`▎`, white — location, deliberately not a status color) on the
-  session in this window's active pane; the *selector* (row background) only while focused.
+  session in this window's active pane (with the sidebar itself active and no remembered
+  pane — a daemon restart — a window's only work pane); the *selector* (row background) only while focused.
 - **Clicks and Enter are select-then-commit.** A click on an unfocused sidebar focuses and
   highlights the row hit (no row → the window's active session); a focused click on another
   row moves the highlight; a click on the highlighted row navigates. Enter (or Space — the
