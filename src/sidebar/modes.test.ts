@@ -23,6 +23,7 @@ function vs(over: Partial<ViewState> = {}): ViewState {
     flash: "",
     flashUntil: 0,
     scrollTop: 0,
+    wheeled: false,
     mode: "search",
     query: "",
     modeCursor: 0,

@@ -109,6 +109,7 @@ function freshWin(windowId: string): WinState {
     flash: "",
     flashUntil: 0,
     scrollTop: 0,
+    wheeled: false,
     lastRows: [],
     modesWritten: false,
     visible: [],
@@ -1239,6 +1240,8 @@ export function runSidebarRenderer(): void {
   }
 
   async function handleEvent(win: WinState, ev: InputEvent): Promise<void> {
+    // a wheel scroll holds until you do anything else; then the list re-anchors
+    if (ev.type !== "wheel") win.wheeled = false;
     if (ev.type === "focus") {
       if (ev.in) gainFocusSoon(win);
       else {
@@ -1257,7 +1260,10 @@ export function runSidebarRenderer(): void {
     }
     if (ev.type === "wheel") {
       if (win.mode !== "inbox" && win.focused) win.modeCursor = Math.max(0, win.modeCursor + ev.dir);
-      else win.scrollTop = Math.max(0, win.scrollTop + ev.dir * 2);
+      else {
+        win.wheeled = true;
+        win.scrollTop = Math.max(0, win.scrollTop + ev.dir * 2);
+      }
       paint(win);
       return;
     }
@@ -1327,6 +1333,7 @@ export function runSidebarRenderer(): void {
     cancelPendingFocus(win);
     win.focused = true;
     win.clickArmed = true;
+    win.wheeled = false;
     reloadSessions();
     const from = sessions.find((s) => s.real?.paneId === invokerPane);
     if (from) win.selectedId = win.seededId = from.id;
@@ -1584,8 +1591,11 @@ export function runSidebarRenderer(): void {
         win.modesWritten = false; // repaint full frame at the new size
         win.lastRows = [];
       }
-      // pin: this window's active WORK pane (survives a visit to the sidebar)
-      const activeWork = winPanes.find((p) => p.paneActive && !p.startCmd.includes(STUB_MARK));
+      // pin: this window's active WORK pane (survives a visit to the sidebar);
+      // with the sidebar active and nothing remembered (a daemon restart), a
+      // window's only work pane is the one
+      const work = winPanes.filter((p) => !p.startCmd.includes(STUB_MARK));
+      const activeWork = work.find((p) => p.paneActive) ?? (!win.activePaneId && work.length === 1 ? work[0] : undefined);
       if (activeWork) win.activePaneId = activeWork.paneId;
       // focus fallback (focus escapes are the fast path): sidebar pane active
       // in the active window ⇔ focused

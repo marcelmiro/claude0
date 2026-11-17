@@ -92,7 +92,13 @@ before painting (a killed window's tty can be reused by a new pane at once).
 
 ### Interaction grammar
 
-- **Unfocused**, the sidebar is a glance surface (no chrome, pinned to top). **Focus**
+- **Scroll.** The list anchors on a row: the selection when focused, with a row of margin
+  either side so j/k shows where it lands next; else the top, scrolled just far enough to
+  keep the pinned session (this window's) in view, no margin. A wheel scroll
+  holds wherever it lands until the next key, click or focus change (`wheeled`). An
+  overflowing list never shows half a two-line row; a `↓` line counts the sessions hidden
+  below, by section — the bottom row unfocused, right above the hints focused (`renderView`).
+- **Unfocused**, the sidebar is a glance surface (no chrome, top-anchored). **Focus**
   (`sidebarFocus`, default `M-s`) is instant: the toggle signals the renderer directly, and
   the selector lands on the session of the pane you came from — and if that row leaves
   Needs You before you press a key or click (you just submitted, so it turns Running), the

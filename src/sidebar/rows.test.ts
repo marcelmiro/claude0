@@ -25,6 +25,7 @@ function vs(over: Partial<ViewState> = {}): ViewState {
     flash: "",
     flashUntil: 0,
     scrollTop: 0,
+    wheeled: false,
     mode: "inbox",
     query: "",
     modeCursor: 0,
@@ -237,6 +238,105 @@ describe("renderView", () => {
   test("pin bar marks the window's active pane session", () => {
     const view = renderView(SAMPLE, vs({ activePaneId: "%1" }), DIMS, NOW);
     expect(view.rows.join("")).toContain("▎");
+  });
+
+  // 20 two-line Needs You rows (lines 2..41) + 3 running (lines 44..49)
+  const CROWD = [
+    ...Array.from({ length: 20 }, (_, i) => sess({ id: `n${i}`, since: NOW - (i + 1) * M })),
+    ...Array.from({ length: 3 }, (_, i) =>
+      sess({ id: `r${i}`, running: { finishAt: Number.MAX_SAFE_INTEGER }, since: NOW - i * M, real: { paneId: `%${i}`, target: `main:${i}`, status: "running" } }),
+    ),
+  ];
+  const plain = (row: string) => row.replace(/\x1b\[[0-9;]*m/g, "");
+
+  test("overflow: the window never ends mid-row, and the bottom row counts what's hidden", () => {
+    // 11 content lines; line 10 would be a row's name without its branch
+    const view = renderView(CROWD, vs(), { width: 30, height: 12 }, NOW);
+    expect(view.rows.length).toBe(12);
+    expect(view.rows[10]).toBe("");
+    expect(view.rowAtLine[10]).toBeUndefined();
+    expect(plain(view.rows[11]!)).toBe(" ↓ 16 needs you · 3 running");
+  });
+
+  test("overflow, focused: the indicator sits right above the hints", () => {
+    const view = renderView(CROWD, vs({ focused: true, selectedId: "n19" }), { width: 30, height: 12 }, NOW);
+    expect(plain(view.rows[10]!)).toStartWith(" ↓ ");
+    expect(view.rows[11]).toContain("s b e f");
+  });
+
+  test("overflow, unfocused: a live flash takes the bottom row over the indicator", () => {
+    const view = renderView(CROWD, vs({ flash: "unparked", flashUntil: NOW + 1000 }), { width: 30, height: 12 }, NOW);
+    expect(view.rows[11]).toContain("unparked");
+    expect(view.rows.join("")).not.toContain("↓");
+  });
+
+  test("an indicator too wide for the pane drops whole trailing sections", () => {
+    const view = renderView(CROWD, vs(), { width: 22, height: 12 }, NOW);
+    expect(plain(view.rows[11]!)).toBe(" ↓ 16 needs you");
+  });
+
+  test("no overflow, no indicator line", () => {
+    const view = renderView(SAMPLE, vs(), DIMS, NOW);
+    expect(view.rows.join("")).not.toContain("↓");
+  });
+
+  test("glance mode scrolls just far enough to show this window's session, both lines", () => {
+    const view = renderView(CROWD, vs({ activePaneId: "%2" }), { width: 30, height: 11 }, NOW);
+    expect(view.scrollTop).toBeGreaterThan(0);
+    expect(view.rows.filter((r) => r.includes("▎")).length).toBe(2);
+  });
+
+  // CROWD's Needs You sorts oldest first: n19 at lines 2-3, n18 4-5, … n15 10-11
+  test("focused: moving down keeps the next row in view below the selection", () => {
+    // focused + overflow = 10-line window (0..9); n16 at 8-9 fits, n15 at 10-11 must too
+    const view = renderView(CROWD, vs({ focused: true, selectedId: "n16" }), { width: 30, height: 12 }, NOW);
+    expect(view.scrollTop).toBe(2);
+  });
+
+  test("focused: moving up keeps the previous row in view above the selection", () => {
+    const view = renderView(CROWD, vs({ focused: true, selectedId: "n15", scrollTop: 10 }), { width: 30, height: 12 }, NOW);
+    expect(view.scrollTop).toBe(8);
+  });
+
+  test("focused: the first row scrolls to the very top, header included", () => {
+    const view = renderView(CROWD, vs({ focused: true, selectedId: "n19", scrollTop: 10 }), { width: 30, height: 12 }, NOW);
+    expect(view.scrollTop).toBe(0);
+  });
+
+  test("unfocused: the pin gets no margin", () => {
+    // Running sorts oldest first: r2 44-45, r1 46-47, r0 48-49. An 11-line window
+    // ending on r1 starts at 37; a margin would show r0 and start at 39
+    const view = renderView(CROWD, vs({ activePaneId: "%1" }), { width: 30, height: 12 }, NOW);
+    expect(view.scrollTop).toBe(37);
+  });
+
+  test("glance mode without a pinned session on screen stays at the top", () => {
+    expect(renderView(CROWD, vs(), { width: 30, height: 11 }, NOW).scrollTop).toBe(0);
+  });
+
+  test("a wheel scroll holds even when it moves the selection off screen", () => {
+    const focused = renderView(CROWD, vs({ focused: true, selectedId: "n19", wheeled: true, scrollTop: 20 }), { width: 30, height: 11 }, NOW);
+    expect(focused.scrollTop).toBe(20);
+    const glance = renderView(CROWD, vs({ wheeled: true, scrollTop: 20 }), { width: 30, height: 11 }, NOW);
+    expect(glance.scrollTop).toBe(20);
+  });
+
+  test("a window starting on a row's branch line blanks it instead of showing it orphaned", () => {
+    const view = renderView(CROWD, vs({ wheeled: true, scrollTop: 3 }), { width: 30, height: 11 }, NOW);
+    expect(view.scrollTop).toBe(3);
+    expect(view.rows[0]).toBe("");
+    expect(view.rowAtLine[3]).toBeUndefined();
+  });
+
+  test("focused: one-line rows get a one-line margin, even when the top lands on a branch line", () => {
+    // parked p0..p5 at lines 52..57 (after running's 44-49, blank, header). Selecting
+    // p2 (54) with margin p3 (55) in a 9-line window (detail line + hints) starts at
+    // 47, r1's branch line: it's blanked, not scrolled past, so p4 stays hidden
+    const parked = Array.from({ length: 6 }, (_, i) => sess({ id: `p${i}`, disposition: { kind: "snoozed", until: NOW + (i + 1) * H } }));
+    const view = renderView([...CROWD, ...parked], vs({ focused: true, selectedId: "p2" }), { width: 30, height: 12 }, NOW);
+    expect(view.scrollTop).toBe(47);
+    expect(view.rows[0]).toBe("");
+    expect(plain(view.rows[9]!)).toBe(" ↓ 2 parked");
   });
 });
 
