@@ -60,7 +60,9 @@ import { isValidSessionId, resolveTranscriptPath, resolveTranscriptPaths } from 
 import { homedir } from "os";
 import { discoverRepos, getBaseRepoPath } from "../core/git";
 import { recentRepos } from "../core/recent-repos";
-import { listSlashCommands } from "../core/skills";
+import { listSlashCommands, type SlashCommand } from "../core/skills";
+import { buildContext, cleanDictation, learnFromOutcome, logDictationOutcome, logDictationTake, openaiKey, readLearned, rememberDictation, takeDictation, transcribe, type DictationContext } from "../core/dictation";
+import { readPersonalVocab, refreshVocabIfStale } from "../core/dictation-vocab";
 import { repoRootForSession, safeRepoPath, fileDiff, rangeDiff, branchChanges } from "../core/repo-files";
 import { branchPullRequest, type PullRequestInfo } from "../core/pull-request";
 import { recoverWorktreeTranscript } from "../core/recover";
@@ -160,6 +162,16 @@ let tailnetTriedAt = 0;
 let tailnetRead: Promise<void> | null = null;
 let tailnetProblem = "";
 const TAILSCALE = Bun.which("tailscale") ?? "tailscale";
+
+/** The session's terms, skills, recent prose and the personal vocabulary, for one dictation. */
+async function dictationContextFor(sessionId: string): Promise<DictationContext> {
+  const [skills, tx] = await Promise.all([sessionSkills(sessionId).catch(() => []), getTranscript(sessionId).catch(() => null)]);
+  // The last discovery, not sessionsPayload(): a cache over 10s old makes that wait on a
+  // full recompute, in front of the transcription the user is waiting for.
+  const row = (lastDiscovered ?? []).find((s) => s.id === sessionId);
+  const skillNames = (Array.isArray(skills) ? (skills as SlashCommand[]) : []).filter((k) => k.source !== "builtin").map((k) => k.name);
+  return buildContext({ repo: row?.repo, branch: row?.branch, skills: skillNames, turns: tx?.turns ?? [], personal: readPersonalVocab()?.terms ?? [], learned: readLearned() });
+}
 
 /**
  * Re-read the node's MagicDNS name and owner login. Bounded by probe's deadline, and
@@ -1507,6 +1519,68 @@ async function route(req: Request): Promise<Response> {
   const skills = path.match(/^\/sessions\/([^/]+)\/skills$/);
   if (method === "GET" && skills) {
     return json(await sessionSkills(decodeURIComponent(skills[1]!)));
+  }
+
+  // --- Dictation (ADR 37, docs/portkey.md § Dictation): transcribe returns the raw text
+  // fast; the client then asks for the cleanup, which reuses the context gathered here. ---
+  if (method === "GET" && path === "/dictation") return json({ available: !!openaiKey() });
+  // TEMPORARY: on-device step tracing while the iOS recording flow is being debugged.
+  if (method === "POST" && path === "/dictation/trace") {
+    console.error(`dictation-trace: ${(await req.text().catch(() => "")).slice(0, 1000)}`);
+    return json({ ok: true });
+  }
+
+  const dictate = path.match(/^\/sessions\/([^/]+)\/dictate$/);
+  if (method === "POST" && dictate) {
+    const id = decodeURIComponent(dictate[1]!);
+    if (!isValidSessionId(id)) return json({ ok: false, reason: "bad-id" }, 400);
+    const key = openaiKey();
+    if (!key) return json({ ok: false, reason: "dictation-unavailable" }, 409);
+    const form = await req.formData().catch(() => null);
+    const audio = form?.get("audio");
+    if (!(audio instanceof File) || audio.size < 1024) return json({ ok: false, reason: "no-audio" }, 400);
+    refreshVocabIfStale();
+    const t0 = performance.now();
+    const ctx = await dictationContextFor(id);
+    const tCtx = performance.now();
+    const r = await transcribe(audio, ctx, key);
+    console.error(`dictation: ${audio.size}B ctx=${Math.round(tCtx - t0)}ms stt=${Math.round(performance.now() - tCtx)}ms ${"error" in r ? `error ${r.error}` : `${r.text.length} chars`}`);
+    if ("error" in r) {
+      console.error(`dictation: transcribe failed: ${r.error}`);
+      if (r.error === "unsupported-audio") return json({ ok: false, reason: "no-audio" }, 400); // final: the client retries only 5xx
+      return json({ ok: false, reason: "transcribe-failed" }, 502);
+    }
+    if (!r.text) return json({ ok: true, id: null, text: "" });
+    const mic = String(form?.get("mic") ?? "").slice(0, 120);
+    return json({ ok: true, id: rememberDictation({ sessionId: id, raw: r.text, ctx, mic }), text: r.text });
+  }
+
+  const dictClean = path.match(/^\/dictation\/([^/]+)\/clean$/);
+  if (method === "POST" && dictClean) {
+    const takeId = decodeURIComponent(dictClean[1]!);
+    const p = takeDictation(takeId);
+    if (!p) return json({ ok: false, reason: "not-found" }, 404);
+    const t0 = performance.now();
+    const r = await cleanDictation(p.raw, p.ctx);
+    const ms = Math.round(performance.now() - t0);
+    logDictationTake({ id: takeId, sessionId: p.sessionId, mic: p.mic, raw: p.raw, ms, ...("error" in r ? { error: r.error } : { cleaned: r.cleaned, guarded: r.guarded }) });
+    if ("error" in r) {
+      console.error(`dictation: cleanup failed: ${r.error}`);
+      return json({ ok: false, reason: "clean-failed" }, 502);
+    }
+    if (r.guarded) console.error("dictation: cleanup dropped words; kept the raw transcript");
+    return json({ ok: true, text: r.final, guarded: r.guarded });
+  }
+
+  if (method === "POST" && path === "/dictation/outcome") {
+    const b = (await req.json().catch(() => ({}))) as { sessionId?: unknown; sent?: unknown; dictations?: unknown };
+    const dictations = Array.isArray(b.dictations)
+      ? b.dictations.filter((d): d is { id?: unknown; raw: string; final: string } => typeof d?.raw === "string" && typeof d?.final === "string")
+      : [];
+    if (typeof b.sessionId !== "string" || typeof b.sent !== "string" || !dictations.length) return json({ ok: false, reason: "bad-request" }, 400);
+    logDictationOutcome({ sessionId: b.sessionId, dictations: dictations.map(({ id, raw, final }) => ({ id: typeof id === "string" ? id : null, raw, final })), sent: b.sent });
+    void learnFromOutcome(dictations, b.sent); // background: a claude -p check per candidate
+    return json({ ok: true });
   }
 
   // --- Repo-scoped read-only diff access (Portkey Layer 1) — containment-guarded to the

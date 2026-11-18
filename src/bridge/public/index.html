@@ -847,6 +847,43 @@
         font-size: 22px;
         line-height: 1;
       }
+      /* Dictation mic: tap starts, tap stops. warm = acquiring the mic; rec = recording, speak;
+         busy = transcribing. */
+      .composer .mic {
+        flex: none;
+        width: 40px;
+        height: 40px;
+        padding: 0;
+        border: 1px solid var(--dim);
+        border-radius: 50%;
+        background: var(--surface);
+        color: var(--muted);
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+        line-height: 1;
+        touch-action: manipulation;
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
+      }
+      .composer .mic svg { width: 18px; height: 18px; vertical-align: middle; }
+      /* acquiring the mic: a grey spinner, so it never reads as a second (peach) Send */
+      .composer .mic.warm .spin { border-color: var(--muted); border-right-color: transparent; }
+      .composer .mic.rec { background: var(--red); border-color: var(--red); color: var(--bg); }
+      .composer .mic.busy { border-color: var(--peach); }
+      .composer .mic .spin {
+        display: inline-block;
+        width: 16px;
+        height: 16px;
+        border: 2px solid var(--peach);
+        border-right-color: transparent;
+        border-radius: 50%;
+        vertical-align: middle;
+        animation: mic-spin 0.8s linear infinite;
+      }
+      @keyframes mic-spin { to { transform: rotate(360deg); } }
+      /* cleanup in flight: the mic is usable again, the ring says the text may still change */
+      .composer .mic.cleaning { border-color: var(--peach); color: var(--peach); }
       /* staged-attachment thumbnails above the textarea */
       .thumbs { display: flex; flex-wrap: wrap; gap: 8px; padding: 2px 4px 8px; }
       .macdraft { margin: 0 4px 8px; padding: 6px 10px; border-left: 2px solid var(--dim); font-size: 13px; line-height: 1.35; }

@@ -127,6 +127,7 @@ const tick = signal(Date.now());
 // The daemon's inbox snapshot is older than 10s (or absent) — sections render from the
 // last known state with a banner. Server-computed.
 const inboxStale = signal(false);
+const dictationAvailable = signal(false); // host has an OpenAI key → the composer shows a mic
 // Recently-done stays collapsed by default (a day of archives is screen bloat, and the
 // section is an archive entry point, not a queue) — tap its header to expand. Not
 // persisted: every launch starts collapsed.
@@ -916,6 +917,9 @@ const REASON_TEXT = {
   "stale-dialog": "the dialog changed — try again",
   "no-dialog": "the dialog is already gone",
   "stash-occupied": "a stashed draft is waiting at the Mac (Ctrl+S) — resolve it there first",
+  "dictation-unavailable": "dictation isn't set up on the host",
+  "transcribe-failed": "transcription failed — try again",
+  "no-audio": "the recording came out empty",
 };
 const reasonText = (data, status) => REASON_TEXT[data.reason] || data.reason || status;
 
@@ -3204,6 +3208,107 @@ function BangRunningTag({ since }) {
   return html`<div class="queuedtag"><span class="livedot">⦿</span> running · ${fmtElapsed(Math.max(0, Math.floor((Date.now() - since) / 1000)))}</div>`;
 }
 
+// --- Dictation (ADR 37, docs/portkey.md § Dictation) ---
+// One mic stream for the page's life: iOS asks permission once per app launch and a
+// stopped stream re-prompts sooner. The button spins (grey) only while that stream is being
+// (re)acquired — nothing records then — and red from the moment the recorder starts.
+const mic = { stream: null };
+const DICTATION_ATTEMPTS = 3;
+// TEMPORARY on-device tracing: each step lands in the bridge log (`dictation-trace:`).
+let dtraceT0 = 0;
+function dtrace(step, extra = {}) {
+  const body = JSON.stringify({ step, ms: Math.round(performance.now() - dtraceT0), ...extra });
+  fetch("/dictation/trace", { method: "POST", headers: { "content-type": "application/json" }, body, keepalive: true }).catch(() => {});
+}
+// Don't gate recording on an AnalyserNode "is audio flowing" check: in the iOS PWA it read
+// pure silence for 8s while MediaRecorder captured every word (counted aloud: 1–18 all
+// transcribed, detector fired on its timeout at "fifteen").
+// A Bluetooth earbud mic records narrowband call audio that transcribes badly, so the
+// built-in mic is used whenever the device lists one. Labels only exist once mic permission
+// is granted, so the first take may acquire the default and then switch.
+const MIC_AUDIO = { echoCancellation: true, noiseSuppression: true };
+const BUILT_IN_MIC = /iphone|ipad|built-in|internal/i;
+async function ensureMic() {
+  let track = mic.stream && mic.stream.getAudioTracks()[0];
+  if (!track || track.readyState !== "live") {
+    mic.stream = await navigator.mediaDevices.getUserMedia({ audio: MIC_AUDIO });
+    track = mic.stream.getAudioTracks()[0];
+  }
+  const inputs = (await navigator.mediaDevices.enumerateDevices().catch(() => [])).filter((d) => d.kind === "audioinput");
+  const builtIn = inputs.find((d) => BUILT_IN_MIC.test(d.label));
+  dtrace("mic-devices", { inputs: inputs.map((d) => d.label), using: track.label, builtIn: builtIn ? builtIn.label : null });
+  if (!builtIn || track.getSettings().deviceId === builtIn.deviceId) return;
+  try {
+    const switched = await navigator.mediaDevices.getUserMedia({ audio: { ...MIC_AUDIO, deviceId: { exact: builtIn.deviceId } } });
+    mic.stream.getTracks().forEach((t) => t.stop());
+    mic.stream = switched;
+    dtrace("mic-switched", { using: switched.getAudioTracks()[0].label });
+  } catch (err) {
+    dtrace("mic-switch-failed", { error: String(err && err.message) }); // keep the working stream
+  }
+}
+function startRecorder() {
+  const mimeType = ["audio/mp4", "audio/webm;codecs=opus"].find((m) => MediaRecorder.isTypeSupported(m)) || "";
+  const rec = new MediaRecorder(mic.stream, mimeType ? { mimeType } : undefined);
+  const chunks = [];
+  rec.ondataavailable = (e) => {
+    if (e.data.size) chunks.push(e.data);
+  };
+  rec.start(1000); // timesliced: an un-sliced Safari WebM recording once kept only its 5-byte tail
+  return {
+    mimeType: rec.mimeType || mimeType,
+    // Never wait on `onstop` alone: if Safari doesn't fire it, the chunks already
+    // delivered (one per second) are the recording.
+    stop: () =>
+      new Promise((resolve) => {
+        let done = false;
+        const finish = (why) => {
+          if (done) return;
+          done = true;
+          resolve({ blob: new Blob(chunks, { type: rec.mimeType || mimeType }), why, chunks: chunks.length, state: rec.state });
+        };
+        rec.onstop = () => finish("onstop");
+        setTimeout(() => finish("timeout"), 1500);
+        try {
+          rec.stop();
+        } catch (err) {
+          finish(`threw:${err && err.message}`);
+        }
+      }),
+  };
+}
+// The word swaps cleanup made ("myatron → Maestro"), ignoring punctuation/case-only edits
+// and restructuring — dropped fillers and spoken list markers ("Number one is → 1.") would
+// otherwise flash after nearly every dictation.
+function wordChanges(a, b) {
+  const x = a.split(/\s+/).filter(Boolean);
+  const y = b.split(/\s+/).filter(Boolean);
+  const L = Array.from({ length: x.length + 1 }, () => new Array(y.length + 1).fill(0));
+  for (let i = x.length - 1; i >= 0; i--)
+    for (let j = y.length - 1; j >= 0; j--) L[i][j] = x[i] === y[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const norm = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const out = [];
+  let del = [];
+  let ins = [];
+  const flush = () => {
+    if (del.length && del.length <= 4 && /\p{L}/u.test(ins.join(" ")) && norm(del.join(" ")) !== norm(ins.join(" "))) out.push(`${del.join(" ")} → ${ins.join(" ")}`);
+    del = [];
+    ins = [];
+  };
+  let i = 0;
+  let j = 0;
+  while (i < x.length || j < y.length) {
+    if (i < x.length && j < y.length && x[i] === y[j]) {
+      flush();
+      i++;
+      j++;
+    } else if (j < y.length && (i === x.length || L[i][j + 1] >= L[i + 1][j])) ins.push(y[j++]);
+    else del.push(x[i++]);
+  }
+  flush();
+  return out;
+}
+
 // --- Composer drafts ---------------------------------------------------------
 // Per-session draft persisted to localStorage, so leaving the detail view (the
 // composer unmounts), an app reload, or an iOS PWA eviction never loses typed-but-
@@ -3260,6 +3365,13 @@ function Composer({ disabled, status }) {
   const [, forceRender] = useState(0);
   const rerender = () => forceRender((n) => (n + 1) & 0xffff);
   const sid = selectedId.value; // read in render so the component re-subscribes on session switch
+  // Dictation. The button face: "idle" | "warm" (acquiring the mic) | "rec" | "busy".
+  // `dict` holds the take's state machine in a ref so async steps never read stale state:
+  // phase "idle" → "arming" (acquiring the mic) → "recording" → "busy" (transcribing).
+  const [dictFace, setDictFace] = useState("idle");
+  const [cleaning, setCleaning] = useState(0); // cleanups in flight — the mic shows a peach ring
+  const dict = useRef({ phase: "idle", sid: null, recorder: null, liveAt: 0, timer: null });
+  const dictations = useRef([]); // { raw, final } inserted into this draft — logged on send
   function grow() {
     const el = ref.current;
     if (!el) return;
@@ -3466,6 +3578,160 @@ function Composer({ disabled, status }) {
     attachments.value = attachments.value.filter((a) => a.url !== url);
     URL.revokeObjectURL(url);
   }
+  // Mic tap: starts recording, the next tap stops it, transcribes and inserts at the caret.
+  // A click (not pointer events) so a hardware keyboard's Space/Enter and VoiceOver work too.
+  async function micTap() {
+    const d = dict.current;
+    if (d.phase === "idle") dtraceT0 = performance.now();
+    dtrace("tap", { phase: d.phase });
+    if (d.phase === "recording") return finishDictation();
+    if (d.phase !== "idle") return; // still acquiring the mic, or transcribing
+    d.phase = "arming";
+    d.sid = selectedId.value; // the take belongs to the session it was started in
+    const warm = setTimeout(() => setDictFace("warm"), 150); // only if acquiring the mic takes a moment
+    try {
+      await ensureMic();
+    } catch (err) {
+      d.phase = "idle";
+      setDictFace("idle");
+      dtrace("mic-error", { error: String(err && err.message) });
+      return flashError(`✗ mic unavailable: ${err.message || err}`);
+    } finally {
+      clearTimeout(warm);
+    }
+    if (d.phase !== "arming") return; // the thread was left while the mic was starting
+    const track = mic.stream.getAudioTracks()[0];
+    // A call, Siri or the OS taking the mic ends the track: transcribe what was captured.
+    track.onended = () => dict.current.phase === "recording" && finishDictation();
+    dtrace("mic", { track: track && track.readyState, muted: track && track.muted });
+    d.recorder = startRecorder();
+    dtrace("rec-start", { mime: d.recorder.mimeType });
+    d.phase = "recording";
+    d.liveAt = performance.now();
+    setDictFace("rec");
+    d.timer = setInterval(rerender, 250); // the face shows elapsed seconds
+  }
+  function stopDictationTimer() {
+    clearInterval(dict.current.timer);
+    dict.current.timer = null;
+  }
+  async function finishDictation() {
+    const d = dict.current;
+    d.phase = "busy";
+    stopDictationTimer();
+    setDictFace("busy");
+    const spokeMs = d.liveAt ? performance.now() - d.liveAt : 0;
+    dtrace("stop", { spokeMs: Math.round(spokeMs) });
+    const { blob, why, chunks, state } = await d.recorder.stop();
+    dtrace("blob", { bytes: blob.size, type: blob.type, why, chunks, state });
+    d.recorder = null;
+    const forSid = d.sid;
+    const done = () => {
+      d.phase = "idle";
+      setDictFace("idle");
+    };
+    if (spokeMs < 500) {
+      done();
+      return flashNotice("Too short — nothing recorded");
+    }
+    if (blob.size < 1024) {
+      done();
+      return flashError("✗ the recording came out empty");
+    }
+    const fd = new FormData();
+    fd.append("audio", blob, "dictation");
+    fd.append("mic", (mic.stream && mic.stream.getAudioTracks()[0].label) || "");
+    let res;
+    const sentAt = performance.now();
+    // A dropped connection or a failed upstream call is retried with the same recording, so
+    // a network blip never means saying it all again. A 4xx (no audio, bad id) is final.
+    for (let attempt = 1; ; attempt++) {
+      let status = 0;
+      try {
+        const r = await fetch(`/sessions/${encodeURIComponent(forSid)}/dictate`, { method: "POST", body: fd, signal: AbortSignal.timeout(60_000) });
+        status = r.status;
+        res = await r.json().catch(() => ({ ok: false, reason: String(r.status) }));
+      } catch (err) {
+        res = { ok: false, reason: err.name === "TimeoutError" ? "transcribe-failed" : "bridge unreachable" };
+      }
+      if (res.ok || (status >= 400 && status < 500) || attempt === DICTATION_ATTEMPTS) break;
+      dtrace("retry", { attempt, status, reason: res.reason });
+      await new Promise((r) => setTimeout(r, attempt * 1500));
+    }
+    dtrace("dictate", { ok: res.ok, reason: res.reason, chars: (res.text || "").length, ms: Math.round(performance.now() - sentAt) });
+    done(); // the mic is free again while cleanup runs
+    if (!res.ok) return flashError(`✗ ${reasonText(res, "")}`);
+    if (!res.text) return flashNotice("Heard nothing — check the mic and try again");
+    // Typing "!" mid-take turned the box into a bash command; prose there would run as one.
+    if (bashRef.current && selectedId.value === forSid) return flashError("✗ dictation not inserted: the composer is in bash mode");
+    const entry = { id: res.id, raw: res.text, final: res.text };
+    if (!insertDictation(forSid, res.text)) return flashNotice("Dictation saved to the draft of the session you dictated in");
+    dictations.current.push(entry);
+    if (res.id) cleanDictation(forSid, res.id, entry);
+  }
+  // Insert at the caret (or replace the selection), spaced from its neighbours. If the user
+  // switched sessions mid-transcription, append to the dictating session's saved draft.
+  function insertDictation(forSid, text) {
+    const el = ref.current;
+    if (selectedId.value !== forSid || !el) {
+      const prev = (readDrafts()[forSid] || {}).text || "";
+      saveDraft(forSid, prev ? `${prev.replace(/\s+$/, "")} ${text}` : text);
+      return false;
+    }
+    const start = el.selectionStart ?? el.value.length;
+    const end = el.selectionEnd ?? start;
+    const before = el.value.slice(0, start);
+    const after = el.value.slice(end);
+    const lead = before && !/\s$/.test(before) ? " " : "";
+    const trail = after && !/^\s/.test(after) ? " " : "";
+    el.value = before + lead + text + trail + after;
+    const caret = start + lead.length + text.length;
+    el.setSelectionRange(caret, caret);
+    grow();
+    syncHasText();
+    return true;
+  }
+  // Swap the raw transcript for the cleaned text — only while it's still in the box exactly
+  // as inserted, so an edit made during the ~5s cleanup always wins.
+  async function cleanDictation(forSid, id, entry) {
+    let res;
+    setCleaning((n) => n + 1);
+    try {
+      const r = await fetch(`/dictation/${encodeURIComponent(id)}/clean`, { method: "POST", signal: AbortSignal.timeout(45_000) });
+      res = await r.json();
+    } catch {
+      return; // the raw transcript stays — cleanup is an improvement, not a requirement
+    } finally {
+      setCleaning((n) => n - 1);
+    }
+    dtrace("clean", { ok: res && res.ok, guarded: res && res.guarded, changed: !!res && res.text !== entry.raw });
+    if (!res || !res.ok || !res.text || res.text === entry.raw) return;
+    const el = ref.current;
+    if (selectedId.value !== forSid || !el) return;
+    const at = el.value.indexOf(entry.raw);
+    if (at < 0 || el.value.indexOf(entry.raw, at + 1) >= 0) return;
+    // Keep the caret where the user is: past the dictation it shifts by the length change,
+    // inside it lands at the cleaned text's end, before it stays put.
+    const rawEnd = at + entry.raw.length;
+    const shift = (p) => (p >= rawEnd ? p + res.text.length - entry.raw.length : p > at ? at + res.text.length : p);
+    const [selStart, selEnd] = [el.selectionStart, el.selectionEnd];
+    el.value = el.value.slice(0, at) + res.text + el.value.slice(rawEnd);
+    if (document.activeElement === el) el.setSelectionRange(shift(selStart), shift(selEnd));
+    entry.final = res.text;
+    grow();
+    syncHasText();
+    const changes = wordChanges(entry.raw, res.text);
+    if (changes.length) flashNotice(`Fixed: ${changes.slice(0, 3).join(", ")}${changes.length > 3 ? ` (+${changes.length - 3})` : ""}`);
+  }
+  // Fire-and-forget: what dictation inserted vs what was finally sent (tuning signal).
+  function logDictations(forSid, sent, list) {
+    if (!list.length) return;
+    fetch("/dictation/outcome", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sessionId: forSid, dictations: list, sent }),
+    }).catch(() => {});
+  }
   async function send() {
     const el = ref.current;
     if (!el) return;
@@ -3477,6 +3743,8 @@ function Composer({ disabled, status }) {
     const items = attachments.value;
     if ((bashRef.current ? !el.value.trim() : !text.trim()) && items.length === 0) return;
     const sid = selectedId.value;
+    const dictated = dictations.current;
+    dictations.current = [];
     el.value = "";
     grow();
     syncHasText();
@@ -3492,6 +3760,7 @@ function Composer({ disabled, status }) {
       lastSentText.set(sid, text); // restore-on-interrupt candidate
       const ok = await action(`/sessions/${encodeURIComponent(sid)}/message`, { text }, { pushed: true });
       if (ok && text.trim().startsWith("!")) deliveredBangs.value = [...deliveredBangs.value, { text, at: Date.now() }];
+      if (ok) logDictations(sid, text, dictated);
       if (!ok) {
         clearStatusOverlay(sid); // never reached the pane — no turn is starting
         const idx = pendingSends.value.lastIndexOf(text);
@@ -3514,6 +3783,7 @@ function Composer({ disabled, status }) {
     pendingImageSends.value = [...pendingImageSends.value, entry];
     attachments.value = [];
     const ok = await actionForm(`/sessions/${encodeURIComponent(sid)}/message`, fd);
+    if (ok) logDictations(sid, text, dictated);
     if (!ok) {
       clearStatusOverlay(sid); // never reached the pane — no turn is starting
       // Restore so nothing is silently lost; keep the URLs alive for the retry.
@@ -3654,7 +3924,21 @@ function Composer({ disabled, status }) {
     // setComposerText re-enters bash mode for any `!`-leading text.
     const d = readDrafts()[sid];
     setComposerText(d ? d.text : "");
+    dictations.current = []; // they belonged to the outgoing session's draft
   }, [sid]);
+  // Leaving the thread or backgrounding the app mid-recording finishes the take; its text
+  // lands in that session's saved draft if the thread is gone. A mic still starting is
+  // abandoned (micTap checks the phase after acquiring).
+  useEffect(() => {
+    const onHide = () => document.hidden && dict.current.phase === "recording" && finishDictation();
+    document.addEventListener("visibilitychange", onHide);
+    return () => {
+      document.removeEventListener("visibilitychange", onHide);
+      const d = dict.current;
+      if (d.phase === "recording") finishDictation();
+      else if (d.phase === "arming") d.phase = "idle";
+    };
+  }, []);
   // One-shot autofill after a rewind: drop the rewound message back into the box (TUI parity).
   // Guarded on sessionId so a stale prefill never lands in the wrong session's composer; the
   // steady-state/mount re-fire (value null) is a no-op.
@@ -3735,6 +4019,23 @@ function Composer({ disabled, status }) {
               onInput=${onInput}
               onPaste=${onPaste}
             ></textarea>`}
+        ${dictationAvailable.value &&
+        ((!bashMode && !disabled) || dictFace !== "idle") &&
+        html`<button
+          class=${"mic " + dictFace + (cleaning && dictFace === "idle" ? " cleaning" : "")}
+          onPointerDown=${(e) => e.preventDefault() /* keeps the textarea focused, so the keyboard stays up */}
+          onClick=${micTap}
+          aria-label=${dictFace === "idle" ? "Dictate" : dictFace === "busy" ? "Transcribing" : dictFace === "warm" ? "Starting the mic" : "Stop dictating"}
+        >
+          ${dictFace === "rec"
+            ? `${Math.floor((performance.now() - dict.current.liveAt) / 1000)}s`
+            : dictFace === "busy" || dictFace === "warm"
+              ? html`<span class="spin"></span>`
+              : html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="9" y="3" width="6" height="11" rx="3" />
+                    <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
+                  </svg>`}
+        </button>`}
         ${!hasText && attachments.value.length === 0 && status === "running" && !disabled
           ? html`<button
               class=${"stop" + (stopArmed.current ? " armed" : "")}
@@ -5698,6 +5999,10 @@ refreshSessions()
       followNotificationTap(); // also clears the shade + badge
       connectStream();
       initPush();
+      fetch("/dictation")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => (dictationAvailable.value = !!(d && d.available)))
+        .catch(() => {});
     }
   })
   .finally(boot);
