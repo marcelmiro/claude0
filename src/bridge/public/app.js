@@ -3471,7 +3471,8 @@ function Composer({ disabled, status }) {
       const last = lastSentText.get(id);
       return !!last?.queued && pendingSends.value.includes(last.text);
     };
-    const queued = transcript.value?.queuedPending?.length > 0 || sentQueued();
+    const sentAtTap = sentQueued();
+    const queued = transcript.value?.queuedPending?.length > 0 || sentAtTap;
     // Arm restore-on-interrupt: if the refetched transcript shows the last-sent message
     // fell off the active branch, it comes back into the composer (see interruptRestore).
     const arm = () => {
@@ -3505,7 +3506,9 @@ function Composer({ disabled, status }) {
       .then((d) => {
         if (d && d.ok === false) return restore(d.reason || "interrupt failed");
         if (typeof d?.queued !== "boolean") return; // no read of Claude's queue — keep the guess
-        const nowQueued = d.queued || sentQueued();
+        // A send confirmed queued before the tap was already in the file at the bridge's
+        // read, so its "not queued" means Claude took it. One confirmed after may postdate it.
+        const nowQueued = d.queued || (!sentAtTap && sentQueued());
         if (nowQueued === queued) return;
         if (!nowQueued) return arm();
         if (interruptRestore.value?.sessionId === id) interruptRestore.value = null;
