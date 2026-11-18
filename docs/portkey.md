@@ -51,20 +51,23 @@ shows a mic only when the host has `~/.config/claude0/openai-key` (`GET /dictati
 
 Order of one dictation:
 
-1. **Press.** A tap toggles recording until the next tap; a hold records until release
-   (`micDown`/`micUp`, 350ms threshold). One mic stream lives for the page's lifetime
+1. **Tap.** A tap starts recording and the next tap stops it (`micTap`). It's a click
+   handler, so a hardware keyboard's Space/Enter and VoiceOver work too. Pointer-down is
+   cancelled so the textarea keeps focus and the keyboard stays up. One mic stream lives for the page's lifetime
    (`ensureMic`): iOS asks permission once per app launch and re-prompts sooner for a
    stopped stream. It uses the built-in mic whenever one is listed: dictating through a
    Bluetooth earbud came out badly garbled ("The urgency that is. Calculate." for "new
    incidents in better stack"), because earbud mics record narrowband call audio.
-2. **Speak on red.** The button turns peach ("wait") only while the mic stream is being
+2. **Speak on red.** The button shows a grey spinner only while the mic stream is being
    (re)acquired, which took ~1.7s after the stream had died. Nothing records then. The
    button goes red the moment the recorder starts. Don't add an AnalyserNode "audio is
    flowing" gate: in the iOS PWA it read pure silence for 8s while MediaRecorder captured
    every word. In the test, counting aloud, 1–18 were all transcribed, and the gate only
    opened on its timeout at "fifteen".
 3. **Transcribe.** `POST /sessions/:id/dictate` (multipart `audio`) sends the recording to
-   OpenAI `gpt-transcribe` with a vocabulary hint, and returns the raw text in about 1s. The
+   OpenAI `gpt-transcribe` with a vocabulary hint, and returns the raw text in about 1s. A
+   network failure or a 5xx is retried with the same recording, up to 3 attempts, so a blip
+   never means saying it again. The
    recorder is timesliced (`start(1000)`), and the container is sniffed from the bytes
    (`audioExt`). An un-sliced Safari WebM recording once arrived as just its 5-byte tail,
    with an empty MIME type.

@@ -3215,10 +3215,10 @@ function BangRunningTag({ since }) {
 // Best-effort: storage failures are swallowed. Bounded to the newest 20 sessions.
 // --- Dictation (ADR 37, docs/portkey.md § Dictation) ---
 // One mic stream for the page's life: iOS asks permission once per app launch and a
-// stopped stream re-prompts sooner. The button is "wait" only while that stream is being
+// stopped stream re-prompts sooner. The button spins (grey) only while that stream is being
 // (re)acquired — nothing records then — and red from the moment the recorder starts.
-const DICTATION_HOLD_MS = 350;
 const mic = { stream: null };
+const DICTATION_ATTEMPTS = 3;
 // TEMPORARY on-device tracing: each step lands in the bridge log (`dictation-trace:`).
 let dtraceT0 = 0;
 function dtrace(step, extra = {}) {
@@ -3365,7 +3365,7 @@ function Composer({ disabled, status }) {
   // phase "idle" → "arming" (acquiring the mic) → "recording" → "busy" (transcribing).
   const [dictFace, setDictFace] = useState("idle");
   const [cleaning, setCleaning] = useState(0); // cleanups in flight — the mic shows a peach ring
-  const dict = useRef({ phase: "idle", downAt: 0, toggle: false, cancel: false, recorder: null, liveAt: 0, timer: null });
+  const dict = useRef({ phase: "idle", sid: null, recorder: null, liveAt: 0, timer: null });
   const dictations = useRef([]); // { raw, final } inserted into this draft — logged on send
   function grow() {
     const el = ref.current;
@@ -3573,25 +3573,20 @@ function Composer({ disabled, status }) {
     attachments.value = attachments.value.filter((a) => a.url !== url);
     URL.revokeObjectURL(url);
   }
-  // Mic press: a tap (< DICTATION_HOLD_MS) toggles recording on until the next tap; a
-  // hold records until release. Either way the stop transcribes and inserts at the caret.
-  async function micDown(e) {
-    e.preventDefault();
+  // Mic tap: starts recording, the next tap stops it, transcribes and inserts at the caret.
+  // A click (not pointer events) so a hardware keyboard's Space/Enter and VoiceOver work too.
+  async function micTap() {
     const d = dict.current;
     if (d.phase === "idle") dtraceT0 = performance.now();
-    dtrace("down", { phase: d.phase, toggle: d.toggle, pointer: e.pointerType });
-    if (d.phase === "recording" && d.toggle) return finishDictation();
-    if (d.phase !== "idle") return;
+    dtrace("tap", { phase: d.phase });
+    if (d.phase === "recording") return finishDictation();
+    if (d.phase !== "idle") return; // still acquiring the mic, or transcribing
     d.phase = "arming";
     d.sid = selectedId.value; // the take belongs to the session it was started in
-    d.downAt = performance.now();
-    d.toggle = false;
-    d.cancel = false;
     const warm = setTimeout(() => setDictFace("warm"), 150); // only if acquiring the mic takes a moment
     try {
       await ensureMic();
     } catch (err) {
-      clearTimeout(warm);
       d.phase = "idle";
       setDictFace("idle");
       dtrace("mic-error", { error: String(err && err.message) });
@@ -3603,31 +3598,13 @@ function Composer({ disabled, status }) {
     const track = mic.stream.getAudioTracks()[0];
     // A call, Siri or the OS taking the mic ends the track: transcribe what was captured.
     track.onended = () => dict.current.phase === "recording" && finishDictation();
-    dtrace("mic", { track: track && track.readyState, muted: track && track.muted, cancel: d.cancel, toggle: d.toggle });
-    if (d.cancel) {
-      d.phase = "idle";
-      setDictFace("idle");
-      return flashNotice("The mic was still starting — hold again");
-    }
+    dtrace("mic", { track: track && track.readyState, muted: track && track.muted });
     d.recorder = startRecorder();
     dtrace("rec-start", { mime: d.recorder.mimeType });
     d.phase = "recording";
     d.liveAt = performance.now();
     setDictFace("rec");
     d.timer = setInterval(rerender, 250); // the face shows elapsed seconds
-  }
-  function micUp(e) {
-    e.preventDefault();
-    const d = dict.current;
-    const held = performance.now() - d.downAt >= DICTATION_HOLD_MS;
-    dtrace("up", { phase: d.phase, toggle: d.toggle, held });
-    // Released while the mic was still being acquired: a short tap still means "toggle on";
-    // a hold that ended before recording started had nothing captured.
-    if (d.phase === "arming") return held ? (d.cancel = true) : (d.toggle = true);
-    if (d.phase === "recording" && !d.toggle) {
-      if (held) finishDictation();
-      else d.toggle = true;
-    }
   }
   function stopDictationTimer() {
     clearInterval(dict.current.timer);
@@ -3661,11 +3638,20 @@ function Composer({ disabled, status }) {
     fd.append("mic", (mic.stream && mic.stream.getAudioTracks()[0].label) || "");
     let res;
     const sentAt = performance.now();
-    try {
-      const r = await fetch(`/sessions/${encodeURIComponent(forSid)}/dictate`, { method: "POST", body: fd, signal: AbortSignal.timeout(60_000) });
-      res = await r.json().catch(() => ({ ok: false, reason: String(r.status) }));
-    } catch (err) {
-      res = { ok: false, reason: err.name === "TimeoutError" ? "transcribe-failed" : "bridge unreachable" };
+    // A dropped connection or a failed upstream call is retried with the same recording, so
+    // a network blip never means saying it all again. A 4xx (no audio, bad id) is final.
+    for (let attempt = 1; ; attempt++) {
+      let status = 0;
+      try {
+        const r = await fetch(`/sessions/${encodeURIComponent(forSid)}/dictate`, { method: "POST", body: fd, signal: AbortSignal.timeout(60_000) });
+        status = r.status;
+        res = await r.json().catch(() => ({ ok: false, reason: String(r.status) }));
+      } catch (err) {
+        res = { ok: false, reason: err.name === "TimeoutError" ? "transcribe-failed" : "bridge unreachable" };
+      }
+      if (res.ok || (status >= 400 && status < 500) || attempt === DICTATION_ATTEMPTS) break;
+      dtrace("retry", { attempt, status, reason: res.reason });
+      await new Promise((r) => setTimeout(r, attempt * 1500));
     }
     dtrace("dictate", { ok: res.ok, reason: res.reason, chars: (res.text || "").length, ms: Math.round(performance.now() - sentAt) });
     done(); // the mic is free again while cleanup runs
@@ -3935,7 +3921,7 @@ function Composer({ disabled, status }) {
   }, [sid]);
   // Leaving the thread or backgrounding the app mid-recording finishes the take; its text
   // lands in that session's saved draft if the thread is gone. A mic still starting is
-  // abandoned (micDown checks the phase after acquiring).
+  // abandoned (micTap checks the phase after acquiring).
   useEffect(() => {
     const onHide = () => document.hidden && dict.current.phase === "recording" && finishDictation();
     document.addEventListener("visibilitychange", onHide);
@@ -4029,19 +4015,15 @@ function Composer({ disabled, status }) {
         ((!bashMode && !disabled) || dictFace !== "idle") &&
         html`<button
           class=${"mic " + dictFace + (cleaning && dictFace === "idle" ? " cleaning" : "")}
-          onPointerDown=${micDown}
-          onPointerUp=${micUp}
-          onPointerCancel=${micUp}
-          onContextMenu=${(e) => e.preventDefault()}
-          aria-label=${dictFace === "idle" ? "Dictate" : dictFace === "busy" ? "Transcribing" : "Stop dictating"}
+          onPointerDown=${(e) => e.preventDefault() /* keeps the textarea focused, so the keyboard stays up */}
+          onClick=${micTap}
+          aria-label=${dictFace === "idle" ? "Dictate" : dictFace === "busy" ? "Transcribing" : dictFace === "warm" ? "Starting the mic" : "Stop dictating"}
         >
           ${dictFace === "rec"
             ? `${Math.floor((performance.now() - dict.current.liveAt) / 1000)}s`
-            : dictFace === "busy"
+            : dictFace === "busy" || dictFace === "warm"
               ? html`<span class="spin"></span>`
-              : dictFace === "warm"
-                ? "wait"
-                : html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              : html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <rect x="9" y="3" width="6" height="11" rx="3" />
                     <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
                   </svg>`}

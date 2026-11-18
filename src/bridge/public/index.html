@@ -867,7 +867,8 @@
         -webkit-touch-callout: none;
       }
       .composer .mic svg { width: 18px; height: 18px; vertical-align: middle; }
-      .composer .mic.warm { background: var(--peach); border-color: var(--peach); color: var(--bg); }
+      /* acquiring the mic: a grey spinner, so it never reads as a second (peach) Send */
+      .composer .mic.warm .spin { border-color: var(--muted); border-right-color: transparent; }
       .composer .mic.rec { background: var(--red); border-color: var(--red); color: var(--bg); }
       .composer .mic.busy { border-color: var(--peach); }
       .composer .mic .spin {
