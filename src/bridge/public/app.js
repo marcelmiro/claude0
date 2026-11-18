@@ -3278,7 +3278,9 @@ function startRecorder() {
       }),
   };
 }
-// The word swaps cleanup made ("myatron → Maestro"), ignoring punctuation/case-only edits.
+// The word swaps cleanup made ("myatron → Maestro"), ignoring punctuation/case-only edits
+// and restructuring — dropped fillers and spoken list markers ("Number one is → 1.") would
+// otherwise flash after nearly every dictation.
 function wordChanges(a, b) {
   const x = a.split(/\s+/).filter(Boolean);
   const y = b.split(/\s+/).filter(Boolean);
@@ -3290,7 +3292,7 @@ function wordChanges(a, b) {
   let del = [];
   let ins = [];
   const flush = () => {
-    if ((del.length || ins.length) && norm(del.join(" ")) !== norm(ins.join(" "))) out.push(`${del.join(" ") || "∅"} → ${ins.join(" ") || "∅"}`);
+    if (del.length && del.length <= 4 && /\p{L}/u.test(ins.join(" ")) && norm(del.join(" ")) !== norm(ins.join(" "))) out.push(`${del.join(" ")} → ${ins.join(" ")}`);
     del = [];
     ins = [];
   };
@@ -3581,6 +3583,7 @@ function Composer({ disabled, status }) {
     if (d.phase === "recording" && d.toggle) return finishDictation();
     if (d.phase !== "idle") return;
     d.phase = "arming";
+    d.sid = selectedId.value; // the take belongs to the session it was started in
     d.downAt = performance.now();
     d.toggle = false;
     d.cancel = false;
@@ -3596,7 +3599,10 @@ function Composer({ disabled, status }) {
     } finally {
       clearTimeout(warm);
     }
+    if (d.phase !== "arming") return; // the thread was left while the mic was starting
     const track = mic.stream.getAudioTracks()[0];
+    // A call, Siri or the OS taking the mic ends the track: transcribe what was captured.
+    track.onended = () => dict.current.phase === "recording" && finishDictation();
     dtrace("mic", { track: track && track.readyState, muted: track && track.muted, cancel: d.cancel, toggle: d.toggle });
     if (d.cancel) {
       d.phase = "idle";
@@ -3637,7 +3643,7 @@ function Composer({ disabled, status }) {
     const { blob, why, chunks, state } = await d.recorder.stop();
     dtrace("blob", { bytes: blob.size, type: blob.type, why, chunks, state });
     d.recorder = null;
-    const forSid = selectedId.value;
+    const forSid = d.sid;
     const done = () => {
       d.phase = "idle";
       setDictFace("idle");
@@ -3664,9 +3670,9 @@ function Composer({ disabled, status }) {
     dtrace("dictate", { ok: res.ok, reason: res.reason, chars: (res.text || "").length, ms: Math.round(performance.now() - sentAt) });
     done(); // the mic is free again while cleanup runs
     if (!res.ok) return flashError(`✗ ${reasonText(res, "")}`);
-    if (!res.text) return;
+    if (!res.text) return flashNotice("Heard nothing — check the mic and try again");
     const entry = { id: res.id, raw: res.text, final: res.text };
-    if (!insertDictation(forSid, res.text)) return; // landed in another session's saved draft
+    if (!insertDictation(forSid, res.text)) return flashNotice("Dictation saved to the draft of the session you dictated in");
     dictations.current.push(entry);
     if (res.id) cleanDictation(forSid, res.id, entry);
   }
@@ -3711,8 +3717,13 @@ function Composer({ disabled, status }) {
     if (selectedId.value !== forSid || !el) return;
     const at = el.value.indexOf(entry.raw);
     if (at < 0 || el.value.indexOf(entry.raw, at + 1) >= 0) return;
-    el.value = el.value.slice(0, at) + res.text + el.value.slice(at + entry.raw.length);
-    if (document.activeElement === el) el.setSelectionRange(at + res.text.length, at + res.text.length);
+    // Keep the caret where the user is: past the dictation it shifts by the length change,
+    // inside it lands at the cleaned text's end, before it stays put.
+    const rawEnd = at + entry.raw.length;
+    const shift = (p) => (p >= rawEnd ? p + res.text.length - entry.raw.length : p > at ? at + res.text.length : p);
+    const [selStart, selEnd] = [el.selectionStart, el.selectionEnd];
+    el.value = el.value.slice(0, at) + res.text + el.value.slice(rawEnd);
+    if (document.activeElement === el) el.setSelectionRange(shift(selStart), shift(selEnd));
     entry.final = res.text;
     grow();
     syncHasText();
@@ -3922,16 +3933,19 @@ function Composer({ disabled, status }) {
     setComposerText(d ? d.text : "");
     dictations.current = []; // they belonged to the outgoing session's draft
   }, [sid]);
-  // Leaving the thread mid-recording discards the take (the mic stream itself stays warm).
-  useEffect(
-    () => () => {
+  // Leaving the thread or backgrounding the app mid-recording finishes the take; its text
+  // lands in that session's saved draft if the thread is gone. A mic still starting is
+  // abandoned (micDown checks the phase after acquiring).
+  useEffect(() => {
+    const onHide = () => document.hidden && dict.current.phase === "recording" && finishDictation();
+    document.addEventListener("visibilitychange", onHide);
+    return () => {
+      document.removeEventListener("visibilitychange", onHide);
       const d = dict.current;
-      clearInterval(d.timer);
-      if (d.phase === "recording" && d.recorder) d.recorder.stop();
-      d.phase = "idle";
-    },
-    [],
-  );
+      if (d.phase === "recording") finishDictation();
+      else if (d.phase === "arming") d.phase = "idle";
+    };
+  }, []);
   // One-shot autofill after a rewind: drop the rewound message back into the box (TUI parity).
   // Guarded on sessionId so a stale prefill never lands in the wrong session's composer; the
   // steady-state/mount re-fire (value null) is a no-op.
@@ -4012,8 +4026,7 @@ function Composer({ disabled, status }) {
               onPaste=${onPaste}
             ></textarea>`}
         ${dictationAvailable.value &&
-        !bashMode &&
-        !disabled &&
+        ((!bashMode && !disabled) || dictFace !== "idle") &&
         html`<button
           class=${"mic " + dictFace + (cleaning && dictFace === "idle" ? " cleaning" : "")}
           onPointerDown=${micDown}

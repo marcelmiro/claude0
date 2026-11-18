@@ -69,8 +69,10 @@ Order of one dictation:
    (`audioExt`). An un-sliced Safari WebM recording once arrived as just its 5-byte tail,
    with an empty MIME type.
 4. **Insert.** The raw text goes in at the caret, spaced from its neighbours
-   (`insertDictation`). If you switched sessions meanwhile, it is appended to the dictating
-   session's saved draft instead.
+   (`insertDictation`). A take belongs to the session it was started in. If you switched
+   sessions, left the thread or backgrounded the app meanwhile, the take is finished and
+   appended to that session's saved draft instead. The mic stays visible mid-take, even
+   in bash mode, so a take can always be stopped.
 5. **Clean.** `POST /dictation/:id/clean` runs `claude -p` (haiku) with the session's terms,
    its recent prose, the personal vocabulary and the learned mis-hearings (`cleanDictation`
    in `core/dictation.ts`). It takes about 3.5–4.5s, and the time is mostly the model, not
