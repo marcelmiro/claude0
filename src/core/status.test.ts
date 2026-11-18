@@ -54,3 +54,18 @@ test("stale 'do you want to' text in scrollback (not near the bottom) does not t
     "\n❯ ";
   expect(isPermissionPrompt(scrollback)).toBe(false);
 });
+
+test("an open AskUserQuestion picker reads as waiting, even with its ☐ header scrolled past the bottom 15 rows", () => {
+  expect(detectStatus(fixture("viewport/ask-user-question.plain.txt"), true).status).toBe("waiting");
+});
+
+test("a running todo list's ☐ rows are not a question picker", () => {
+  const todo =
+    "✳ Rebasing… (12s)\n" +
+    "  ⎿  ☐ Move the picker check\n" +
+    "     ☐ Run the suite\n" +
+    "────────────────────────────────────────\n" +
+    "❯ \n" +
+    "────────────────────────────────────────\n";
+  expect(detectStatus(todo, true).status).toBe("running");
+});

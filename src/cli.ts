@@ -12,13 +12,13 @@
 
 import { homedir } from "os";
 import { loadState, saveState, loadPaneSessions } from "./core/state";
-import { switchToPane, listPanes, renameWindow, capturePane, displayMessage, atDeskFocus, SHELL_NAMES, sendBracketedPaste, questionPickerVisible } from "./core/tmux";
+import { switchToPane, listPanes, renameWindow, capturePane, displayMessage, atDeskFocus, SHELL_NAMES, sendBracketedPaste } from "./core/tmux";
 import { shellModeInput, flattenStyled } from "./core/session-api";
 import { isPng, saveUploadedBytes } from "./core/uploads";
 import { imagePasteManifest, imagePasteKey, terminalBundleId, readServiceTemplates, pbsServiceKeyLiteral, pbsServiceValue, receiveRefusal, describeKey, IMAGE_MAX_BYTES, SERVICE_NAME, type FocusedPane } from "./core/image-paste";
 import { syncWindowPrefix, stripAllPrefixes, abbreviateRepo, ATTENTION_PREFIX } from "./core/notifications";
 import { findClaudeProcesses } from "./core/process";
-import { detectStatus, type SessionStatus } from "./core/status";
+import { detectStatus, questionPickerVisible, type SessionStatus } from "./core/status";
 import { eventSourcedStatus } from "./core/hook-events";
 import { nativeStatus, resolveStatus } from "./core/session-state";
 import { loadNameCache, getSessionName, slugify } from "./core/names";
@@ -42,8 +42,7 @@ const home = homedir();
 /**
  * Rank of a pane that still needs the user, quickest reply first: tool approval 0,
  * AskUserQuestion 1, plan approval 2, finished turn 3. Read from the live capture (ANSI
- * stripped) because the stored attentionType can't tell these apart, and detectStatus
- * reads an open question picker as `ready`. Exported for tests.
+ * stripped) because the stored attentionType can't tell these apart. Exported for tests.
  */
 export function nextTier(plain: string, status: SessionStatus): number {
   const bottom = plain.trimEnd().split("\n").slice(-20).join("\n");
