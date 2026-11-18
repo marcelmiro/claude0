@@ -16,6 +16,7 @@ import { homedir } from "os";
 import { resolveTranscriptPath, resolveTranscriptPaths, readLastPromptAt } from "./last-turn";
 import { isTeammateDelivery, lastAssistantMessage, parseActiveBranch, parseTranscript } from "./transcript";
 import { eventsNewestFirst, pendingToolCall } from "./hook-events";
+import { replacesDraft } from "../shared/mac-draft.js";
 import { loadPaneSessions, savePaneSessions } from "./state";
 import { findClaudeProcesses } from "./process";
 import {
@@ -1633,6 +1634,7 @@ async function runSendStep(paneId: string, step: SendStep): Promise<boolean> {
 async function prepareInput(
   sessionId: string,
   paneId: string,
+  outgoing?: string,
 ): Promise<{ ok: true; draft: DraftAction } | { ok: false; reason: SendResult["reason"] }> {
   // A dialog REPLACES the input box (model-switch confirm, /model picker, permission
   // prompt). Every key below would land in it: Up/Down move its cursor, a digit in the
@@ -1664,8 +1666,12 @@ async function prepareInput(
   }
   const typed = flattenStyled(styled, true);
   if (!inputPending(typed)) return { ok: true, draft: "none" };
+  const draft = draftText(typed);
+  // A message carrying the whole draft (portkey's "use" copies it into the composer) is cut
+  // rather than stashed — a stash would put it back after the submit. C-y recovers it.
+  if (outgoing !== undefined && replacesDraft(draft, outgoing)) return { ok: true, draft: "discard" };
   const prompts = await submittedPrompts(sessionId);
-  if (isSubmittedText(draftText(typed), prompts)) return { ok: true, draft: "discard" };
+  if (isSubmittedText(draft, prompts)) return { ok: true, draft: "discard" };
   // Claude's stash has one slot: stashing this draft would push the user's own stash out to
   // the kill ring, and cutting it would merge it into the stash Claude pops after our submit.
   if (stashPresent(flattenStyled(styled, false))) return { ok: false, reason: "stash-occupied" };
@@ -1688,7 +1694,7 @@ export async function sendMessage(
 ): Promise<SendResult> {
   const paneId = await resolveSessionPane(sessionId);
   if (!paneId) return { ok: false, reason: "no-pane" };
-  const input = await prepareInput(sessionId, paneId);
+  const input = await prepareInput(sessionId, paneId, text);
   if (!input.ok) return input;
   for (const step of buildSendPlan(text, imagePaths, input.draft)) {
     // A failed stash aborts BEFORE the message is typed: proceeding would splice it into

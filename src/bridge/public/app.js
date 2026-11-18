@@ -20,6 +20,8 @@ import { applyTranscriptEvent, overlayResolved, displaySection } from "/sync.js"
 // Tunnel-wake recovery decisions (burst retry + fetch timeouts), served unbuilt
 // and covered by shared/reconnect.test.ts.
 import { burstAction, withTimeout } from "/reconnect.js";
+// Whether a send replaces the Mac draft — the same rule the send pre-flight applies.
+import { replacesDraft } from "/mac-draft.js";
 
 const html = htm.bind(h);
 
@@ -3347,6 +3349,7 @@ function Composer({ disabled, status }) {
   const shiftRun = useRef(false); // inside a Shift+Enter run — suppress submit until a keystroke
   const pasteWasEmpty = useRef(false); // pre-paste field emptiness (input's e.data is null for pastes)
   const [hasText, setHasText] = useState(false); // drives the Stop⇄Send toggle; uncontrolled textarea
+  const [replacesMac, setReplacesMac] = useState(false); // the composer's send would replace the Mac draft
   const stopArmed = useRef(false); // first Stop tap arms; a second within 3s fires (double-tap confirm)
   const disarmTimer = useRef(null);
   // Bash mode: a typed leading "!" flips the composer into command mode — the "!" lifts
@@ -3385,9 +3388,17 @@ function Composer({ disabled, status }) {
   function syncHasText() {
     const el = ref.current;
     setHasText(!!(el && el.value.trim()));
+    syncReplacesMac();
     // In bash mode the "!" lives in the glyph, not the value — persist the full send
     // string so the draft survives a reload as the literal `!cmd` text.
     if (el) saveDraft(selectedId.value, bashRef.current && el.value ? "!" + el.value : el.value);
+  }
+  // Compared on the full send string (bash mode's "!" lives in the glyph, not the value).
+  function syncReplacesMac() {
+    const el = ref.current;
+    const md = transcript.value && transcript.value.macDraft;
+    const sendText = el ? (bashRef.current && el.value ? "!" + el.value : el.value) : "";
+    setReplacesMac(!!(md && md.text && !md.shell && replacesDraft(md.text, sendText)));
   }
   // Flip the composer's bash mode (remounting the keyed textarea). Two iOS traps live
   // here, both around the keyboard's above-keyboard pan of the page:
@@ -3958,6 +3969,9 @@ function Composer({ disabled, status }) {
     }
     composerPrefill.value = null;
   }, [composerPrefill.value]);
+  const macDraft = transcript.value && transcript.value.macDraft;
+  // A refreshed Mac draft re-decides "replaces" against what's already typed.
+  useEffect(syncReplacesMac, [macDraft && macDraft.text, macDraft && macDraft.shell]);
   return html`
     <div class="composerwrap">
       <input ref=${trampRef} class="focustramp" tabindex="-1" aria-hidden="true" autocapitalize="none" autocorrect="off" />
@@ -3974,7 +3988,14 @@ function Composer({ disabled, status }) {
           </div>`,
         )}
       </div>`}
-      <${MacDraftNote} draft=${transcript.value && transcript.value.macDraft} />
+      <${MacDraftNote}
+        draft=${macDraft}
+        replaces=${replacesMac}
+        onUse=${hasText ? null : () => {
+          setComposerText(macDraft.text);
+          if (ref.current) ref.current.focus();
+        }}
+      />
       ${attachments.value.length > 0 &&
       html`<div class="thumbs">
         ${attachments.value.map(
@@ -4053,18 +4074,26 @@ function Composer({ disabled, status }) {
 // What sits in the Mac's input box, read at each transcript refresh. A send works around
 // it (prepareInput): a draft is stashed and comes back after the submit; a draft on top of
 // an existing stash refuses the send with stash-occupied, a shell-mode one with shell-draft.
-function MacDraftNote({ draft }) {
+function MacDraftNote({ draft, replaces, onUse }) {
   if (!draft) return null;
   const note = draft.shell
     ? "shell command at the Mac — clear it there before sending"
     : !draft.text
       ? "stashed draft at the Mac — it returns to the box after your next send"
-      : draft.stashed
-        ? "draft at the Mac, plus a stashed one — clear one there before sending"
-        : "draft at the Mac — sending sets it aside, then puts it back";
+      : replaces
+        ? "sending replaces the Mac draft" + (draft.stashed ? " — the stashed one returns after" : "")
+        : draft.stashed
+          ? "draft at the Mac, plus a stashed one — clear one there before sending"
+          : "draft at the Mac — sending sets it aside, then puts it back";
+  // A pasted block or image reads as its placeholder in the capture: copying it would send
+  // the placeholder, not the content.
+  const usable = onUse && draft.text && !draft.shell && !/\[(Pasted text|Image) #\d+/.test(draft.text);
   return html`<div class="macdraft">
-    ${draft.text && html`<div class="macdraft-text">${draft.shell ? "! " + draft.text : draft.text}</div>`}
-    <div class="macdraft-note">${note}</div>
+    <div class="macdraft-body">
+      ${draft.text && !replaces && html`<div class="macdraft-text">${draft.shell ? "! " + draft.text : draft.text}</div>`}
+      <div class="macdraft-note">${note}</div>
+    </div>
+    ${usable && html`<button class="macdraft-use" onClick=${onUse}>use</button>`}
   </div>`;
 }
 

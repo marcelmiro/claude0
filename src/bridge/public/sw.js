@@ -23,6 +23,7 @@ const SHELL_PATHS = [
   "/wake-abs.js",
   "/sync.js",
   "/reconnect.js",
+  "/mac-draft.js",
   "/manifest.json",
   "/icon-512.png",
   "/apple-touch-icon.png",

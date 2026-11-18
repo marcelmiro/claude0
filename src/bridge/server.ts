@@ -140,6 +140,8 @@ const STATIC: Record<string, string> = {
   // Tunnel-wake recovery decisions (burst retry + fetch timeouts), shared with
   // its test suite — served unbuilt.
   "/reconnect.js": "../../shared/reconnect.js",
+  // Whether a send replaces the Mac draft, shared with the send pre-flight — served unbuilt.
+  "/mac-draft.js": "../../shared/mac-draft.js",
   "/manifest.json": "manifest.json",
   "/icon-512.png": "icon-512.png",
   "/apple-touch-icon.png": "apple-touch-icon.png",
