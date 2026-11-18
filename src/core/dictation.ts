@@ -4,8 +4,8 @@
  * the session's context. Optional — no OpenAI key, no mic button (ADR 37, docs/portkey.md
  * § Dictation).
  */
-import { appendFileSync, readFileSync } from "node:fs";
-import { PATHS } from "./config";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { PATHS, writeAtomic } from "./config";
 import { claudePrint } from "./claude-print";
 import type { TranscriptTurn } from "../types";
 
@@ -43,13 +43,16 @@ export interface DictationContext {
   sttVocab: string[];
   /** The last few turns' prose, newest last. */
   recent: string;
+  /** Mis-hearings you corrected by hand before, as "heard → meant". */
+  mishearings: string[];
 }
 
 /**
  * Assemble the context for one dictation from what the bridge knows about the session.
  * Session terms come first — they're the likeliest words in this message.
  */
-export function buildContext(input: { repo?: string; branch?: string; skills: string[]; turns: TranscriptTurn[]; personal: string[] }): DictationContext {
+export function buildContext(input: { repo?: string; branch?: string; skills: string[]; turns: TranscriptTurn[]; personal: string[]; learned?: Correction[] }): DictationContext {
+  const learned = input.learned ?? [];
   const files: string[] = [];
   const prose: string[] = [];
   for (const t of input.turns) {
@@ -67,11 +70,14 @@ export function buildContext(input: { repo?: string; branch?: string; skills: st
     if (recent.length + line.length > RECENT_CHARS) break;
     recent = line + "\n\n" + recent;
   }
+  // Terms you had to type in by hand lead: they're exactly the ones transcription gets wrong.
+  const fixed = [...new Set(learned.map((c) => c.meant))];
   const session = [...new Set([input.repo, input.branch, ...input.skills, ...files.reverse()].filter((v): v is string => !!v))];
   return {
-    vocab: [...new Set([...session, ...input.personal])],
-    sttVocab: [...new Set([...session.slice(0, STT_SESSION_TERMS), ...input.personal.slice(0, STT_PERSONAL_TERMS)])],
+    vocab: [...new Set([...fixed, ...session, ...input.personal])],
+    sttVocab: [...new Set([...fixed.slice(0, STT_SESSION_TERMS), ...session.slice(0, STT_SESSION_TERMS), ...input.personal.slice(0, STT_PERSONAL_TERMS)])],
     recent: recent.trim(),
+    mishearings: learned.map((c) => `${c.heard} → ${c.meant}`),
   };
 }
 
@@ -101,6 +107,7 @@ const CLEANUP_SYSTEM = `You fix speech-to-text errors in a message a developer d
 
 Fix these, actively:
 - Mis-heard names and terms. Speech-to-text often turns jargon into a similar-sounding word or nonsense ("myatron" → "Maestro", "TNC table" → "DNC table", "Claude Zero" → "claude0", "PR triage" → "pr-triage", "context table" → "contacts table" when the conversation is about contacts). Whenever a word or phrase sounds like a term in the vocabulary or the recent conversation and that term fits the sentence, replace it with the term, spelled exactly as listed.
+- Known mis-hearings: the speaker corrected these by hand before ("heard → meant"). When the dictation contains a heard form, or a similar-sounding one, write the meant term.
 - Spoken symbols in technical names: "server dot ts" → "server.ts".
 - Obvious punctuation and sentence-boundary errors.
 
@@ -126,7 +133,7 @@ export function guardCleanup(raw: string, cleaned: string): { final: string; gua
 }
 
 export async function cleanDictation(raw: string, ctx: DictationContext): Promise<{ final: string; guarded: boolean } | { error: string }> {
-  const input = `<vocabulary>\n${ctx.vocab.join(", ")}\n</vocabulary>\n\n<recent_conversation>\n${ctx.recent || "(none)"}\n</recent_conversation>\n\n<dictation>\n${raw}\n</dictation>`;
+  const input = `<vocabulary>\n${ctx.vocab.join(", ")}\n</vocabulary>\n\n<known_mishearings>\n${ctx.mishearings.join("\n") || "(none)"}\n</known_mishearings>\n\n<recent_conversation>\n${ctx.recent || "(none)"}\n</recent_conversation>\n\n<dictation>\n${raw}\n</dictation>`;
   const r = await claudePrint({ system: CLEANUP_SYSTEM, input, timeoutMs: CLEAN_TIMEOUT_MS });
   if ("error" in r) return r;
   return guardCleanup(raw, r.text);
@@ -150,6 +157,71 @@ export function takeDictation(id: string): PendingDictation | null {
 }
 
 export const DICTATION_LOG_PATH = `${PATHS.dir}/dictation-log.jsonl`;
+export const LEARNED_PATH = `${PATHS.dir}/dictation-learned.json`;
+const MAX_LEARNED = 200;
+
+/** A mis-hearing you corrected by hand: dictation inserted `heard`, you sent `meant`. */
+export interface Correction { heard: string; meant: string; count: number; at: number }
+
+const tokens = (s: string) => s.split(/\s+/).filter(Boolean);
+const bare = (s: string) => s.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+const folded = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+
+/**
+ * Short word swaps between what dictation inserted and what you sent — the hand
+ * corrections ("Betsec" → "betterstack"). Additions, deletions, case/punctuation-only
+ * edits and rewrites longer than three words aren't corrections, so they're skipped.
+ */
+export function corrections(inserted: string, sent: string): { heard: string; meant: string }[] {
+  const x = tokens(inserted), y = tokens(sent);
+  const L = Array.from({ length: x.length + 1 }, () => new Array<number>(y.length + 1).fill(0));
+  for (let i = x.length - 1; i >= 0; i--)
+    for (let j = y.length - 1; j >= 0; j--) L[i]![j] = folded(x[i]!) === folded(y[j]!) ? L[i + 1]![j + 1]! + 1 : Math.max(L[i + 1]![j]!, L[i]![j + 1]!);
+  const out: { heard: string; meant: string }[] = [];
+  let del: string[] = [], ins: string[] = [];
+  const flush = () => {
+    const heard = bare(del.join(" ")), meant = bare(ins.join(" "));
+    if (del.length && ins.length && del.length <= 3 && ins.length <= 3 && heard && meant && folded(heard) !== folded(meant)) out.push({ heard, meant });
+    del = []; ins = [];
+  };
+  let i = 0, j = 0;
+  while (i < x.length || j < y.length) {
+    if (i < x.length && j < y.length && folded(x[i]!) === folded(y[j]!)) { flush(); i++; j++; }
+    else if (j < y.length && (i === x.length || L[i]![j + 1]! >= L[i + 1]![j]!)) ins.push(y[j++]!);
+    else del.push(x[i++]!);
+  }
+  flush();
+  return out;
+}
+
+export function readLearned(): Correction[] {
+  try {
+    const v = JSON.parse(readFileSync(LEARNED_PATH, "utf8")) as { corrections?: Correction[] };
+    return Array.isArray(v.corrections) ? v.corrections : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Merge new corrections in, most recent first; repeats bump the count. */
+export function mergeCorrections(prev: Correction[], found: { heard: string; meant: string }[], now = Date.now()): Correction[] {
+  const byKey = new Map(prev.map((c) => [`${folded(c.heard)}→${folded(c.meant)}`, c]));
+  for (const f of found) {
+    const key = `${folded(f.heard)}→${folded(f.meant)}`;
+    const old = byKey.get(key);
+    byKey.set(key, { heard: f.heard, meant: f.meant, count: (old?.count ?? 0) + 1, at: now });
+  }
+  return [...byKey.values()].sort((a, b) => b.at - a.at).slice(0, MAX_LEARNED);
+}
+
+export function learnFromOutcome(dictations: { final: string }[], sent: string): void {
+  const found = corrections(dictations.map((d) => d.final).join(" "), sent);
+  if (!found.length) return;
+  try {
+    mkdirSync(PATHS.dir, { recursive: true });
+    writeAtomic(LEARNED_PATH, JSON.stringify({ corrections: mergeCorrections(readLearned(), found) }));
+  } catch { /* best-effort */ }
+}
 
 /**
  * What dictation inserted vs what was finally sent — the edit distance between them is the

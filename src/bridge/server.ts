@@ -60,7 +60,7 @@ import { homedir } from "os";
 import { discoverRepos, getBaseRepoPath } from "../core/git";
 import { recentRepos } from "../core/recent-repos";
 import { listSlashCommands, type SlashCommand } from "../core/skills";
-import { buildContext, cleanDictation, logDictationOutcome, openaiKey, rememberDictation, takeDictation, transcribe, type DictationContext } from "../core/dictation";
+import { buildContext, cleanDictation, learnFromOutcome, logDictationOutcome, openaiKey, readLearned, rememberDictation, takeDictation, transcribe, type DictationContext } from "../core/dictation";
 import { readPersonalVocab, refreshVocabIfStale } from "../core/dictation-vocab";
 import { repoRootForSession, safeRepoPath, fileDiff, rangeDiff, branchChanges } from "../core/repo-files";
 import { branchPullRequest, type PullRequestInfo } from "../core/pull-request";
@@ -172,7 +172,7 @@ async function dictationContextFor(sessionId: string): Promise<DictationContext>
   const rows = (payload as { sessions?: { id: string; repo?: string; branch?: string }[] } | null)?.sessions ?? [];
   const row = rows.find((s) => s.id === sessionId);
   const skillNames = (Array.isArray(skills) ? (skills as SlashCommand[]) : []).filter((k) => k.source !== "builtin").map((k) => k.name);
-  return buildContext({ repo: row?.repo, branch: row?.branch, skills: skillNames, turns: tx?.turns ?? [], personal: readPersonalVocab()?.terms ?? [] });
+  return buildContext({ repo: row?.repo, branch: row?.branch, skills: skillNames, turns: tx?.turns ?? [], personal: readPersonalVocab()?.terms ?? [], learned: readLearned() });
 }
 
 /**
@@ -1524,6 +1524,11 @@ async function route(req: Request): Promise<Response> {
   // --- Dictation (ADR 37, docs/portkey.md § Dictation): transcribe returns the raw text
   // fast; the client then asks for the cleanup, which reuses the context gathered here. ---
   if (method === "GET" && path === "/dictation") return json({ available: !!openaiKey() });
+  // TEMPORARY: on-device step tracing while the iOS recording flow is being debugged.
+  if (method === "POST" && path === "/dictation/trace") {
+    console.error(`dictation-trace: ${JSON.stringify(await req.json().catch(() => ({})))}`);
+    return json({ ok: true });
+  }
 
   const dictate = path.match(/^\/sessions\/([^/]+)\/dictate$/);
   if (method === "POST" && dictate) {
@@ -1535,8 +1540,11 @@ async function route(req: Request): Promise<Response> {
     const audio = form?.get("audio");
     if (!(audio instanceof File) || audio.size < 1024) return json({ ok: false, reason: "no-audio" }, 400);
     refreshVocabIfStale();
+    const t0 = performance.now();
     const ctx = await dictationContextFor(id);
+    const tCtx = performance.now();
     const r = await transcribe(audio, ctx, key);
+    console.error(`dictation: ${audio.size}B ctx=${Math.round(tCtx - t0)}ms stt=${Math.round(performance.now() - tCtx)}ms ${"error" in r ? `error ${r.error}` : `${r.text.length} chars`}`);
     if ("error" in r) {
       console.error(`dictation: transcribe failed: ${r.error}`);
       return json({ ok: false, reason: r.error === "unsupported-audio" ? "no-audio" : "transcribe-failed" }, 502);
@@ -1565,6 +1573,7 @@ async function route(req: Request): Promise<Response> {
       : [];
     if (typeof b.sessionId !== "string" || typeof b.sent !== "string" || !dictations.length) return json({ ok: false, reason: "bad-request" }, 400);
     logDictationOutcome({ sessionId: b.sessionId, dictations: dictations.map(({ raw, final }) => ({ raw, final })), sent: b.sent });
+    learnFromOutcome(dictations, b.sent);
     return json({ ok: true });
   }
 

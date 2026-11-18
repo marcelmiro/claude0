@@ -74,9 +74,13 @@ Order of one dictation:
    the cleanup once dropped a whole sentence. The client swaps the cleaned text in only if
    the raw text is still in the box exactly as inserted, so an edit you make meanwhile wins.
    The swapped words are flashed ("Fixed: myatron → Maestro").
-6. **Log.** On send, `POST /dictation/outcome` appends what dictation inserted and what you
-   finally sent to `dictation-log.jsonl`. The gap between them is the real-world error
-   signal for tuning. Only text is logged; no audio is kept.
+6. **Log and learn.** On send, `POST /dictation/outcome` appends what dictation inserted and
+   what you finally sent to `dictation-log.jsonl`. Only text is logged; no audio is kept.
+   Short word swaps you typed over the dictation ("Betsec" → "betterstack") are kept in
+   `dictation-learned.json` (`corrections`, `learnFromOutcome`). Additions, case-only edits
+   and rewrites longer than three words aren't counted. The corrected terms lead the next
+   transcription prompt, and cleanup gets the pairs as known mis-hearings. Rare terms need
+   this: history mining keeps only words used 15+ times, and "betterstack" had 6.
 
 **Vocabulary.** The transcription prompt is length-limited. It gets the session's repo,
 branch, non-builtin skills and recently touched files, then the top 120 personal terms

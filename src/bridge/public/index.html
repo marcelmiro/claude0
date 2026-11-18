@@ -869,7 +869,20 @@
       .composer .mic svg { width: 18px; height: 18px; vertical-align: middle; }
       .composer .mic.warm { background: var(--peach); border-color: var(--peach); color: var(--bg); }
       .composer .mic.rec { background: var(--red); border-color: var(--red); color: var(--bg); }
-      .composer .mic.busy { color: var(--dim); }
+      .composer .mic.busy { border-color: var(--peach); }
+      .composer .mic .spin {
+        display: inline-block;
+        width: 16px;
+        height: 16px;
+        border: 2px solid var(--peach);
+        border-right-color: transparent;
+        border-radius: 50%;
+        vertical-align: middle;
+        animation: mic-spin 0.8s linear infinite;
+      }
+      @keyframes mic-spin { to { transform: rotate(360deg); } }
+      /* cleanup in flight: the mic is usable again, the ring says the text may still change */
+      .composer .mic.cleaning { border-color: var(--peach); color: var(--peach); }
       /* staged-attachment thumbnails above the textarea */
       .thumbs { display: flex; flex-wrap: wrap; gap: 8px; padding: 2px 4px 8px; }
       .thumb { position: relative; width: 56px; height: 56px; }

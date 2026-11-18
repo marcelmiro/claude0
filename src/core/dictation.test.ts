@@ -1,6 +1,6 @@
 import "../../test/helpers/home";
 import { describe, expect, test } from "bun:test";
-import { audioExt, buildContext, guardCleanup, rememberDictation, takeDictation } from "./dictation";
+import { audioExt, buildContext, corrections, guardCleanup, mergeCorrections, rememberDictation, takeDictation } from "./dictation";
 import type { TranscriptTurn } from "../types";
 
 const bytes = (...b: number[]) => new Uint8Array([...b, ...new Array(12).fill(0)].slice(0, 12));
@@ -56,8 +56,31 @@ describe("buildContext", () => {
   });
 });
 
+describe("corrections", () => {
+  test("a short swap you typed over the dictation is a correction", () => {
+    expect(corrections("Can you check and handle the Betsec incidents that have just appeared?", "Can you check and handle the betterstack incidents that have just appeared?")).toEqual([
+      { heard: "Betsec", meant: "betterstack" },
+    ]);
+  });
+  test("additions, case/punctuation-only edits and long rewrites are not corrections", () => {
+    expect(corrections("run the tests", "run the tests, then open a PR")).toEqual([]);
+    expect(corrections("portkey works.", "Portkey works")).toEqual([]);
+    expect(corrections("we should probably move this over to the other service", "we should merge it")).toEqual([]);
+  });
+  test("repeats bump the count and the newest leads", () => {
+    const a = mergeCorrections([], [{ heard: "Betsec", meant: "betterstack" }], 1);
+    const b = mergeCorrections(a, [{ heard: "Pettystack", meant: "betterstack" }, { heard: "betsec", meant: "BetterStack" }], 2);
+    expect(b.map((c) => [c.heard, c.count])).toEqual([["betsec", 2], ["Pettystack", 1]]);
+  });
+  test("corrected terms lead the vocabulary and reach cleanup as mis-hearings", () => {
+    const ctx = buildContext({ repo: "throxy", skills: [], turns: [], personal: ["Maestro"], learned: [{ heard: "Betsec", meant: "betterstack", count: 1, at: 1 }] });
+    expect(ctx.sttVocab.slice(0, 2)).toEqual(["betterstack", "throxy"]);
+    expect(ctx.mishearings).toEqual(["Betsec → betterstack"]);
+  });
+});
+
 describe("pending dictations", () => {
-  const ctx = { vocab: [], sttVocab: [], recent: "" };
+  const ctx = { vocab: [], sttVocab: [], recent: "", mishearings: [] };
   test("a cleanup id is single-use", () => {
     const id = rememberDictation({ sessionId: "s1", raw: "hello", ctx });
     expect(takeDictation(id)?.raw).toBe("hello");

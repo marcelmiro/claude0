@@ -3220,26 +3220,46 @@ function BangRunningTag({ since }) {
 // so the button only turns red once real samples arrive (a mic's noise floor is never 0).
 const DICTATION_HOLD_MS = 350;
 const mic = { stream: null, actx: null, analyser: null, analysed: null };
+// TEMPORARY on-device tracing: each step lands in the bridge log (`dictation-trace:`).
+let dtraceT0 = 0;
+function dtrace(step, extra = {}) {
+  const body = JSON.stringify({ step, ms: Math.round(performance.now() - dtraceT0), ...extra });
+  fetch("/dictation/trace", { method: "POST", headers: { "content-type": "application/json" }, body, keepalive: true }).catch(() => {});
+}
+// iOS starts an AudioContext only from inside a user gesture — after an `await` the tap no
+// longer counts — so this must run synchronously at the top of the press handler.
+function primeAudioContext() {
+  try {
+    mic.actx = mic.actx || new AudioContext();
+    if (mic.actx.state !== "running") mic.actx.resume().catch(() => {});
+  } catch {}
+}
 async function ensureMic() {
   const track = mic.stream && mic.stream.getAudioTracks()[0];
   if (!track || track.readyState !== "live") {
     mic.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
   }
-  mic.actx = mic.actx || new AudioContext();
-  if (mic.actx.state !== "running") await mic.actx.resume().catch(() => {});
-  if (mic.analysed !== mic.stream) {
-    mic.analyser = mic.actx.createAnalyser();
-    mic.actx.createMediaStreamSource(mic.stream).connect(mic.analyser);
-    mic.analysed = mic.stream;
+  if (mic.actx && mic.analysed !== mic.stream) {
+    try {
+      mic.analyser = mic.actx.createAnalyser();
+      mic.actx.createMediaStreamSource(mic.stream).connect(mic.analyser);
+      mic.analysed = mic.stream;
+    } catch {
+      mic.analyser = null;
+    }
   }
 }
+// Calls onLive(reason) once audio flows. A detector that can't run (context not started)
+// must never hold the user in "wait", so that case goes live at once.
 function whenAudioFlows(stillRecording, onLive) {
+  if (!mic.analyser || !mic.actx || mic.actx.state !== "running") return onLive(`no-detector:${mic.actx ? mic.actx.state : "none"}`);
   const buf = new Float32Array(mic.analyser.fftSize);
   const t0 = performance.now();
   const tick = () => {
     if (!stillRecording()) return;
     mic.analyser.getFloatTimeDomainData(buf);
-    if (buf.some((v) => v !== 0) || performance.now() - t0 > 8000) return onLive();
+    if (buf.some((v) => v !== 0)) return onLive("samples");
+    if (performance.now() - t0 > 8000) return onLive("timeout");
     requestAnimationFrame(tick);
   };
   tick();
@@ -3253,10 +3273,24 @@ function startRecorder() {
   };
   rec.start(1000); // timesliced: an un-sliced Safari WebM recording once kept only its 5-byte tail
   return {
+    mimeType: rec.mimeType || mimeType,
+    // Never wait on `onstop` alone: if Safari doesn't fire it, the chunks already
+    // delivered (one per second) are the recording.
     stop: () =>
       new Promise((resolve) => {
-        rec.onstop = () => resolve(new Blob(chunks, { type: rec.mimeType || mimeType }));
-        rec.stop();
+        let done = false;
+        const finish = (why) => {
+          if (done) return;
+          done = true;
+          resolve({ blob: new Blob(chunks, { type: rec.mimeType || mimeType }), why, chunks: chunks.length, state: rec.state });
+        };
+        rec.onstop = () => finish("onstop");
+        setTimeout(() => finish("timeout"), 1500);
+        try {
+          rec.stop();
+        } catch (err) {
+          finish(`threw:${err && err.message}`);
+        }
       }),
   };
 }
@@ -3344,6 +3378,7 @@ function Composer({ disabled, status }) {
   // `dict` holds the press state machine in a ref so pointer handlers never read stale state:
   // phase "idle" → "arming" (acquiring the mic) → "recording" → "busy" (transcribing).
   const [dictFace, setDictFace] = useState("idle");
+  const [cleaning, setCleaning] = useState(0); // cleanups in flight — the mic shows a peach ring
   const dict = useRef({ phase: "idle", downAt: 0, toggle: false, cancel: false, recorder: null, liveAt: 0, timer: null });
   const dictations = useRef([]); // { raw, final } inserted into this draft — logged on send
   function grow() {
@@ -3557,8 +3592,11 @@ function Composer({ disabled, status }) {
   async function micDown(e) {
     e.preventDefault();
     const d = dict.current;
+    if (d.phase === "idle") dtraceT0 = performance.now();
+    dtrace("down", { phase: d.phase, toggle: d.toggle, pointer: e.pointerType });
     if (d.phase === "recording" && d.toggle) return finishDictation();
     if (d.phase !== "idle") return;
+    primeAudioContext();
     d.phase = "arming";
     d.downAt = performance.now();
     d.toggle = false;
@@ -3567,19 +3605,24 @@ function Composer({ disabled, status }) {
       await ensureMic();
     } catch (err) {
       d.phase = "idle";
+      dtrace("mic-error", { error: String(err && err.message) });
       return flashError(`✗ mic unavailable: ${err.message || err}`);
     }
+    const track = mic.stream.getAudioTracks()[0];
+    dtrace("mic", { actx: mic.actx && mic.actx.state, track: track && track.readyState, muted: track && track.muted, cancel: d.cancel, toggle: d.toggle });
     if (d.cancel) {
       d.phase = "idle";
       return flashNotice("The mic was still starting — hold again");
     }
     d.recorder = startRecorder();
+    dtrace("rec-start", { mime: d.recorder.mimeType });
     d.phase = "recording";
     d.liveAt = 0;
     setDictFace("warm");
     whenAudioFlows(
       () => dict.current.phase === "recording",
-      () => {
+      (reason) => {
+        dtrace("live", { reason });
         d.liveAt = performance.now();
         setDictFace("rec");
         d.timer = setInterval(rerender, 250); // the face shows elapsed seconds
@@ -3590,6 +3633,7 @@ function Composer({ disabled, status }) {
     e.preventDefault();
     const d = dict.current;
     const held = performance.now() - d.downAt >= DICTATION_HOLD_MS;
+    dtrace("up", { phase: d.phase, toggle: d.toggle, held });
     // Released while the mic was still being acquired: a short tap still means "toggle on";
     // a hold that ended before recording started had nothing captured.
     if (d.phase === "arming") return held ? (d.cancel = true) : (d.toggle = true);
@@ -3608,23 +3652,34 @@ function Composer({ disabled, status }) {
     stopDictationTimer();
     setDictFace("busy");
     const spokeMs = d.liveAt ? performance.now() - d.liveAt : 0;
-    const blob = await d.recorder.stop();
+    dtrace("stop", { spokeMs: Math.round(spokeMs) });
+    const { blob, why, chunks, state } = await d.recorder.stop();
+    dtrace("blob", { bytes: blob.size, type: blob.type, why, chunks, state });
     d.recorder = null;
     const forSid = selectedId.value;
     const done = () => {
       d.phase = "idle";
       setDictFace("idle");
     };
-    if (spokeMs < 500 || blob.size < 1024) return done();
+    if (spokeMs < 500) {
+      done();
+      return flashNotice("Too short — nothing recorded");
+    }
+    if (blob.size < 1024) {
+      done();
+      return flashError("✗ the recording came out empty");
+    }
     const fd = new FormData();
     fd.append("audio", blob, "dictation");
     let res;
+    const sentAt = performance.now();
     try {
       const r = await fetch(`/sessions/${encodeURIComponent(forSid)}/dictate`, { method: "POST", body: fd, signal: AbortSignal.timeout(60_000) });
       res = await r.json().catch(() => ({ ok: false, reason: String(r.status) }));
     } catch (err) {
       res = { ok: false, reason: err.name === "TimeoutError" ? "transcribe-failed" : "bridge unreachable" };
     }
+    dtrace("dictate", { ok: res.ok, reason: res.reason, chars: (res.text || "").length, ms: Math.round(performance.now() - sentAt) });
     done(); // the mic is free again while cleanup runs
     if (!res.ok) return flashError(`✗ ${reasonText(res, "")}`);
     if (!res.text) return;
@@ -3659,12 +3714,16 @@ function Composer({ disabled, status }) {
   // as inserted, so an edit made during the ~5s cleanup always wins.
   async function cleanDictation(forSid, id, entry) {
     let res;
+    setCleaning((n) => n + 1);
     try {
       const r = await fetch(`/dictation/${encodeURIComponent(id)}/clean`, { method: "POST", signal: AbortSignal.timeout(45_000) });
       res = await r.json();
     } catch {
       return; // the raw transcript stays — cleanup is an improvement, not a requirement
+    } finally {
+      setCleaning((n) => n - 1);
     }
+    dtrace("clean", { ok: res && res.ok, guarded: res && res.guarded, changed: !!res && res.text !== entry.raw });
     if (!res || !res.ok || !res.text || res.text === entry.raw) return;
     const el = ref.current;
     if (selectedId.value !== forSid || !el) return;
@@ -3974,7 +4033,7 @@ function Composer({ disabled, status }) {
         !bashMode &&
         !disabled &&
         html`<button
-          class=${"mic " + dictFace}
+          class=${"mic " + dictFace + (cleaning && dictFace === "idle" ? " cleaning" : "")}
           onPointerDown=${micDown}
           onPointerUp=${micUp}
           onPointerCancel=${micUp}
@@ -3984,7 +4043,7 @@ function Composer({ disabled, status }) {
           ${dictFace === "rec"
             ? `${Math.floor((performance.now() - dict.current.liveAt) / 1000)}s`
             : dictFace === "busy"
-              ? "…"
+              ? html`<span class="spin"></span>`
               : dictFace === "warm"
                 ? "wait"
                 : html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
