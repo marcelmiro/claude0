@@ -18,7 +18,7 @@ import { isPng, saveUploadedBytes } from "./core/uploads";
 import { imagePasteManifest, imagePasteKey, terminalBundleId, readServiceTemplates, pbsServiceKeyLiteral, pbsServiceValue, receiveRefusal, describeKey, IMAGE_MAX_BYTES, SERVICE_NAME, type FocusedPane } from "./core/image-paste";
 import { syncWindowPrefix, stripAllPrefixes, abbreviateRepo, ATTENTION_PREFIX } from "./core/notifications";
 import { findClaudeProcesses } from "./core/process";
-import { detectStatus } from "./core/status";
+import { detectStatus, questionPickerVisible, type SessionStatus } from "./core/status";
 import { eventSourcedStatus } from "./core/hook-events";
 import { nativeStatus, resolveStatus } from "./core/session-state";
 import { loadNameCache, getSessionName, slugify } from "./core/names";
@@ -40,9 +40,21 @@ const home = homedir();
 // ---------------------------------------------------------------------------
 
 /**
- * Switch to the next session needing attention.
- * Picks the session that has been waiting the longest (oldest lastTransition).
- * Validates each candidate is still alive and genuinely needs attention before switching.
+ * Rank of a pane that still needs the user, quickest reply first: tool approval 0,
+ * AskUserQuestion 1, plan approval 2, finished turn 3. Read from the live capture (ANSI
+ * stripped) because the stored attentionType can't tell these apart. Exported for tests.
+ */
+export function nextTier(plain: string, status: SessionStatus): number {
+  const bottom = plain.trimEnd().split("\n").slice(-20).join("\n");
+  if (/Would you like to proceed/i.test(bottom)) return 2;
+  if (questionPickerVisible(plain)) return 1;
+  return status === "waiting" ? 0 : 3;
+}
+
+/**
+ * Switch to the next session needing attention: the lowest `nextTier`, and within a tier
+ * the one waiting longest (oldest lastTransition). Validates each candidate is still
+ * alive and genuinely needs attention before switching.
  */
 export async function next(): Promise<void> {
   const state = await loadState();
@@ -86,6 +98,7 @@ export async function next(): Promise<void> {
 
   // Validate candidates from state: check pane still exists and session still needs attention
   let target: { paneId: string; tmuxSession: string; tmuxWindow: number } | null = null;
+  let targetTier = Infinity;
   for (const candidate of attentionSessions) {
     const [_, s] = candidate;
     if (!s.tmuxSession || s.tmuxWindow === undefined || !s.tmuxPane) continue;
@@ -122,8 +135,11 @@ export async function next(): Promise<void> {
       continue;
     }
 
-    target = { paneId: s.tmuxPane, tmuxSession: s.tmuxSession, tmuxWindow: s.tmuxWindow };
-    break;
+    const tier = nextTier(plain, result.status);
+    if (tier < targetTier) {
+      target = { paneId: s.tmuxPane, tmuxSession: s.tmuxSession, tmuxWindow: s.tmuxWindow };
+      targetTier = tier;
+    }
   }
 
   // Fallback: if state had no valid candidates, scan tmux windows for ⚡ prefixes.
@@ -150,8 +166,11 @@ export async function next(): Promise<void> {
         continue;
       }
 
-      target = { paneId: pane.paneId, tmuxSession: pane.sessionName, tmuxWindow: pane.windowIndex };
-      break;
+      const tier = nextTier(plain, result.status);
+      if (tier < targetTier) {
+        target = { paneId: pane.paneId, tmuxSession: pane.sessionName, tmuxWindow: pane.windowIndex };
+        targetTier = tier;
+      }
     }
   }
 

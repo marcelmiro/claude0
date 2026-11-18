@@ -26,11 +26,27 @@ const WAITING_PATTERNS = [
   /Would you like to proceed/i,  // Plan mode approval prompt
 ];
 
-// Patterns for AskUserQuestion UI — appears below the prompt at the bottom of the screen
-const QUESTION_UI_PATTERNS = [
-  /☐/,                           // Unchecked checkbox (AskUserQuestion options)
-  /←.*[☐✔].*→/,                 // Navigation bar with checkbox/checkmark controls
+// The AskUserQuestion widget's own tells, safe against look-alikes: the option-list
+// footer says "Enter to select" (the rewind picker says "Enter to continue", permission
+// prompts have no such footer), and the multi-question wizard adds a ←/→ checkbox nav
+// bar. Deliberately NOT the ☐ glyph alone — task-list lines reuse it, so a running
+// session's todo list would read as an open picker.
+const QUESTION_PICKER_PATTERNS = [
+  /Enter to select/, // option-list footer (single- and multi-question widgets)
+  /←.*[☐✔].*→/, // multi-question tab nav bar
 ];
+
+/**
+ * Whether an AskUserQuestion widget is visibly on the captured pane bottom.
+ * Trailing blank rows are trimmed first: a capture spans the full pane height, and on
+ * a short session the widget sits at the top of mostly-empty rows — the sample must be
+ * the bottom of the CONTENT, not the bottom of the pane. Pure classifier, exported for
+ * tests.
+ */
+export function questionPickerVisible(capturedOutput: string): boolean {
+  const bottom = capturedOutput.trimEnd().split("\n").slice(-20).join("\n");
+  return QUESTION_PICKER_PATTERNS.some((p) => p.test(bottom));
+}
 
 // A tool PERMISSION prompt (Edit/Bash/etc.) — Claude's numbered Yes/No confirmation shown
 // before a tool runs. Answered by Enter (option 1 "Yes" is pre-selected) / Escape (deny),
@@ -53,7 +69,7 @@ const PERMISSION_PROMPT_PATTERNS = [
  */
 export function isPermissionPrompt(capturedOutput: string): boolean {
   const bottom = capturedOutput.split("\n").slice(-20).join("\n");
-  if (QUESTION_UI_PATTERNS.some((p) => p.test(bottom))) return false;
+  if (questionPickerVisible(capturedOutput)) return false;
   return PERMISSION_PROMPT_PATTERNS.some((p) => p.test(bottom));
 }
 
@@ -159,12 +175,9 @@ export function detectStatus(
     }
   }
 
-  // 2. Waiting: AskUserQuestion UI appears below the prompt at the bottom of screen
-  const bottomLines = lines.slice(-15).join("\n");
-  for (const pattern of QUESTION_UI_PATTERNS) {
-    if (pattern.test(bottomLines)) {
-      return { status: "waiting", contextPercent };
-    }
+  // 2. Waiting: an AskUserQuestion widget replaces the input box at the bottom of screen
+  if (questionPickerVisible(capturedOutput)) {
+    return { status: "waiting", contextPercent };
   }
 
   // 3. Running: spinner on the status line (first line above prompt separator).

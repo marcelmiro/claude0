@@ -5,7 +5,8 @@
  */
 
 import { test, expect } from "bun:test";
-import { questionAnswerKeys, multiQuestionKeys, answerKeys, questionPickerVisible, chatRowKey, freeTextRowFocused } from "./tmux";
+import { questionAnswerKeys, multiQuestionKeys, answerKeys, chatRowKey, freeTextRowFocused } from "./tmux";
+import { questionPickerVisible } from "./status";
 
 test("single-select presses the option's 1-based digit, then Enter to submit", () => {
   expect(questionAnswerKeys(0)).toEqual(["1", "Enter"]);

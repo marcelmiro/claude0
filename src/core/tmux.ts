@@ -1,5 +1,5 @@
 import type { PaneInfo } from "../types.ts";
-import { isPermissionPrompt } from "./status";
+import { isPermissionPrompt, questionPickerVisible } from "./status";
 import { retryOnDeadline } from "./deadline";
 import { USER_SHELL } from "./launch-command";
 import { clientActivityPresence } from "./presence";
@@ -366,28 +366,6 @@ async function isAnswerReviewOpen(paneId: string): Promise<boolean> {
   await Bun.sleep(400); // let the review screen finish painting before we sample it
   const bottom = (await capturePane(paneId)).split("\n").slice(-20).join("\n");
   return /Ready to submit your answers\?|❯\s*1\.\s*Submit answers/.test(bottom);
-}
-
-// The AskUserQuestion widget's own tells, safe against look-alikes: the option-list
-// footer says "Enter to select" (the rewind picker says "Enter to continue", permission
-// prompts have no such footer), and the multi-question wizard adds a ←/→ checkbox nav
-// bar. Deliberately NOT the ☐ glyph alone — task-list lines reuse it, so a running
-// session's todo list would read as an open picker.
-const QUESTION_PICKER_PATTERNS = [
-  /Enter to select/, // option-list footer (single- and multi-question widgets)
-  /←.*[☐✔].*→/, // multi-question tab nav bar
-];
-
-/**
- * Whether an AskUserQuestion widget is visibly on the captured pane bottom.
- * Trailing blank rows are trimmed first: a capture spans the full pane height, and on
- * a short session the widget sits at the top of mostly-empty rows — the sample must be
- * the bottom of the CONTENT, not the bottom of the pane. Pure classifier, exported for
- * tests.
- */
-export function questionPickerVisible(capturedOutput: string): boolean {
-  const bottom = capturedOutput.trimEnd().split("\n").slice(-20).join("\n");
-  return QUESTION_PICKER_PATTERNS.some((p) => p.test(bottom));
 }
 
 /**
