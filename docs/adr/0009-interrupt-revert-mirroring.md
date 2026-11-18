@@ -44,7 +44,9 @@ Two send-path rules fall out of the lab findings:
   (`draft-stash-failed`) rather than splicing the message into the remnant. The exception
   is a message that carries the whole draft (portkey's "use" copies it into the composer):
   that draft is cut instead, since restoring it would invite a double send, and nothing is
-  lost — the text is in the message and Ctrl+Y recovers the cut.
+  lost — the text is in the message and Ctrl+Y recovers the cut. A cut that is never
+  yanked back leaves a held stash intact (lab, 2026-11-18); the merge recorded on
+  2026-09-30 came from the old cut followed by a C-y restore.
 - **Clear-on-revert.** After a confirmed revert-restore the pane input is cleared.
   Without this, the parked text flips every future pre-stream interrupt to a keep and
   feeds the draft guard a phantom draft forever.

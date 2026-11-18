@@ -1692,7 +1692,8 @@ async function prepareInput(
   const prompts = await submittedPrompts(sessionId);
   if (isSubmittedText(draft, prompts)) return { ok: true, draft: "discard" };
   // Claude's stash has one slot: stashing this draft would push the user's own stash out to
-  // the kill ring, and cutting it would merge it into the stash Claude pops after our submit.
+  // the kill ring. (Cutting it and yanking it back with C-y glued it to the stash Claude pops;
+  // the discards above cut without a yank, which leaves a held stash intact — lab-verified.)
   if (stashPresent(flattenStyled(styled, false))) return { ok: false, reason: "stash-occupied" };
   return { ok: true, draft: "stash" };
 }
