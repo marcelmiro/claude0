@@ -766,6 +766,11 @@ export function fixtureData(method: string, path: string, params?: URLSearchPara
   if (method === "GET" && path === "/shell") return { runs: FIXTURE_SHELL_RUNS };
   if (method === "POST" && path === "/shell") return { ok: true, run: FIXTURE_SHELL_RUNS[1] };
   if (method === "POST" && path === "/sessions/new") return { ok: true, sessionId: FIXTURE_SESSIONS[0]!.id };
+  // Dictation: a raw transcript with a mis-heard term, then the cleanup that fixes it.
+  if (method === "GET" && path === "/dictation") return { available: true };
+  if (method === "POST" && /^\/sessions\/[^/]+\/dictate$/.test(path)) return { ok: true, id: "fx-dictation", text: "Run the PR triage skill on this branch, then do a clean up of the work tree." };
+  if (method === "POST" && path === "/dictation/fx-dictation/clean") return { ok: true, text: "Run the pr-triage skill on this branch, then do a cleanup of the worktree.", guarded: false };
+  if (method === "POST" && path === "/dictation/outcome") return { ok: true };
   if (
     method === "POST" &&
     // `archive` included: its real handler now writes the inbox store even for pane-less

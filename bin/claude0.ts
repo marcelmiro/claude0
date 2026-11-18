@@ -189,6 +189,10 @@ switch (cmd) {
     // Internal — the sidebar renderer's search process (stdio JSON lines).
     await import("../src/sidebar/search-worker").then((m) => m.searchWorker());
     break;
+  case "dictation-vocab":
+    // Internal — the bridge's daily re-mine of the personal dictation vocabulary.
+    await import("../src/core/dictation-vocab").then((m) => m.runDictationVocab());
+    break;
   case "preview":
     // Internal — the sidebar's transcript preview, run inside a tmux popup.
     await import("../src/preview/viewer").then((m) => m.runPreview(process.argv[3]));
