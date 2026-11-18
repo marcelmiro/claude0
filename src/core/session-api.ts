@@ -1478,8 +1478,23 @@ export function buildSendPlan(
  * into the remnant, or type it into whatever covers the box.
  * All verified against a live pane (ADR 9).
  */
+/** The bound on each of `killInput`'s walks (Downs to the last row, then C-u kills). */
+const KILL_STEPS = 12;
+
+/**
+ * Whether `killInput` can clear the live box within its bounded walk: a hard newline can
+ * cost a second C-u, so a box taller than half the kill budget may be left half-cut.
+ */
+export function fitsKillInput(lines: string[]): boolean {
+  const top = inputBoxRow(lines);
+  if (top === -1) return false;
+  let rows = 1;
+  while (top + rows < lines.length && !BOTTOM_RULE.test(lines[top + rows]!)) rows++;
+  return rows * 2 <= KILL_STEPS;
+}
+
 async function killInput(paneId: string): Promise<boolean> {
-  for (let i = 0; i < 12; i++) {
+  for (let i = 0; i < KILL_STEPS; i++) {
     const cursor = inputCursor(await capturePane(paneId, { escapes: true }));
     if (cursor && cursor.row >= cursor.rows - 1) break;
     await sendKey(paneId, "Down");
@@ -1492,7 +1507,7 @@ async function killInput(paneId: string): Promise<boolean> {
   }
   await sendKey(paneId, "C-e");
   await Bun.sleep(KEY_GAP);
-  for (let i = 0; i < 12 && inputPending(await captureTyped(paneId)); i++) {
+  for (let i = 0; i < KILL_STEPS && inputPending(await captureTyped(paneId)); i++) {
     await sendKey(paneId, "C-u");
     await Bun.sleep(KEY_GAP);
   }
@@ -1531,9 +1546,10 @@ export function stashPresent(capture: string): boolean {
 
 /**
  * What the pane's input box holds for the phone to see: a draft's text ("" for none), Claude's
- * stash, and whether the text sits on a shell-mode prompt (a send refuses it with `shell-draft`).
+ * stash, whether the text sits on a shell-mode prompt (a send refuses it with `shell-draft`),
+ * and whether a send carrying it whole can cut it (`fitsKillInput`) rather than stash it.
  */
-export type MacDraft = { text: string; stashed: boolean; shell: boolean };
+export type MacDraft = { text: string; stashed: boolean; shell: boolean; cuttable: boolean };
 
 /**
  * Read a styled (`escapes`) capture the way `prepareInput` does: ghost text is not a draft,
@@ -1548,7 +1564,7 @@ export function parseMacDraft(styled: string): MacDraft | null {
   const shell = shellModeInput(plain);
   const text = shell ? shell.text : inputPending(typed) ? draftText(typed) : "";
   // An empty shell prompt is no draft: a send leaves it with Backspace and goes through.
-  return text || stashed ? { text, stashed, shell: !!shell?.text } : null;
+  return text || stashed ? { text, stashed, shell: !!shell?.text, cuttable: fitsKillInput(plain.split("\n")) } : null;
 }
 
 /**
@@ -1668,8 +1684,11 @@ async function prepareInput(
   if (!inputPending(typed)) return { ok: true, draft: "none" };
   const draft = draftText(typed);
   // A message carrying the whole draft (portkey's "use" copies it into the composer) is cut
-  // rather than stashed — a stash would put it back after the submit. C-y recovers it.
-  if (outgoing !== undefined && replacesDraft(draft, outgoing)) return { ok: true, draft: "discard" };
+  // rather than stashed — a stash would put it back after the submit. C-y recovers it. A
+  // draft too tall for killInput's bounded walk keeps riding the stash.
+  if (outgoing !== undefined && replacesDraft(draft, outgoing) && fitsKillInput(flattenStyled(styled, false).split("\n"))) {
+    return { ok: true, draft: "discard" };
+  }
   const prompts = await submittedPrompts(sessionId);
   if (isSubmittedText(draft, prompts)) return { ok: true, draft: "discard" };
   // Claude's stash has one slot: stashing this draft would push the user's own stash out to

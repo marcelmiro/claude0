@@ -58,6 +58,7 @@ import {
   footerFocused,
   stashPresent,
   parseMacDraft,
+  fitsKillInput,
   parseDialog,
   isModelArg,
   isEffortArg,
@@ -1472,11 +1473,12 @@ test("parseMacDraft: a typed draft, a stash, both, or nothing", () => {
     text: "row one text row two text row three text",
     stashed: false,
     shell: false,
+    cuttable: true,
   });
-  expect(parseMacDraft(fixture("viewport/stash-marker.txt"))).toEqual({ text: "", stashed: true, shell: false });
+  expect(parseMacDraft(fixture("viewport/stash-marker.txt"))).toEqual({ text: "", stashed: true, shell: false, cuttable: true });
   const both = fixture("viewport/stash-marker-draft.txt").replace("❯\u00a0\x1b[7m", "❯\u00a0typed at the Mac\x1b[7m");
   expect(both).toContain("typed at the Mac");
-  expect(parseMacDraft(both)).toEqual({ text: "typed at the Mac", stashed: true, shell: false });
+  expect(parseMacDraft(both)).toEqual({ text: "typed at the Mac", stashed: true, shell: false, cuttable: true });
   // Ghost text (a dim placeholder under the cursor cell) is an empty box.
   const ghost = "\x1b[38;5;246m❯ \x1b[7m\x1b[39mP\x1b[0;2mress up to edit queued messages\x1b[0m";
   expect(parseMacDraft([RULE, ghost, RULE].join("\n"))).toBeNull();
@@ -1484,12 +1486,20 @@ test("parseMacDraft: a typed draft, a stash, both, or nothing", () => {
   expect(parseMacDraft(fixture("viewport/model-switch-dialog.plain.txt"))).toBeNull();
 });
 
+test("fitsKillInput: a box within half the kill budget fits; a taller one, or none, doesn't", () => {
+  const box = (rows: number) => [RULE, "❯ row 1", ...Array.from({ length: rows - 1 }, (_, i) => `  row ${i + 2}`), RULE];
+  expect(fitsKillInput(box(1))).toBe(true);
+  expect(fitsKillInput(box(6))).toBe(true);
+  expect(fitsKillInput(box(7))).toBe(false);
+  expect(fitsKillInput(fixture("viewport/model-switch-dialog.plain.txt").split("\n"))).toBe(false);
+});
+
 test("parseMacDraft: a command typed on a shell-mode prompt is a shell draft; an empty one is nothing", () => {
   const hint = "  \x1b[2m! for shell mode\x1b[0m";
-  expect(parseMacDraft([RULE, "! git push", RULE, hint].join("\n"))).toEqual({ text: "git push", stashed: false, shell: true });
+  expect(parseMacDraft([RULE, "! git push", RULE, hint].join("\n"))).toEqual({ text: "git push", stashed: false, shell: true, cuttable: true });
   expect(parseMacDraft([RULE, "! ", RULE, hint].join("\n"))).toBeNull();
   // With a stash held, an empty shell prompt reads as the stash alone (a send goes through).
-  expect(parseMacDraft(["  draft stashed", RULE, "! ", RULE, hint].join("\n"))).toEqual({ text: "", stashed: true, shell: false });
+  expect(parseMacDraft(["  draft stashed", RULE, "! ", RULE, hint].join("\n"))).toEqual({ text: "", stashed: true, shell: false, cuttable: true });
   // A dim-rendered prompt glyph still frames the box (the send pre-flight checks the plain view too).
-  expect(parseMacDraft([RULE, "\x1b[2m!\x1b[0m git push", RULE, hint].join("\n"))).toEqual({ text: "git push", stashed: false, shell: true });
+  expect(parseMacDraft([RULE, "\x1b[2m!\x1b[0m git push", RULE, hint].join("\n"))).toEqual({ text: "git push", stashed: false, shell: true, cuttable: true });
 });

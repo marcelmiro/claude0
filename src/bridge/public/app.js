@@ -3398,7 +3398,7 @@ function Composer({ disabled, status }) {
     const el = ref.current;
     const md = transcript.value && transcript.value.macDraft;
     const sendText = el ? (bashRef.current && el.value ? "!" + el.value : el.value) : "";
-    setReplacesMac(!!(md && md.text && !md.shell && replacesDraft(md.text, sendText)));
+    setReplacesMac(!!(md && md.text && !md.shell && md.cuttable && replacesDraft(md.text, sendText)));
   }
   // Flip the composer's bash mode (remounting the keyed textarea). Two iOS traps live
   // here, both around the keyboard's above-keyboard pan of the page:
@@ -3971,7 +3971,7 @@ function Composer({ disabled, status }) {
   }, [composerPrefill.value]);
   const macDraft = transcript.value && transcript.value.macDraft;
   // A refreshed Mac draft re-decides "replaces" against what's already typed.
-  useEffect(syncReplacesMac, [macDraft && macDraft.text, macDraft && macDraft.shell]);
+  useEffect(syncReplacesMac, [macDraft && macDraft.text, macDraft && macDraft.shell, macDraft && macDraft.cuttable]);
   return html`
     <div class="composerwrap">
       <input ref=${trampRef} class="focustramp" tabindex="-1" aria-hidden="true" autocapitalize="none" autocorrect="off" />
@@ -4086,8 +4086,8 @@ function MacDraftNote({ draft, replaces, onUse }) {
           ? "draft at the Mac, plus a stashed one — clear one there before sending"
           : "draft at the Mac — sending sets it aside, then puts it back";
   // A pasted block or image reads as its placeholder in the capture: copying it would send
-  // the placeholder, not the content.
-  const usable = onUse && draft.text && !draft.shell && !/\[(Pasted text|Image) #\d+/.test(draft.text);
+  // the placeholder, not the content. A draft the send can't cut would come back after it.
+  const usable = onUse && draft.text && !draft.shell && draft.cuttable && !/\[(Pasted text|Image) #\d+/.test(draft.text);
   return html`<div class="macdraft">
     <div class="macdraft-body">
       ${draft.text && !replaces && html`<div class="macdraft-text">${draft.shell ? "! " + draft.text : draft.text}</div>`}
