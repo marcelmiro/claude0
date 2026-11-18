@@ -82,6 +82,12 @@ Order of one dictation:
    CLI start-up: pre-starting the process while you talk saved only ~0.3s median, so it
    isn't done.
 
+   Haiku, not Sonnet, though Sonnet is ~1.5s faster. On a 48-clip benchmark Sonnet turned
+   correct words into vocabulary terms 4–7 times per run ("CSM", "local Claude", "Camp One"
+   → "claude0"). Haiku did it at most once ("twoe" → "tmux" for a spoken "TUI") and fixed
+   about as many real mis-hearings. A prompt that spelled out "keep the speaker's grammar"
+   stopped Sonnet's grammar edits but not its term rewrites.
+
    The prompt turns the dictation into the message as you'd have typed it. It removes
    fillers and false starts, turns spoken lists into numbered lists, and writes spoken
    symbols as typed (`claude -p`, UI/UX, "iff"). It fixes mis-heard terms and leaves every
