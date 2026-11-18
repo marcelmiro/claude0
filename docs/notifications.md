@@ -36,6 +36,11 @@ prefix rules are CLAUDE.md's gotchas; ⏳ never feeds a tier
 Hook-held approvals push on their own path (`dispatchHeldApprovalPushes`), deduped by a
 `pending/<sessionId>.pushed` sidecar per hold.
 
+`claude0 next` (prefix a) jumps to the attention session whose reply is quickest — tool
+approval, then AskUserQuestion, then plan approval, then a finished turn — oldest first
+within each. It ranks from each pane's live capture (`nextTier`, `cli.ts`), not the stored
+blocked/turnComplete classification, which can't separate the three blocked kinds.
+
 ## Who drove the turn
 
 | Concern | Where |
