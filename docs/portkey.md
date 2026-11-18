@@ -70,19 +70,39 @@ Order of one dictation:
    (`insertDictation`). If you switched sessions meanwhile, it is appended to the dictating
    session's saved draft instead.
 5. **Clean.** `POST /dictation/:id/clean` runs `claude -p` (haiku) with the session's terms,
-   its recent prose, and the personal vocabulary (`cleanDictation` in `core/dictation.ts`).
-   This takes about 5s. The prompt fixes only mis-heard terms and punctuation. A result that
-   lost more than about 10% of the words (minimum 4) is discarded (`guardCleanup`), because
-   the cleanup once dropped a whole sentence. The client swaps the cleaned text in only if
-   the raw text is still in the box exactly as inserted, so an edit you make meanwhile wins.
-   The swapped words are flashed ("Fixed: myatron → Maestro").
-6. **Log and learn.** On send, `POST /dictation/outcome` appends what dictation inserted and
+   its recent prose, the personal vocabulary and the learned mis-hearings (`cleanDictation`
+   in `core/dictation.ts`). It takes about 3.5–4.5s, and the time is mostly the model, not
+   CLI start-up: pre-starting the process while you talk saved only ~0.3s median, so it
+   isn't done.
+
+   The prompt turns the dictation into the message as you'd have typed it. It removes
+   fillers and false starts, turns spoken lists into numbered lists, and writes spoken
+   symbols as typed (`claude -p`, UI/UX, "iff"). It fixes mis-heard terms and leaves every
+   other word as said. That target came from your hand edits of real dictations. A looser
+   prompt polished fluent sentences and doubled word error against typed prompts.
+
+   The client swaps the cleaned text in only if the raw text is still in the box exactly as
+   inserted, so an edit you make meanwhile wins. The swapped words are flashed
+   ("Fixed: myatron → Maestro").
+6. **Guard.** Cleanup once deleted a whole sentence. So every raw sentence with 3+ real
+   words must keep 40%+ of them, and so must the message overall; otherwise the raw text
+   is kept (`guardCleanup`). It checks per sentence, not by word count or longest run:
+   legitimate edits drop ~16% of words, and a repeated false start makes word alignment
+   ambiguous.
+7. **Log and learn.** On send, `POST /dictation/outcome` appends what dictation inserted and
    what you finally sent to `dictation-log.jsonl`. Only text is logged; no audio is kept.
-   Short word swaps you typed over the dictation ("Betsec" → "betterstack") are kept in
-   `dictation-learned.json` (`corrections`, `learnFromOutcome`). Additions, case-only edits
-   and rewrites longer than three words aren't counted. The corrected terms lead the next
-   transcription prompt, and cleanup gets the pairs as known mis-hearings. Rare terms need
-   this: history mining keeps only words used 15+ times, and "betterstack" had 6.
+   Short swaps you typed over the dictation ("Betsec" → "betterstack") are kept in
+   `dictation-learned.json` (`corrections`, `learnFromOutcome`). The corrected terms lead the
+   next transcription prompt, and cleanup gets the pairs as known mis-hearings. Rare terms
+   need this: history mining keeps only words used 15+ times, and "betterstack" had 6.
+
+   A learned pair is a rule applied to every later dictation, so a swap is kept only when:
+   - it isn't an addition, a case-only edit or a rewrite over three words;
+   - it looks like its replacement (character-bigram overlap); and
+   - a one-word background `claude -p` check confirms it's a mangled name or term.
+
+   Restructuring a message ("Number one is" → "1", "for" → "as") was otherwise being
+   learned.
 
 **Vocabulary.** The transcription prompt is length-limited. It gets the session's repo,
 branch, non-builtin skills and recently touched files, then the top 120 personal terms

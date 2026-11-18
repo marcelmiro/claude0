@@ -29,6 +29,24 @@ describe("guardCleanup", () => {
   test("allows dropping a few fillers", () => {
     expect(guardCleanup("um so uh run the tests", "so run the tests").guarded).toBe(false);
   });
+  test("allows a real dictation's fillers, false start and spoken list markers to go", () => {
+    const dictated =
+      "Um, questions. Number one is, are you using the correct styles the same way as the plus icon? The correct styles for the button, for the microphone button, has this plus icon to the left of the message input box. Two is, have you reviewed the UI UX on the microphone button to make it good enough? And three is, what model are you using for Claude Dash P?";
+    const cleaned =
+      "Questions:\n1. Are you using the correct styles the same way as the plus icon? The correct styles for the microphone button as the plus icon to the left of the message input box.\n2. Have you reviewed the UI/UX on the microphone button to make it good enough?\n3. What model are you using for claude -p?";
+    expect(guardCleanup(dictated, cleaned).guarded).toBe(false);
+  });
+  test("term fixes, 'iff' and a spoken list in a short dictation are not a loss", () => {
+    const dictated = "Um, so two things. Number one is, can you check the Betsec incidents? And two is, run the PR triage skill if and only if CI is green.";
+    const cleaned = "Two things:\n1. Can you check the betterstack incidents?\n2. Run the pr-triage skill iff CI is green.";
+    expect(guardCleanup(dictated, cleaned).guarded).toBe(false);
+  });
+  test("a cleanup that answers instead of cleaning is discarded", () => {
+    expect(guardCleanup("Can you check the betterstack incidents and tell me which are open?", "Sure — I'll check them now.").guarded).toBe(true);
+  });
+  test("a single-term fix in a short dictation is not a loss", () => {
+    expect(guardCleanup("Can you check the Betsec incidents?", "Can you check the betterstack incidents?").guarded).toBe(false);
+  });
   test("an empty cleanup is guarded", () => {
     expect(guardCleanup("run the tests", "  ")).toEqual({ final: "run the tests", guarded: true });
   });
