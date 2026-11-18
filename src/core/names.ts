@@ -7,7 +7,7 @@ const CLAUDE0_ROOT = process.env.CLAUDE0_HOME ?? homedir();
 const NAMING_LOCK = `${CLAUDE0_ROOT}/.config/claude0/naming.lock`;
 
 /** Resolve the full path to `claude` CLI, searching common install locations beyond PATH. */
-function resolveClaudePath(): string {
+export function resolveClaudePath(): string {
   const found = Bun.which("claude");
   if (found) return found;
   // tmux #() inherits a limited PATH — check common install locations

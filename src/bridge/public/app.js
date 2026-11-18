@@ -127,6 +127,7 @@ const tick = signal(Date.now());
 // The daemon's inbox snapshot is older than 10s (or absent) — sections render from the
 // last known state with a banner. Server-computed.
 const inboxStale = signal(false);
+const dictationAvailable = signal(false); // host has an OpenAI key → the composer shows a mic
 // Recently-done stays collapsed by default (a day of archives is screen bloat, and the
 // section is an archive entry point, not a queue) — tap its header to expand. Not
 // persisted: every launch starts collapsed.
@@ -915,6 +916,9 @@ const REASON_TEXT = {
   "stale-dialog": "the dialog changed — try again",
   "no-dialog": "the dialog is already gone",
   "stash-occupied": "a stashed draft is waiting at the Mac (Ctrl+S) — resolve it there first",
+  "dictation-unavailable": "dictation isn't set up on the host",
+  "transcribe-failed": "transcription failed — try again",
+  "no-audio": "the recording came out empty",
 };
 const reasonText = (data, status) => REASON_TEXT[data.reason] || data.reason || status;
 
@@ -3209,6 +3213,83 @@ function BangRunningTag({ since }) {
 // unsent text. Written from syncHasText — the one choke point every el.value
 // mutation already calls — so sending (value → "") clears the entry for free.
 // Best-effort: storage failures are swallowed. Bounded to the newest 20 sessions.
+// --- Dictation (ADR 37, docs/portkey.md § Dictation) ---
+// One mic stream for the page's life: iOS asks permission once per app launch and a
+// stopped stream re-prompts sooner. A long-idle track can stay "live" yet deliver silence
+// (exact zeros) for seconds after recording starts — the first words were lost that way —
+// so the button only turns red once real samples arrive (a mic's noise floor is never 0).
+const DICTATION_HOLD_MS = 350;
+const mic = { stream: null, actx: null, analyser: null, analysed: null };
+async function ensureMic() {
+  const track = mic.stream && mic.stream.getAudioTracks()[0];
+  if (!track || track.readyState !== "live") {
+    mic.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+  }
+  mic.actx = mic.actx || new AudioContext();
+  if (mic.actx.state !== "running") await mic.actx.resume().catch(() => {});
+  if (mic.analysed !== mic.stream) {
+    mic.analyser = mic.actx.createAnalyser();
+    mic.actx.createMediaStreamSource(mic.stream).connect(mic.analyser);
+    mic.analysed = mic.stream;
+  }
+}
+function whenAudioFlows(stillRecording, onLive) {
+  const buf = new Float32Array(mic.analyser.fftSize);
+  const t0 = performance.now();
+  const tick = () => {
+    if (!stillRecording()) return;
+    mic.analyser.getFloatTimeDomainData(buf);
+    if (buf.some((v) => v !== 0) || performance.now() - t0 > 8000) return onLive();
+    requestAnimationFrame(tick);
+  };
+  tick();
+}
+function startRecorder() {
+  const mimeType = ["audio/mp4", "audio/webm;codecs=opus"].find((m) => MediaRecorder.isTypeSupported(m)) || "";
+  const rec = new MediaRecorder(mic.stream, mimeType ? { mimeType } : undefined);
+  const chunks = [];
+  rec.ondataavailable = (e) => {
+    if (e.data.size) chunks.push(e.data);
+  };
+  rec.start(1000); // timesliced: an un-sliced Safari WebM recording once kept only its 5-byte tail
+  return {
+    stop: () =>
+      new Promise((resolve) => {
+        rec.onstop = () => resolve(new Blob(chunks, { type: rec.mimeType || mimeType }));
+        rec.stop();
+      }),
+  };
+}
+// The word swaps cleanup made ("myatron → Maestro"), ignoring punctuation/case-only edits.
+function wordChanges(a, b) {
+  const x = a.split(/\s+/).filter(Boolean);
+  const y = b.split(/\s+/).filter(Boolean);
+  const L = Array.from({ length: x.length + 1 }, () => new Array(y.length + 1).fill(0));
+  for (let i = x.length - 1; i >= 0; i--)
+    for (let j = y.length - 1; j >= 0; j--) L[i][j] = x[i] === y[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const norm = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const out = [];
+  let del = [];
+  let ins = [];
+  const flush = () => {
+    if ((del.length || ins.length) && norm(del.join(" ")) !== norm(ins.join(" "))) out.push(`${del.join(" ") || "∅"} → ${ins.join(" ") || "∅"}`);
+    del = [];
+    ins = [];
+  };
+  let i = 0;
+  let j = 0;
+  while (i < x.length || j < y.length) {
+    if (i < x.length && j < y.length && x[i] === y[j]) {
+      flush();
+      i++;
+      j++;
+    } else if (j < y.length && (i === x.length || L[i][j + 1] >= L[i + 1][j])) ins.push(y[j++]);
+    else del.push(x[i++]);
+  }
+  flush();
+  return out;
+}
+
 const DRAFTS_KEY = "claude0-drafts";
 function readDrafts() {
   try {
@@ -3259,6 +3340,12 @@ function Composer({ disabled, status }) {
   const [, forceRender] = useState(0);
   const rerender = () => forceRender((n) => (n + 1) & 0xffff);
   const sid = selectedId.value; // read in render so the component re-subscribes on session switch
+  // Dictation. The button face: "idle" | "warm" (recording, no audio yet) | "rec" | "busy".
+  // `dict` holds the press state machine in a ref so pointer handlers never read stale state:
+  // phase "idle" → "arming" (acquiring the mic) → "recording" → "busy" (transcribing).
+  const [dictFace, setDictFace] = useState("idle");
+  const dict = useRef({ phase: "idle", downAt: 0, toggle: false, cancel: false, recorder: null, liveAt: 0, timer: null });
+  const dictations = useRef([]); // { raw, final } inserted into this draft — logged on send
   function grow() {
     const el = ref.current;
     if (!el) return;
@@ -3465,6 +3552,141 @@ function Composer({ disabled, status }) {
     attachments.value = attachments.value.filter((a) => a.url !== url);
     URL.revokeObjectURL(url);
   }
+  // Mic press: a tap (< DICTATION_HOLD_MS) toggles recording on until the next tap; a
+  // hold records until release. Either way the stop transcribes and inserts at the caret.
+  async function micDown(e) {
+    e.preventDefault();
+    const d = dict.current;
+    if (d.phase === "recording" && d.toggle) return finishDictation();
+    if (d.phase !== "idle") return;
+    d.phase = "arming";
+    d.downAt = performance.now();
+    d.toggle = false;
+    d.cancel = false;
+    try {
+      await ensureMic();
+    } catch (err) {
+      d.phase = "idle";
+      return flashError(`✗ mic unavailable: ${err.message || err}`);
+    }
+    if (d.cancel) {
+      d.phase = "idle";
+      return flashNotice("The mic was still starting — hold again");
+    }
+    d.recorder = startRecorder();
+    d.phase = "recording";
+    d.liveAt = 0;
+    setDictFace("warm");
+    whenAudioFlows(
+      () => dict.current.phase === "recording",
+      () => {
+        d.liveAt = performance.now();
+        setDictFace("rec");
+        d.timer = setInterval(rerender, 250); // the face shows elapsed seconds
+      },
+    );
+  }
+  function micUp(e) {
+    e.preventDefault();
+    const d = dict.current;
+    const held = performance.now() - d.downAt >= DICTATION_HOLD_MS;
+    // Released while the mic was still being acquired: a short tap still means "toggle on";
+    // a hold that ended before recording started had nothing captured.
+    if (d.phase === "arming") return held ? (d.cancel = true) : (d.toggle = true);
+    if (d.phase === "recording" && !d.toggle) {
+      if (held) finishDictation();
+      else d.toggle = true;
+    }
+  }
+  function stopDictationTimer() {
+    clearInterval(dict.current.timer);
+    dict.current.timer = null;
+  }
+  async function finishDictation() {
+    const d = dict.current;
+    d.phase = "busy";
+    stopDictationTimer();
+    setDictFace("busy");
+    const spokeMs = d.liveAt ? performance.now() - d.liveAt : 0;
+    const blob = await d.recorder.stop();
+    d.recorder = null;
+    const forSid = selectedId.value;
+    const done = () => {
+      d.phase = "idle";
+      setDictFace("idle");
+    };
+    if (spokeMs < 500 || blob.size < 1024) return done();
+    const fd = new FormData();
+    fd.append("audio", blob, "dictation");
+    let res;
+    try {
+      const r = await fetch(`/sessions/${encodeURIComponent(forSid)}/dictate`, { method: "POST", body: fd, signal: AbortSignal.timeout(60_000) });
+      res = await r.json().catch(() => ({ ok: false, reason: String(r.status) }));
+    } catch (err) {
+      res = { ok: false, reason: err.name === "TimeoutError" ? "transcribe-failed" : "bridge unreachable" };
+    }
+    done(); // the mic is free again while cleanup runs
+    if (!res.ok) return flashError(`✗ ${reasonText(res, "")}`);
+    if (!res.text) return;
+    const entry = { raw: res.text, final: res.text };
+    if (!insertDictation(forSid, res.text)) return; // landed in another session's saved draft
+    dictations.current.push(entry);
+    if (res.id) cleanDictation(forSid, res.id, entry);
+  }
+  // Insert at the caret (or replace the selection), spaced from its neighbours. If the user
+  // switched sessions mid-transcription, append to the dictating session's saved draft.
+  function insertDictation(forSid, text) {
+    const el = ref.current;
+    if (selectedId.value !== forSid || !el) {
+      const prev = (readDrafts()[forSid] || {}).text || "";
+      saveDraft(forSid, prev ? `${prev.replace(/\s+$/, "")} ${text}` : text);
+      return false;
+    }
+    const start = el.selectionStart ?? el.value.length;
+    const end = el.selectionEnd ?? start;
+    const before = el.value.slice(0, start);
+    const after = el.value.slice(end);
+    const lead = before && !/\s$/.test(before) ? " " : "";
+    const trail = after && !/^\s/.test(after) ? " " : "";
+    el.value = before + lead + text + trail + after;
+    const caret = start + lead.length + text.length;
+    el.setSelectionRange(caret, caret);
+    grow();
+    syncHasText();
+    return true;
+  }
+  // Swap the raw transcript for the cleaned text — only while it's still in the box exactly
+  // as inserted, so an edit made during the ~5s cleanup always wins.
+  async function cleanDictation(forSid, id, entry) {
+    let res;
+    try {
+      const r = await fetch(`/dictation/${encodeURIComponent(id)}/clean`, { method: "POST", signal: AbortSignal.timeout(45_000) });
+      res = await r.json();
+    } catch {
+      return; // the raw transcript stays — cleanup is an improvement, not a requirement
+    }
+    if (!res || !res.ok || !res.text || res.text === entry.raw) return;
+    const el = ref.current;
+    if (selectedId.value !== forSid || !el) return;
+    const at = el.value.indexOf(entry.raw);
+    if (at < 0 || el.value.indexOf(entry.raw, at + 1) >= 0) return;
+    el.value = el.value.slice(0, at) + res.text + el.value.slice(at + entry.raw.length);
+    if (document.activeElement === el) el.setSelectionRange(at + res.text.length, at + res.text.length);
+    entry.final = res.text;
+    grow();
+    syncHasText();
+    const changes = wordChanges(entry.raw, res.text);
+    if (changes.length) flashNotice(`Fixed: ${changes.slice(0, 3).join(", ")}${changes.length > 3 ? ` (+${changes.length - 3})` : ""}`);
+  }
+  // Fire-and-forget: what dictation inserted vs what was finally sent (tuning signal).
+  function logDictations(forSid, sent, list) {
+    if (!list.length) return;
+    fetch("/dictation/outcome", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sessionId: forSid, dictations: list, sent }),
+    }).catch(() => {});
+  }
   async function send() {
     const el = ref.current;
     if (!el) return;
@@ -3476,6 +3698,8 @@ function Composer({ disabled, status }) {
     const items = attachments.value;
     if ((bashRef.current ? !el.value.trim() : !text.trim()) && items.length === 0) return;
     const sid = selectedId.value;
+    const dictated = dictations.current;
+    dictations.current = [];
     el.value = "";
     grow();
     syncHasText();
@@ -3491,6 +3715,7 @@ function Composer({ disabled, status }) {
       lastSentText.set(sid, text); // restore-on-interrupt candidate
       const ok = await action(`/sessions/${encodeURIComponent(sid)}/message`, { text }, { pushed: true });
       if (ok && text.trim().startsWith("!")) deliveredBangs.value = [...deliveredBangs.value, { text, at: Date.now() }];
+      if (ok) logDictations(sid, text, dictated);
       if (!ok) {
         clearStatusOverlay(sid); // never reached the pane — no turn is starting
         const idx = pendingSends.value.lastIndexOf(text);
@@ -3513,6 +3738,7 @@ function Composer({ disabled, status }) {
     pendingImageSends.value = [...pendingImageSends.value, entry];
     attachments.value = [];
     const ok = await actionForm(`/sessions/${encodeURIComponent(sid)}/message`, fd);
+    if (ok) logDictations(sid, text, dictated);
     if (!ok) {
       clearStatusOverlay(sid); // never reached the pane — no turn is starting
       // Restore so nothing is silently lost; keep the URLs alive for the retry.
@@ -3653,7 +3879,18 @@ function Composer({ disabled, status }) {
     // setComposerText re-enters bash mode for any `!`-leading text.
     const d = readDrafts()[sid];
     setComposerText(d ? d.text : "");
+    dictations.current = []; // they belonged to the outgoing session's draft
   }, [sid]);
+  // Leaving the thread mid-recording discards the take (the mic stream itself stays warm).
+  useEffect(
+    () => () => {
+      const d = dict.current;
+      clearInterval(d.timer);
+      if (d.phase === "recording" && d.recorder) d.recorder.stop();
+      d.phase = "idle";
+    },
+    [],
+  );
   // One-shot autofill after a rewind: drop the rewound message back into the box (TUI parity).
   // Guarded on sessionId so a stale prefill never lands in the wrong session's composer; the
   // steady-state/mount re-fire (value null) is a no-op.
@@ -3733,6 +3970,28 @@ function Composer({ disabled, status }) {
               onInput=${onInput}
               onPaste=${onPaste}
             ></textarea>`}
+        ${dictationAvailable.value &&
+        !bashMode &&
+        !disabled &&
+        html`<button
+          class=${"mic " + dictFace}
+          onPointerDown=${micDown}
+          onPointerUp=${micUp}
+          onPointerCancel=${micUp}
+          onContextMenu=${(e) => e.preventDefault()}
+          aria-label=${dictFace === "idle" ? "Dictate" : dictFace === "busy" ? "Transcribing" : "Stop dictating"}
+        >
+          ${dictFace === "rec"
+            ? `${Math.floor((performance.now() - dict.current.liveAt) / 1000)}s`
+            : dictFace === "busy"
+              ? "…"
+              : dictFace === "warm"
+                ? "wait"
+                : html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="9" y="3" width="6" height="11" rx="3" />
+                    <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
+                  </svg>`}
+        </button>`}
         ${!hasText && attachments.value.length === 0 && status === "running" && !disabled
           ? html`<button
               class=${"stop" + (stopArmed.current ? " armed" : "")}
@@ -5678,6 +5937,10 @@ refreshSessions()
       followNotificationTap(); // also clears the shade + badge
       connectStream();
       initPush();
+      fetch("/dictation")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => (dictationAvailable.value = !!(d && d.available)))
+        .catch(() => {});
     }
   })
   .finally(boot);

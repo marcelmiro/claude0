@@ -847,6 +847,29 @@
         font-size: 22px;
         line-height: 1;
       }
+      /* Dictation mic: tap toggles, hold talks. warm = recording but the mic hasn't delivered
+         audio yet (wait); rec = speak now; busy = transcribing. */
+      .composer .mic {
+        flex: none;
+        width: 40px;
+        height: 40px;
+        padding: 0;
+        border: 1px solid var(--dim);
+        border-radius: 50%;
+        background: var(--surface);
+        color: var(--muted);
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+        line-height: 1;
+        touch-action: none;
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
+      }
+      .composer .mic svg { width: 18px; height: 18px; vertical-align: middle; }
+      .composer .mic.warm { background: var(--peach); border-color: var(--peach); color: var(--bg); }
+      .composer .mic.rec { background: var(--red); border-color: var(--red); color: var(--bg); }
+      .composer .mic.busy { color: var(--dim); }
       /* staged-attachment thumbnails above the textarea */
       .thumbs { display: flex; flex-wrap: wrap; gap: 8px; padding: 2px 4px 8px; }
       .thumb { position: relative; width: 56px; height: 56px; }

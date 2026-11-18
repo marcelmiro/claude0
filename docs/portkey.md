@@ -43,6 +43,60 @@ already at the top after tapping +, then **All** repos A–Z (`NewSession`).
 - The sidebar's `n` mode is a separate surface: it keeps `discoverRepos` order (repos with a
   live session, then A–Z) and has no Recent section.
 
+## Dictation
+
+Why it records in the app instead of using the iOS keyboard or Web Speech:
+[ADR 37](adr/0037-dictation-records-in-the-app-and-transcribes-on-the-host.md). The composer
+shows a mic only when the host has `~/.config/claude0/openai-key` (`GET /dictation`).
+
+Order of one dictation:
+
+1. **Press.** A tap toggles recording until the next tap; a hold records until release
+   (`micDown`/`micUp`, 350ms threshold). One mic stream lives for the page's lifetime
+   (`ensureMic`): iOS asks permission once per app launch and re-prompts sooner for a
+   stopped stream.
+2. **Wait, then speak.** The button is peach ("wait") until real samples arrive, then red.
+   A long-idle iOS track stays `live` but delivers exact zeros for seconds after recording
+   starts; that silently cut the first ~3.5s off a prompt. A mic's noise floor is never
+   exactly zero, so the first non-zero sample means audio is flowing (`whenAudioFlows`).
+3. **Transcribe.** `POST /sessions/:id/dictate` (multipart `audio`) sends the recording to
+   OpenAI `gpt-transcribe` with a vocabulary hint, and returns the raw text in about 1s. The
+   recorder is timesliced (`start(1000)`), and the container is sniffed from the bytes
+   (`audioExt`). An un-sliced Safari WebM recording once arrived as just its 5-byte tail,
+   with an empty MIME type.
+4. **Insert.** The raw text goes in at the caret, spaced from its neighbours
+   (`insertDictation`). If you switched sessions meanwhile, it is appended to the dictating
+   session's saved draft instead.
+5. **Clean.** `POST /dictation/:id/clean` runs `claude -p` (haiku) with the session's terms,
+   its recent prose, and the personal vocabulary (`cleanDictation` in `core/dictation.ts`).
+   This takes about 5s. The prompt fixes only mis-heard terms and punctuation. A result that
+   lost more than about 10% of the words (minimum 4) is discarded (`guardCleanup`), because
+   the cleanup once dropped a whole sentence. The client swaps the cleaned text in only if
+   the raw text is still in the box exactly as inserted, so an edit you make meanwhile wins.
+   The swapped words are flashed ("Fixed: myatron → Maestro").
+6. **Log.** On send, `POST /dictation/outcome` appends what dictation inserted and what you
+   finally sent to `dictation-log.jsonl`. The gap between them is the real-world error
+   signal for tuning. Only text is logged; no audio is kept.
+
+**Vocabulary.** The transcription prompt is length-limited. It gets the session's repo,
+branch, non-builtin skills and recently touched files, then the top 120 personal terms
+(`buildContext`). Cleanup gets everything.
+
+The personal terms come from every prompt you've sent Claude Code. Session context alone
+missed "DNC", "Maestro" and "EmailBison" whenever you dictated about another topic.
+
+- **Where it runs.** `claude0 dictation-vocab` mines them. The bridge launches it in the
+  background when `dictation-vocab.json` is missing or more than a day old
+  (`refreshVocabIfStale`).
+- **Memory.** The history is ~13GB, so mining reads it with `shortJsonlLines`, which skips
+  lines over 64KB without decoding them. Decoding every line, as `jsonlLines` does, peaked
+  at 1.6GB RSS; skipping them takes ~150MB.
+- **Kept by shape.** Acronyms used mostly in caps, and identifier-shaped words. The
+  identifier spelling is canonical ("CustomerOS", not the "customeros" you type).
+- **Judged by Claude.** The remaining frequent words go to batched `claude -p` calls that
+  keep the domain terms. Their output is matched back against the batch, so a hallucinated
+  term can't enter.
+
 ## iOS status bar (installed PWA, iOS 27)
 
 The fix is the `.status-bar-background` strip (`index.html`; its comment explains the

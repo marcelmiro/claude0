@@ -105,5 +105,6 @@ Processes & caches:
 | Search: conversation prose through an FTS5 index | [36](docs/adr/0036-search-matches-prose-through-an-fts5-index.md) | [search](docs/search.md) | `core/search.ts`, `core/search-index.ts` |
 | Transcript stitching across project dirs, compact-link recovery | [29](docs/adr/0029-transcripts-span-project-dirs.md) |  | `core/last-turn.ts`, `core/transcript.ts`, `core/session-api.ts` |
 | Portkey shell (one-shot host command runner) | [30](docs/adr/0030-portkey-shell-is-a-one-shot-runner.md) | | `core/shell-run.ts`, `bridge/server.ts` |
+| Portkey dictation: in-app recording, OpenAI transcription, `claude -p` cleanup, personal vocabulary | [37](docs/adr/0037-dictation-records-in-the-app-and-transcribes-on-the-host.md) | [portkey](docs/portkey.md) (Dictation) | `core/dictation.ts`, `core/dictation-vocab.ts`, `bridge/public/app.js` |
 | Portkey served on its own port, not the host's bare URL | [32](docs/adr/0032-portkey-serves-on-its-own-port.md) | | `core/provision.ts`, `core/doctor.ts` |
 | Bridge access control: no token — bind address or the tailnet owner, same-origin only | [33](docs/adr/0033-bridge-access-is-identity-not-a-token.md) | | `bridge/request-guard.ts`, `bridge/server.ts` |

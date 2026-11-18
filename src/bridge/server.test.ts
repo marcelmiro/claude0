@@ -10,7 +10,9 @@
 
 import "../../test/helpers/home";
 import { test, expect, beforeAll, afterAll } from "bun:test";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { PATHS } from "../core/config";
+import { DICTATION_LOG_PATH, OPENAI_KEY_PATH } from "../core/dictation";
 import { EVENTS_DIR } from "../core/hook-events";
 import { CONSUMERS_DIR, fromB64url } from "../core/web-push";
 import { startBridge, applyTail, gzipJson, isAllowedHost } from "./server";
@@ -313,6 +315,31 @@ test("/sessions/:id/snooze takes a preset, or an until (ms or ISO) with a wake p
   for (const bad of [{ until: Date.now() - 1 }, { until: "not a time" }, { until: soon, prompt: "  " }, { preset: "2h" }, {}]) {
     expect((await post("/sessions/snz-bad/snooze", bad)).status).toBe(400);
   }
+});
+
+test("dictation is off without an OpenAI key, and validates input before any network call once on", async () => {
+  expect(await (await get("/dictation")).json()).toEqual({ available: false });
+  const dictate = (id: string) => {
+    const fd = new FormData();
+    fd.append("audio", new Blob([new Uint8Array(10)]), "a");
+    return fetch(`${base}/sessions/${id}/dictate`, { method: "POST", body: fd });
+  };
+  expect((await dictate("abc")).status).toBe(409);
+
+  mkdirSync(PATHS.dir, { recursive: true });
+  writeFileSync(OPENAI_KEY_PATH, "sk-test\n");
+  expect(await (await get("/dictation")).json()).toEqual({ available: true });
+  expect((await dictate("bad%20id")).status).toBe(400);
+  expect(await (await dictate("abc")).json()).toEqual({ ok: false, reason: "no-audio" }); // 10 bytes: not a recording
+  expect((await post("/dictation/unknown/clean", {})).status).toBe(404);
+});
+
+test("/dictation/outcome logs what was dictated against what was sent", async () => {
+  expect((await post("/dictation/outcome", { sessionId: "s1", sent: "x", dictations: [] })).status).toBe(400);
+  const res = await post("/dictation/outcome", { sessionId: "s1", sent: "run pr-triage", dictations: [{ raw: "run PR triage", final: "run pr-triage" }] });
+  expect(res.status).toBe(200);
+  const line = JSON.parse(readFileSync(DICTATION_LOG_PATH, "utf8").trim().split("\n").at(-1)!);
+  expect(line).toMatchObject({ sessionId: "s1", sent: "run pr-triage", dictations: [{ raw: "run PR triage", final: "run pr-triage" }] });
 });
 
 test("the bridge binds loopback only — a tailnet bind would take identity headers at face value", () => {

@@ -59,7 +59,9 @@ import { isValidSessionId, resolveTranscriptPath, resolveTranscriptPaths } from 
 import { homedir } from "os";
 import { discoverRepos, getBaseRepoPath } from "../core/git";
 import { recentRepos } from "../core/recent-repos";
-import { listSlashCommands } from "../core/skills";
+import { listSlashCommands, type SlashCommand } from "../core/skills";
+import { buildContext, cleanDictation, logDictationOutcome, openaiKey, rememberDictation, takeDictation, transcribe, type DictationContext } from "../core/dictation";
+import { readPersonalVocab, refreshVocabIfStale } from "../core/dictation-vocab";
 import { repoRootForSession, safeRepoPath, fileDiff, rangeDiff, branchChanges } from "../core/repo-files";
 import { branchPullRequest, type PullRequestInfo } from "../core/pull-request";
 import { recoverWorktreeTranscript } from "../core/recover";
@@ -159,6 +161,19 @@ let tailnetTriedAt = 0;
 let tailnetRead: Promise<void> | null = null;
 let tailnetProblem = "";
 const TAILSCALE = Bun.which("tailscale") ?? "tailscale";
+
+/** The session's terms, skills, recent prose and the personal vocabulary, for one dictation. */
+async function dictationContextFor(sessionId: string): Promise<DictationContext> {
+  const [payload, skills, tx] = await Promise.all([
+    sessionsPayload().catch(() => null),
+    sessionSkills(sessionId).catch(() => []),
+    getTranscript(sessionId).catch(() => null),
+  ]);
+  const rows = (payload as { sessions?: { id: string; repo?: string; branch?: string }[] } | null)?.sessions ?? [];
+  const row = rows.find((s) => s.id === sessionId);
+  const skillNames = (Array.isArray(skills) ? (skills as SlashCommand[]) : []).filter((k) => k.source !== "builtin").map((k) => k.name);
+  return buildContext({ repo: row?.repo, branch: row?.branch, skills: skillNames, turns: tx?.turns ?? [], personal: readPersonalVocab()?.terms ?? [] });
+}
 
 /**
  * Re-read the node's MagicDNS name and owner login. Bounded by probe's deadline, and
@@ -1504,6 +1519,53 @@ async function route(req: Request): Promise<Response> {
   const skills = path.match(/^\/sessions\/([^/]+)\/skills$/);
   if (method === "GET" && skills) {
     return json(await sessionSkills(decodeURIComponent(skills[1]!)));
+  }
+
+  // --- Dictation (ADR 37, docs/portkey.md § Dictation): transcribe returns the raw text
+  // fast; the client then asks for the cleanup, which reuses the context gathered here. ---
+  if (method === "GET" && path === "/dictation") return json({ available: !!openaiKey() });
+
+  const dictate = path.match(/^\/sessions\/([^/]+)\/dictate$/);
+  if (method === "POST" && dictate) {
+    const id = decodeURIComponent(dictate[1]!);
+    if (!isValidSessionId(id)) return json({ ok: false, reason: "bad-id" }, 400);
+    const key = openaiKey();
+    if (!key) return json({ ok: false, reason: "dictation-unavailable" }, 409);
+    const form = await req.formData().catch(() => null);
+    const audio = form?.get("audio");
+    if (!(audio instanceof File) || audio.size < 1024) return json({ ok: false, reason: "no-audio" }, 400);
+    refreshVocabIfStale();
+    const ctx = await dictationContextFor(id);
+    const r = await transcribe(audio, ctx, key);
+    if ("error" in r) {
+      console.error(`dictation: transcribe failed: ${r.error}`);
+      return json({ ok: false, reason: r.error === "unsupported-audio" ? "no-audio" : "transcribe-failed" }, 502);
+    }
+    if (!r.text) return json({ ok: true, id: null, text: "" });
+    return json({ ok: true, id: rememberDictation({ sessionId: id, raw: r.text, ctx }), text: r.text });
+  }
+
+  const dictClean = path.match(/^\/dictation\/([^/]+)\/clean$/);
+  if (method === "POST" && dictClean) {
+    const p = takeDictation(decodeURIComponent(dictClean[1]!));
+    if (!p) return json({ ok: false, reason: "not-found" }, 404);
+    const r = await cleanDictation(p.raw, p.ctx);
+    if ("error" in r) {
+      console.error(`dictation: cleanup failed: ${r.error}`);
+      return json({ ok: false, reason: "clean-failed" }, 502);
+    }
+    if (r.guarded) console.error("dictation: cleanup dropped words; kept the raw transcript");
+    return json({ ok: true, text: r.final, guarded: r.guarded });
+  }
+
+  if (method === "POST" && path === "/dictation/outcome") {
+    const b = (await req.json().catch(() => ({}))) as { sessionId?: unknown; sent?: unknown; dictations?: unknown };
+    const dictations = Array.isArray(b.dictations)
+      ? b.dictations.filter((d): d is { raw: string; final: string } => typeof d?.raw === "string" && typeof d?.final === "string")
+      : [];
+    if (typeof b.sessionId !== "string" || typeof b.sent !== "string" || !dictations.length) return json({ ok: false, reason: "bad-request" }, 400);
+    logDictationOutcome({ sessionId: b.sessionId, dictations: dictations.map(({ raw, final }) => ({ raw, final })), sent: b.sent });
+    return json({ ok: true });
   }
 
   // --- Repo-scoped read-only diff access (Portkey Layer 1) — containment-guarded to the
