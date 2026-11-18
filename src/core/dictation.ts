@@ -167,10 +167,26 @@ const tokens = (s: string) => s.split(/\s+/).filter(Boolean);
 const bare = (s: string) => s.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
 const folded = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
 
+/** Dice overlap of character bigrams — how alike two strings look/sound, 0..1. */
+function similarity(a: string, b: string): number {
+  const grams = (s: string) => Array.from({ length: Math.max(0, s.length - 1) }, (_, i) => s.slice(i, i + 2));
+  const ga = grams(a), gb = grams(b);
+  if (!ga.length || !gb.length) return 0;
+  const pool = [...gb];
+  let hits = 0;
+  for (const g of ga) {
+    const k = pool.indexOf(g);
+    if (k >= 0) { hits++; pool.splice(k, 1); }
+  }
+  return (2 * hits) / (ga.length + gb.length);
+}
+
 /**
- * Short word swaps between what dictation inserted and what you sent — the hand
- * corrections ("Betsec" → "betterstack"). Additions, deletions, case/punctuation-only
- * edits and rewrites longer than three words aren't corrections, so they're skipped.
+ * Short word swaps between what dictation inserted and what you sent that look like a
+ * mis-heard term ("Betsec" → "betterstack", "Claude Dash P" → "claude -p"). Additions,
+ * deletions, case/punctuation-only edits, rewrites longer than three words, and swaps that
+ * don't resemble each other are your edits, not mis-hearings — restructuring a message
+ * ("Number one is" → "1", "for" → "as") must never become a rule cleanup applies.
  */
 export function corrections(inserted: string, sent: string): { heard: string; meant: string }[] {
   const x = tokens(inserted), y = tokens(sent);
@@ -181,7 +197,8 @@ export function corrections(inserted: string, sent: string): { heard: string; me
   let del: string[] = [], ins: string[] = [];
   const flush = () => {
     const heard = bare(del.join(" ")), meant = bare(ins.join(" "));
-    if (del.length && ins.length && del.length <= 3 && ins.length <= 3 && heard && meant && folded(heard) !== folded(meant)) out.push({ heard, meant });
+    const h = folded(heard), m = folded(meant);
+    if (del.length && ins.length && del.length <= 3 && ins.length <= 3 && h !== m && m.length >= 3 && similarity(h, m) >= 0.25) out.push({ heard, meant });
     del = []; ins = [];
   };
   let i = 0, j = 0;
@@ -214,12 +231,24 @@ export function mergeCorrections(prev: Correction[], found: { heard: string; mea
   return [...byKey.values()].sort((a, b) => b.at - a.at).slice(0, MAX_LEARNED);
 }
 
-export function learnFromOutcome(dictations: { final: string }[], sent: string): void {
+const TERM_CHECK_SYSTEM = `A developer dictated a message; speech-to-text wrote HEARD and they corrected it by hand to MEANT. Answer "yes" only if MEANT is a name, product, tool, command or piece of jargon and HEARD is speech-to-text mangling of it. Answer "no" for ordinary-word edits, grammar fixes and rephrasing. Reply with one word: yes or no.`;
+
+/**
+ * Learn the hand corrections in a sent message. Each look-alike swap is confirmed by a
+ * one-word `claude -p` check first: a learned pair becomes a rule cleanup applies to every
+ * later dictation, so an ordinary-word edit ("the" → "they") must never get in.
+ */
+export async function learnFromOutcome(dictations: { final: string }[], sent: string): Promise<void> {
   const found = corrections(dictations.map((d) => d.final).join(" "), sent);
-  if (!found.length) return;
+  const confirmed: typeof found = [];
+  for (const c of found) {
+    const r = await claudePrint({ system: TERM_CHECK_SYSTEM, input: `HEARD: ${c.heard}\nMEANT: ${c.meant}`, timeoutMs: 20_000 });
+    if ("text" in r && /^yes\b/i.test(r.text)) confirmed.push(c);
+  }
+  if (!confirmed.length) return;
   try {
     mkdirSync(PATHS.dir, { recursive: true });
-    writeAtomic(LEARNED_PATH, JSON.stringify({ corrections: mergeCorrections(readLearned(), found) }));
+    writeAtomic(LEARNED_PATH, JSON.stringify({ corrections: mergeCorrections(readLearned(), confirmed) }));
   } catch { /* best-effort */ }
 }
 

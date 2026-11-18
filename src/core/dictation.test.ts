@@ -62,6 +62,11 @@ describe("corrections", () => {
       { heard: "Betsec", meant: "betterstack" },
     ]);
   });
+  test("restructuring a dictated message into a list proposes no corrections", () => {
+    const raw = "Um, questions. Number one is, are you using the right styles? The correct styles for the button, for the microphone button, has this plus icon. And three is, what model are you using?";
+    const sent = "questions:\n1. are you using the right styles? That is the correct styles for the microphone button as the plus icon.\n3. what model are you using?";
+    expect(corrections(raw, sent)).toEqual([]);
+  });
   test("additions, case/punctuation-only edits and long rewrites are not corrections", () => {
     expect(corrections("run the tests", "run the tests, then open a PR")).toEqual([]);
     expect(corrections("portkey works.", "Portkey works")).toEqual([]);

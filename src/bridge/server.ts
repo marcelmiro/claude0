@@ -1573,7 +1573,7 @@ async function route(req: Request): Promise<Response> {
       : [];
     if (typeof b.sessionId !== "string" || typeof b.sent !== "string" || !dictations.length) return json({ ok: false, reason: "bad-request" }, 400);
     logDictationOutcome({ sessionId: b.sessionId, dictations: dictations.map(({ raw, final }) => ({ raw, final })), sent: b.sent });
-    learnFromOutcome(dictations, b.sent);
+    void learnFromOutcome(dictations, b.sent); // background: a claude -p check per candidate
     return json({ ok: true });
   }
 
