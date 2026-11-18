@@ -60,7 +60,7 @@ import { homedir } from "os";
 import { discoverRepos, getBaseRepoPath } from "../core/git";
 import { recentRepos } from "../core/recent-repos";
 import { listSlashCommands, type SlashCommand } from "../core/skills";
-import { buildContext, cleanDictation, learnFromOutcome, logDictationOutcome, openaiKey, readLearned, rememberDictation, takeDictation, transcribe, type DictationContext } from "../core/dictation";
+import { buildContext, cleanDictation, learnFromOutcome, logDictationOutcome, logDictationTake, openaiKey, readLearned, rememberDictation, takeDictation, transcribe, type DictationContext } from "../core/dictation";
 import { readPersonalVocab, refreshVocabIfStale } from "../core/dictation-vocab";
 import { repoRootForSession, safeRepoPath, fileDiff, rangeDiff, branchChanges } from "../core/repo-files";
 import { branchPullRequest, type PullRequestInfo } from "../core/pull-request";
@@ -1550,14 +1550,19 @@ async function route(req: Request): Promise<Response> {
       return json({ ok: false, reason: r.error === "unsupported-audio" ? "no-audio" : "transcribe-failed" }, 502);
     }
     if (!r.text) return json({ ok: true, id: null, text: "" });
-    return json({ ok: true, id: rememberDictation({ sessionId: id, raw: r.text, ctx }), text: r.text });
+    const mic = String(form?.get("mic") ?? "").slice(0, 120);
+    return json({ ok: true, id: rememberDictation({ sessionId: id, raw: r.text, ctx, mic }), text: r.text });
   }
 
   const dictClean = path.match(/^\/dictation\/([^/]+)\/clean$/);
   if (method === "POST" && dictClean) {
-    const p = takeDictation(decodeURIComponent(dictClean[1]!));
+    const takeId = decodeURIComponent(dictClean[1]!);
+    const p = takeDictation(takeId);
     if (!p) return json({ ok: false, reason: "not-found" }, 404);
+    const t0 = performance.now();
     const r = await cleanDictation(p.raw, p.ctx);
+    const ms = Math.round(performance.now() - t0);
+    logDictationTake({ id: takeId, sessionId: p.sessionId, mic: p.mic, raw: p.raw, ms, ...("error" in r ? { error: r.error } : { cleaned: r.cleaned, guarded: r.guarded }) });
     if ("error" in r) {
       console.error(`dictation: cleanup failed: ${r.error}`);
       return json({ ok: false, reason: "clean-failed" }, 502);
@@ -1569,10 +1574,10 @@ async function route(req: Request): Promise<Response> {
   if (method === "POST" && path === "/dictation/outcome") {
     const b = (await req.json().catch(() => ({}))) as { sessionId?: unknown; sent?: unknown; dictations?: unknown };
     const dictations = Array.isArray(b.dictations)
-      ? b.dictations.filter((d): d is { raw: string; final: string } => typeof d?.raw === "string" && typeof d?.final === "string")
+      ? b.dictations.filter((d): d is { id?: unknown; raw: string; final: string } => typeof d?.raw === "string" && typeof d?.final === "string")
       : [];
     if (typeof b.sessionId !== "string" || typeof b.sent !== "string" || !dictations.length) return json({ ok: false, reason: "bad-request" }, 400);
-    logDictationOutcome({ sessionId: b.sessionId, dictations: dictations.map(({ raw, final }) => ({ raw, final })), sent: b.sent });
+    logDictationOutcome({ sessionId: b.sessionId, dictations: dictations.map(({ id, raw, final }) => ({ id: typeof id === "string" ? id : null, raw, final })), sent: b.sent });
     void learnFromOutcome(dictations, b.sent); // background: a claude -p check per candidate
     return json({ ok: true });
   }

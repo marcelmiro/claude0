@@ -54,7 +54,9 @@ Order of one dictation:
 1. **Press.** A tap toggles recording until the next tap; a hold records until release
    (`micDown`/`micUp`, 350ms threshold). One mic stream lives for the page's lifetime
    (`ensureMic`): iOS asks permission once per app launch and re-prompts sooner for a
-   stopped stream.
+   stopped stream. It uses the built-in mic whenever one is listed: dictating through a
+   Bluetooth earbud came out badly garbled ("The urgency that is. Calculate." for "new
+   incidents in better stack"), because earbud mics record narrowband call audio.
 2. **Speak on red.** The button turns peach ("wait") only while the mic stream is being
    (re)acquired, which took ~1.7s after the stream had died. Nothing records then. The
    button goes red the moment the recorder starts. Don't add an AnalyserNode "audio is
@@ -89,8 +91,11 @@ Order of one dictation:
    is kept (`guardCleanup`). It checks per sentence, not by word count or longest run:
    legitimate edits drop ~16% of words, and a repeated false start makes word alignment
    ambiguous.
-7. **Log and learn.** On send, `POST /dictation/outcome` appends what dictation inserted and
-   what you finally sent to `dictation-log.jsonl`. Only text is logged; no audio is kept.
+7. **Log and learn.** `dictation-log.jsonl` gets a `take` line per cleanup: the transcript,
+   the model's output (even when the guard or your edit kept it out of the box), whether
+   it was guarded, its latency and the mic used. On send, `POST /dictation/outcome` adds a
+   `sent` line: each dictation's take id, what it left in the box, and the message you
+   sent. Only text is logged; no audio is kept.
    Short swaps you typed over the dictation ("Betsec" → "betterstack") are kept in
    `dictation-learned.json` (`corrections`, `learnFromOutcome`). The corrected terms lead the
    next transcription prompt, and cleanup gets the pairs as known mis-hearings. Rare terms

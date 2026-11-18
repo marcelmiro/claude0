@@ -105,13 +105,13 @@ describe("corrections", () => {
 describe("pending dictations", () => {
   const ctx = { vocab: [], sttVocab: [], recent: "", mishearings: [] };
   test("a cleanup id is single-use", () => {
-    const id = rememberDictation({ sessionId: "s1", raw: "hello", ctx });
+    const id = rememberDictation({ sessionId: "s1", raw: "hello", ctx, mic: "" });
     expect(takeDictation(id)?.raw).toBe("hello");
     expect(takeDictation(id)).toBeNull();
   });
   test("entries older than ten minutes are swept on the next insert", () => {
-    const old = rememberDictation({ sessionId: "s1", raw: "old", ctx }, 0);
-    rememberDictation({ sessionId: "s1", raw: "new", ctx }, 11 * 60 * 1000);
+    const old = rememberDictation({ sessionId: "s1", raw: "old", ctx, mic: "" }, 0);
+    rememberDictation({ sessionId: "s1", raw: "new", ctx, mic: "" }, 11 * 60 * 1000);
     expect(takeDictation(old)).toBeNull();
   });
 });

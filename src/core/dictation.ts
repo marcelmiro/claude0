@@ -150,17 +150,17 @@ export function guardCleanup(raw: string, cleaned: string): { final: string; gua
   return { final: guarded ? raw : cleaned, guarded };
 }
 
-export async function cleanDictation(raw: string, ctx: DictationContext): Promise<{ final: string; guarded: boolean } | { error: string }> {
+export async function cleanDictation(raw: string, ctx: DictationContext): Promise<{ final: string; guarded: boolean; cleaned: string } | { error: string }> {
   const input = `<vocabulary>\n${ctx.vocab.join(", ")}\n</vocabulary>\n\n<known_mishearings>\n${ctx.mishearings.join("\n") || "(none)"}\n</known_mishearings>\n\n<recent_conversation>\n${ctx.recent || "(none)"}\n</recent_conversation>\n\n<dictation>\n${raw}\n</dictation>`;
   // Not pre-started during recording: a stream-json `claude -p` launched while you talk saved
   // only ~0.3s median (3.87s → 3.59s over 6 runs) — model time, not CLI start-up, dominates.
   const r = await claudePrint({ system: CLEANUP_SYSTEM, input, timeoutMs: CLEAN_TIMEOUT_MS });
   if ("error" in r) return r;
-  return guardCleanup(raw, r.text);
+  return { ...guardCleanup(raw, r.text), cleaned: r.text };
 }
 
 /** A transcribed dictation awaiting its cleanup call — the second request reuses the context. */
-export interface PendingDictation { sessionId: string; raw: string; ctx: DictationContext; at: number }
+export interface PendingDictation { sessionId: string; raw: string; ctx: DictationContext; mic: string; at: number }
 const pending = new Map<string, PendingDictation>();
 
 export function rememberDictation(p: Omit<PendingDictation, "at">, now = Date.now()): string {
@@ -272,12 +272,20 @@ export async function learnFromOutcome(dictations: { final: string }[], sent: st
   } catch { /* best-effort */ }
 }
 
-/**
- * What dictation inserted vs what was finally sent — the edit distance between them is the
- * real-world error signal for tuning models and prompts. Text only; no audio is kept.
- */
-export function logDictationOutcome(entry: { sessionId: string; dictations: { raw: string; final: string }[]; sent: string }): void {
+// The tuning log: one `take` line per cleanup (transcript, the model's own output even when
+// the guard or a meanwhile edit kept it out of the box) and one `sent` line per message
+// carrying dictations, keyed back to its takes by id. Text only; no audio is kept.
+function appendDictationLog(entry: Record<string, unknown>): void {
   try {
+    mkdirSync(PATHS.dir, { recursive: true });
     appendFileSync(DICTATION_LOG_PATH, JSON.stringify({ at: new Date().toISOString(), ...entry }) + "\n");
   } catch { /* best-effort */ }
+}
+
+export function logDictationTake(take: { id: string; sessionId: string; mic: string; raw: string; ms: number } & ({ cleaned: string; guarded: boolean } | { error: string })): void {
+  appendDictationLog({ kind: "take", ...take });
+}
+
+export function logDictationOutcome(entry: { sessionId: string; dictations: { id: string | null; raw: string; final: string }[]; sent: string }): void {
+  appendDictationLog({ kind: "sent", ...entry });
 }

@@ -10,7 +10,7 @@
 
 import "../../test/helpers/home";
 import { test, expect, beforeAll, afterAll } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { PATHS } from "../core/config";
 import { DICTATION_LOG_PATH, OPENAI_KEY_PATH } from "../core/dictation";
 import { EVENTS_DIR } from "../core/hook-events";
@@ -318,6 +318,7 @@ test("/sessions/:id/snooze takes a preset, or an until (ms or ISO) with a wake p
 });
 
 test("dictation is off without an OpenAI key, and validates input before any network call once on", async () => {
+  rmSync(OPENAI_KEY_PATH, { force: true }); // the temp home is fixed, so an earlier run left its key
   expect(await (await get("/dictation")).json()).toEqual({ available: false });
   const dictate = (id: string) => {
     const fd = new FormData();
@@ -336,10 +337,10 @@ test("dictation is off without an OpenAI key, and validates input before any net
 
 test("/dictation/outcome logs what was dictated against what was sent", async () => {
   expect((await post("/dictation/outcome", { sessionId: "s1", sent: "x", dictations: [] })).status).toBe(400);
-  const res = await post("/dictation/outcome", { sessionId: "s1", sent: "run pr-triage", dictations: [{ raw: "run PR triage", final: "run pr-triage" }] });
+  const res = await post("/dictation/outcome", { sessionId: "s1", sent: "run pr-triage", dictations: [{ id: "t1", raw: "run PR triage", final: "run pr-triage" }] });
   expect(res.status).toBe(200);
   const line = JSON.parse(readFileSync(DICTATION_LOG_PATH, "utf8").trim().split("\n").at(-1)!);
-  expect(line).toMatchObject({ sessionId: "s1", sent: "run pr-triage", dictations: [{ raw: "run PR triage", final: "run pr-triage" }] });
+  expect(line).toMatchObject({ kind: "sent", sessionId: "s1", sent: "run pr-triage", dictations: [{ id: "t1", raw: "run PR triage", final: "run pr-triage" }] });
 });
 
 test("the bridge binds loopback only — a tailnet bind would take identity headers at face value", () => {

@@ -3228,11 +3228,25 @@ function dtrace(step, extra = {}) {
 // Don't gate recording on an AnalyserNode "is audio flowing" check: in the iOS PWA it read
 // pure silence for 8s while MediaRecorder captured every word (counted aloud: 1–18 all
 // transcribed, detector fired on its timeout at "fifteen").
+// A Bluetooth earbud mic records narrowband call audio that transcribes badly, so the
+// built-in mic is used whenever the device lists one. Labels only exist once mic permission
+// is granted, so the first take may acquire the default and then switch.
+const MIC_AUDIO = { echoCancellation: true, noiseSuppression: true };
+const BUILT_IN_MIC = /iphone|ipad|built-in|internal/i;
 async function ensureMic() {
-  const track = mic.stream && mic.stream.getAudioTracks()[0];
+  let track = mic.stream && mic.stream.getAudioTracks()[0];
   if (!track || track.readyState !== "live") {
-    mic.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    mic.stream = await navigator.mediaDevices.getUserMedia({ audio: MIC_AUDIO });
+    track = mic.stream.getAudioTracks()[0];
   }
+  const inputs = (await navigator.mediaDevices.enumerateDevices().catch(() => [])).filter((d) => d.kind === "audioinput");
+  const builtIn = inputs.find((d) => BUILT_IN_MIC.test(d.label));
+  dtrace("mic-devices", { inputs: inputs.map((d) => d.label), using: track.label, builtIn: builtIn ? builtIn.label : null });
+  if (!builtIn || track.getSettings().deviceId === builtIn.deviceId) return;
+  const old = mic.stream;
+  mic.stream = await navigator.mediaDevices.getUserMedia({ audio: { ...MIC_AUDIO, deviceId: { exact: builtIn.deviceId } } });
+  old.getTracks().forEach((t) => t.stop());
+  dtrace("mic-switched", { using: mic.stream.getAudioTracks()[0].label });
 }
 function startRecorder() {
   const mimeType = ["audio/mp4", "audio/webm;codecs=opus"].find((m) => MediaRecorder.isTypeSupported(m)) || "";
@@ -3638,6 +3652,7 @@ function Composer({ disabled, status }) {
     }
     const fd = new FormData();
     fd.append("audio", blob, "dictation");
+    fd.append("mic", (mic.stream && mic.stream.getAudioTracks()[0].label) || "");
     let res;
     const sentAt = performance.now();
     try {
@@ -3650,7 +3665,7 @@ function Composer({ disabled, status }) {
     done(); // the mic is free again while cleanup runs
     if (!res.ok) return flashError(`✗ ${reasonText(res, "")}`);
     if (!res.text) return;
-    const entry = { raw: res.text, final: res.text };
+    const entry = { id: res.id, raw: res.text, final: res.text };
     if (!insertDictation(forSid, res.text)) return; // landed in another session's saved draft
     dictations.current.push(entry);
     if (res.id) cleanDictation(forSid, res.id, entry);
