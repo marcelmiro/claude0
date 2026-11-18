@@ -1471,14 +1471,21 @@ test("parseMacDraft: a typed draft, a stash, both, or nothing", () => {
   expect(parseMacDraft(fixture("viewport/input-cursor-top.txt"))).toEqual({
     text: "row one text row two text row three text",
     stashed: false,
+    shell: false,
   });
-  expect(parseMacDraft(fixture("viewport/stash-marker.txt"))).toEqual({ text: "", stashed: true });
+  expect(parseMacDraft(fixture("viewport/stash-marker.txt"))).toEqual({ text: "", stashed: true, shell: false });
   const both = fixture("viewport/stash-marker-draft.txt").replace("❯\u00a0\x1b[7m", "❯\u00a0typed at the Mac\x1b[7m");
   expect(both).toContain("typed at the Mac");
-  expect(parseMacDraft(both)).toEqual({ text: "typed at the Mac", stashed: true });
+  expect(parseMacDraft(both)).toEqual({ text: "typed at the Mac", stashed: true, shell: false });
   // Ghost text (a dim placeholder under the cursor cell) is an empty box.
   const ghost = "\x1b[38;5;246m❯ \x1b[7m\x1b[39mP\x1b[0;2mress up to edit queued messages\x1b[0m";
   expect(parseMacDraft([RULE, ghost, RULE].join("\n"))).toBeNull();
   // A dialog covers the box: the echoed prompt above it is not a draft.
   expect(parseMacDraft(fixture("viewport/model-switch-dialog.plain.txt"))).toBeNull();
+});
+
+test("parseMacDraft: a command typed on a shell-mode prompt is a shell draft; an empty one is nothing", () => {
+  const hint = "  \x1b[2m! for shell mode\x1b[0m";
+  expect(parseMacDraft([RULE, "! git push", RULE, hint].join("\n"))).toEqual({ text: "git push", stashed: false, shell: true });
+  expect(parseMacDraft([RULE, "! ", RULE, hint].join("\n"))).toBeNull();
 });

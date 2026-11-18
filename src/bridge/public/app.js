@@ -3751,16 +3751,18 @@ function Composer({ disabled, status }) {
 
 // What sits in the Mac's input box, read at each transcript refresh. A send works around
 // it (prepareInput): a draft is stashed and comes back after the submit; a draft on top of
-// an existing stash refuses the send with stash-occupied.
+// an existing stash refuses the send with stash-occupied, a shell-mode one with shell-draft.
 function MacDraftNote({ draft }) {
   if (!draft) return null;
-  const note = !draft.text
-    ? "stashed draft at the Mac — it returns to the box after your next send"
-    : draft.stashed
-      ? "draft at the Mac, plus a stashed one — clear one there before sending"
-      : "draft at the Mac — sending sets it aside, then puts it back";
+  const note = draft.shell
+    ? "shell command at the Mac — clear it there before sending"
+    : !draft.text
+      ? "stashed draft at the Mac — it returns to the box after your next send"
+      : draft.stashed
+        ? "draft at the Mac, plus a stashed one — clear one there before sending"
+        : "draft at the Mac — sending sets it aside, then puts it back";
   return html`<div class="macdraft">
-    ${draft.text && html`<div class="macdraft-text">${draft.text}</div>`}
+    ${draft.text && html`<div class="macdraft-text">${draft.shell ? "! " + draft.text : draft.text}</div>`}
     <div class="macdraft-note">${note}</div>
   </div>`;
 }

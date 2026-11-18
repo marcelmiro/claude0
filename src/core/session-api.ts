@@ -1528,8 +1528,11 @@ export function stashPresent(capture: string): boolean {
   return box >= 2 && /(?:›|draft) stashed/.test(lines[box - 2]!);
 }
 
-/** What the pane's input box holds for the phone to see: a draft's text ("" for none) and Claude's stash. */
-export type MacDraft = { text: string; stashed: boolean };
+/**
+ * What the pane's input box holds for the phone to see: a draft's text ("" for none), Claude's
+ * stash, and whether the text sits on a shell-mode prompt (a send refuses it with `shell-draft`).
+ */
+export type MacDraft = { text: string; stashed: boolean; shell: boolean };
 
 /**
  * Read a styled (`escapes`) capture the way `prepareInput` does: ghost text is not a draft,
@@ -1539,20 +1542,22 @@ export type MacDraft = { text: string; stashed: boolean };
 export function parseMacDraft(styled: string): MacDraft | null {
   const typed = flattenStyled(styled, true);
   if (inputBoxRow(typed.split("\n")) === -1) return null;
-  const text = inputPending(typed) ? draftText(typed) : "";
-  const stashed = stashPresent(flattenStyled(styled, false));
-  return text || stashed ? { text, stashed } : null;
+  const plain = flattenStyled(styled, false);
+  const stashed = stashPresent(plain);
+  const shell = shellModeInput(plain);
+  const text = shell ? shell.text : inputPending(typed) ? draftText(typed) : "";
+  return text || stashed ? { text, stashed, shell: !!shell } : null;
 }
 
 /**
  * The pane's draft and stash, minus a leftover of a submitted prompt (a send discards it
- * rather than stashing it). `sessionId` is the conversation on screen. Null on any error.
+ * rather than stashing it; a shell-mode draft is never a leftover). `sessionId` is the conversation on screen. Null on any error.
  */
 export async function macDraft(sessionId: string, paneId: string): Promise<MacDraft | null> {
   try {
     const draft = parseMacDraft(await capturePane(paneId, { escapes: true }));
     if (!draft?.text) promptsMemo.delete(sessionId);
-    else if (await isLeftoverDraft(sessionId, draft.text)) draft.text = "";
+    else if (!draft.shell && (await isLeftoverDraft(sessionId, draft.text))) draft.text = "";
     return draft && (draft.text || draft.stashed) ? draft : null;
   } catch {
     return null;
