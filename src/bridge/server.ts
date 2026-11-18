@@ -164,13 +164,10 @@ const TAILSCALE = Bun.which("tailscale") ?? "tailscale";
 
 /** The session's terms, skills, recent prose and the personal vocabulary, for one dictation. */
 async function dictationContextFor(sessionId: string): Promise<DictationContext> {
-  const [payload, skills, tx] = await Promise.all([
-    sessionsPayload().catch(() => null),
-    sessionSkills(sessionId).catch(() => []),
-    getTranscript(sessionId).catch(() => null),
-  ]);
-  const rows = (payload as { sessions?: { id: string; repo?: string; branch?: string }[] } | null)?.sessions ?? [];
-  const row = rows.find((s) => s.id === sessionId);
+  const [skills, tx] = await Promise.all([sessionSkills(sessionId).catch(() => []), getTranscript(sessionId).catch(() => null)]);
+  // The last discovery, not sessionsPayload(): a cache over 10s old makes that wait on a
+  // full recompute, in front of the transcription the user is waiting for.
+  const row = (lastDiscovered ?? []).find((s) => s.id === sessionId);
   const skillNames = (Array.isArray(skills) ? (skills as SlashCommand[]) : []).filter((k) => k.source !== "builtin").map((k) => k.name);
   return buildContext({ repo: row?.repo, branch: row?.branch, skills: skillNames, turns: tx?.turns ?? [], personal: readPersonalVocab()?.terms ?? [], learned: readLearned() });
 }
@@ -1526,7 +1523,7 @@ async function route(req: Request): Promise<Response> {
   if (method === "GET" && path === "/dictation") return json({ available: !!openaiKey() });
   // TEMPORARY: on-device step tracing while the iOS recording flow is being debugged.
   if (method === "POST" && path === "/dictation/trace") {
-    console.error(`dictation-trace: ${JSON.stringify(await req.json().catch(() => ({})))}`);
+    console.error(`dictation-trace: ${(await req.text().catch(() => "")).slice(0, 1000)}`);
     return json({ ok: true });
   }
 
@@ -1547,7 +1544,8 @@ async function route(req: Request): Promise<Response> {
     console.error(`dictation: ${audio.size}B ctx=${Math.round(tCtx - t0)}ms stt=${Math.round(performance.now() - tCtx)}ms ${"error" in r ? `error ${r.error}` : `${r.text.length} chars`}`);
     if ("error" in r) {
       console.error(`dictation: transcribe failed: ${r.error}`);
-      return json({ ok: false, reason: r.error === "unsupported-audio" ? "no-audio" : "transcribe-failed" }, 502);
+      if (r.error === "unsupported-audio") return json({ ok: false, reason: "no-audio" }, 400); // final: the client retries only 5xx
+      return json({ ok: false, reason: "transcribe-failed" }, 502);
     }
     if (!r.text) return json({ ok: true, id: null, text: "" });
     const mic = String(form?.get("mic") ?? "").slice(0, 120);

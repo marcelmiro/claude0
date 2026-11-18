@@ -3207,12 +3207,6 @@ function BangRunningTag({ since }) {
   return html`<div class="queuedtag"><span class="livedot">⦿</span> running · ${fmtElapsed(Math.max(0, Math.floor((Date.now() - since) / 1000)))}</div>`;
 }
 
-// --- Composer drafts ---------------------------------------------------------
-// Per-session draft persisted to localStorage, so leaving the detail view (the
-// composer unmounts), an app reload, or an iOS PWA eviction never loses typed-but-
-// unsent text. Written from syncHasText — the one choke point every el.value
-// mutation already calls — so sending (value → "") clears the entry for free.
-// Best-effort: storage failures are swallowed. Bounded to the newest 20 sessions.
 // --- Dictation (ADR 37, docs/portkey.md § Dictation) ---
 // One mic stream for the page's life: iOS asks permission once per app launch and a
 // stopped stream re-prompts sooner. The button spins (grey) only while that stream is being
@@ -3243,10 +3237,14 @@ async function ensureMic() {
   const builtIn = inputs.find((d) => BUILT_IN_MIC.test(d.label));
   dtrace("mic-devices", { inputs: inputs.map((d) => d.label), using: track.label, builtIn: builtIn ? builtIn.label : null });
   if (!builtIn || track.getSettings().deviceId === builtIn.deviceId) return;
-  const old = mic.stream;
-  mic.stream = await navigator.mediaDevices.getUserMedia({ audio: { ...MIC_AUDIO, deviceId: { exact: builtIn.deviceId } } });
-  old.getTracks().forEach((t) => t.stop());
-  dtrace("mic-switched", { using: mic.stream.getAudioTracks()[0].label });
+  try {
+    const switched = await navigator.mediaDevices.getUserMedia({ audio: { ...MIC_AUDIO, deviceId: { exact: builtIn.deviceId } } });
+    mic.stream.getTracks().forEach((t) => t.stop());
+    mic.stream = switched;
+    dtrace("mic-switched", { using: switched.getAudioTracks()[0].label });
+  } catch (err) {
+    dtrace("mic-switch-failed", { error: String(err && err.message) }); // keep the working stream
+  }
 }
 function startRecorder() {
   const mimeType = ["audio/mp4", "audio/webm;codecs=opus"].find((m) => MediaRecorder.isTypeSupported(m)) || "";
@@ -3310,6 +3308,12 @@ function wordChanges(a, b) {
   return out;
 }
 
+// --- Composer drafts ---------------------------------------------------------
+// Per-session draft persisted to localStorage, so leaving the detail view (the
+// composer unmounts), an app reload, or an iOS PWA eviction never loses typed-but-
+// unsent text. Written from syncHasText — the one choke point every el.value
+// mutation already calls — so sending (value → "") clears the entry for free.
+// Best-effort: storage failures are swallowed. Bounded to the newest 20 sessions.
 const DRAFTS_KEY = "claude0-drafts";
 function readDrafts() {
   try {
@@ -3360,8 +3364,8 @@ function Composer({ disabled, status }) {
   const [, forceRender] = useState(0);
   const rerender = () => forceRender((n) => (n + 1) & 0xffff);
   const sid = selectedId.value; // read in render so the component re-subscribes on session switch
-  // Dictation. The button face: "idle" | "warm" (recording, no audio yet) | "rec" | "busy".
-  // `dict` holds the press state machine in a ref so pointer handlers never read stale state:
+  // Dictation. The button face: "idle" | "warm" (acquiring the mic) | "rec" | "busy".
+  // `dict` holds the take's state machine in a ref so async steps never read stale state:
   // phase "idle" → "arming" (acquiring the mic) → "recording" → "busy" (transcribing).
   const [dictFace, setDictFace] = useState("idle");
   const [cleaning, setCleaning] = useState(0); // cleanups in flight — the mic shows a peach ring
@@ -3657,6 +3661,8 @@ function Composer({ disabled, status }) {
     done(); // the mic is free again while cleanup runs
     if (!res.ok) return flashError(`✗ ${reasonText(res, "")}`);
     if (!res.text) return flashNotice("Heard nothing — check the mic and try again");
+    // Typing "!" mid-take turned the box into a bash command; prose there would run as one.
+    if (bashRef.current && selectedId.value === forSid) return flashError("✗ dictation not inserted: the composer is in bash mode");
     const entry = { id: res.id, raw: res.text, final: res.text };
     if (!insertDictation(forSid, res.text)) return flashNotice("Dictation saved to the draft of the session you dictated in");
     dictations.current.push(entry);

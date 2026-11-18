@@ -44,6 +44,13 @@ describe("guardCleanup", () => {
   test("a cleanup that answers instead of cleaning is discarded", () => {
     expect(guardCleanup("Can you check the betterstack incidents and tell me which are open?", "Sure — I'll check them now.").guarded).toBe(true);
   });
+  test("a cleanup that keeps the message but appends a reply is discarded", () => {
+    const raw = "Can you check the betterstack incidents and tell me which are open?";
+    expect(guardCleanup(raw, `${raw}\n\nSure, I'll look at them now and report back.`).guarded).toBe(true);
+  });
+  test("a multi-word term fix is not an addition", () => {
+    expect(guardCleanup("Run the PR triage skill if and only if CI is green for Claude Dash P.", "Run the pr-triage skill iff CI is green for claude -p.").guarded).toBe(false);
+  });
   test("a single-term fix in a short dictation is not a loss", () => {
     expect(guardCleanup("Can you check the Betsec incidents?", "Can you check the betterstack incidents?").guarded).toBe(false);
   });

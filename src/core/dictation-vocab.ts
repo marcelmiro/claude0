@@ -198,6 +198,8 @@ export function readPersonalVocab(): PersonalVocab | null {
 }
 
 let mining: Promise<void> | null = null;
+let lastMineAt = 0;
+const MINE_RETRY_MS = 60 * 60 * 1000;
 
 /**
  * Re-mine in a child process when the file is missing or a day old. Fire-and-forget and
@@ -207,6 +209,10 @@ export function refreshVocabIfStale(now = Date.now()): void {
   if (mining) return;
   const v = readPersonalVocab();
   if (v && now - v.generatedAt < VOCAB_MAX_AGE_MS) return;
+  // A run that died without writing the file would otherwise restart the multi-minute
+  // mine on every dictation.
+  if (now - lastMineAt < MINE_RETRY_MS) return;
+  lastMineAt = now;
   mining = (async () => {
     try {
       const proc = Bun.spawn([process.execPath, process.argv[1]!, "dictation-vocab"], { stdout: "ignore", stderr: "inherit" });

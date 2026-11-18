@@ -847,8 +847,8 @@
         font-size: 22px;
         line-height: 1;
       }
-      /* Dictation mic: tap toggles, hold talks. warm = acquiring the mic (wait); rec = recording,
-         speak; busy = transcribing. */
+      /* Dictation mic: tap starts, tap stops. warm = acquiring the mic; rec = recording, speak;
+         busy = transcribing. */
       .composer .mic {
         flex: none;
         width: 40px;
@@ -861,7 +861,7 @@
         font-size: 12px;
         font-variant-numeric: tabular-nums;
         line-height: 1;
-        touch-action: none;
+        touch-action: manipulation;
         user-select: none;
         -webkit-user-select: none;
         -webkit-touch-callout: none;

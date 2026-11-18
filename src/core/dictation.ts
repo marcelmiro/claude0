@@ -103,10 +103,7 @@ export async function transcribe(audio: Blob, ctx: DictationContext, key: string
   }
 }
 
-// "As you would have typed it": the owner's hand edits of real dictations asked for fillers,
-// false starts and spoken list markers gone, spoken symbols typed, terms fixed — and nothing
-// else touched. A looser version polished fluent sentences ("if" → "whether", reordering),
-// doubling word error against typed prompts (benchmark: v3 4.6%, loose 10.5%, this 5.3%).
+// The target and why it's this strict: docs/portkey.md § Dictation (Clean).
 const CLEANUP_SYSTEM = `You turn a developer's dictated message (speech-to-text output) into the message they would have typed to an AI coding agent. You make a small number of targeted edits; everything else stays exactly as transcribed.
 
 Edit ONLY these things:
@@ -146,14 +143,20 @@ export function guardCleanup(raw: string, cleaned: string): { final: string; gua
   const lostShare = (ws: string[]) => ws.filter((w) => !survives(w)).length / ws.length;
   const sentences = raw.split(/(?<=[.!?])\s+/).map(realWords).filter((ws) => ws.length >= 3);
   const all = realWords(raw);
-  const guarded = sentences.some((ws) => lostShare(ws) > 0.6) || (all.length > 0 && lostShare(all) > 0.4);
+  // Additions too: a reply appended after an intact copy of the message loses nothing. A term
+  // fix ("PR triage" → "pr-triage") overlaps a raw word, so it isn't counted as added.
+  const heard = tokens(raw).map(folded).filter(Boolean);
+  const isNew = (w: string) => !/^\d+$/.test(w) && !heard.some((h) => h === w || (w.length >= 2 && h.includes(w)) || (h.length >= 3 && w.includes(h)));
+  const added = realWords(cleaned).filter(isNew).length;
+  const guarded =
+    sentences.some((ws) => lostShare(ws) > 0.6) || (all.length > 0 && lostShare(all) > 0.4) || (added > 3 && added > 0.2 * all.length);
   return { final: guarded ? raw : cleaned, guarded };
 }
 
 export async function cleanDictation(raw: string, ctx: DictationContext): Promise<{ final: string; guarded: boolean; cleaned: string } | { error: string }> {
   const input = `<vocabulary>\n${ctx.vocab.join(", ")}\n</vocabulary>\n\n<known_mishearings>\n${ctx.mishearings.join("\n") || "(none)"}\n</known_mishearings>\n\n<recent_conversation>\n${ctx.recent || "(none)"}\n</recent_conversation>\n\n<dictation>\n${raw}\n</dictation>`;
-  // Not pre-started during recording: a stream-json `claude -p` launched while you talk saved
-  // only ~0.3s median (3.87s → 3.59s over 6 runs) — model time, not CLI start-up, dominates.
+  // claudePrint's default model, Haiku. Sonnet rewrites correct words into vocabulary terms;
+  // pre-starting the CLI while you talk barely helps (docs/portkey.md § Dictation).
   const r = await claudePrint({ system: CLEANUP_SYSTEM, input, timeoutMs: CLEAN_TIMEOUT_MS });
   if ("error" in r) return r;
   return { ...guardCleanup(raw, r.text), cleaned: r.text };
