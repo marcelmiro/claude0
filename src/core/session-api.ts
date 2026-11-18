@@ -1366,8 +1366,9 @@ export async function archiveSession(sessionId: string): Promise<SendResult> {
  * it to "ready" ~1.5s later; the bridge's `/interrupt` route pushes that flip via SSE.
  */
 export async function interruptSession(sessionId: string): Promise<SendResult> {
-  const [paneId, mark] = await Promise.all([resolveSessionPane(sessionId), transcriptMark(sessionId)]);
+  const paneId = await resolveSessionPane(sessionId);
   if (!paneId) return { ok: false, reason: "no-pane" };
+  const mark = await transcriptMark(sessionId); // last, so a dequeue just before the Escape counts
   await sendKey(paneId, "Escape");
   return { ok: true, queued: mark ? await queuedAtMark(mark) : false };
 }

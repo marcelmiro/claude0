@@ -3504,7 +3504,8 @@ function Composer({ disabled, status }) {
       .then((r) => r.json().catch(() => ({})))
       .then((d) => {
         if (d && d.ok === false) return restore(d.reason || "interrupt failed");
-        const nowQueued = !!d?.queued || sentQueued();
+        if (typeof d?.queued !== "boolean") return; // no read of Claude's queue — keep the guess
+        const nowQueued = d.queued || sentQueued();
         if (nowQueued === queued) return;
         if (!nowQueued) return arm();
         if (interruptRestore.value?.sessionId === id) interruptRestore.value = null;
