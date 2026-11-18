@@ -15,7 +15,7 @@ import { Glob } from "bun";
 import { homedir } from "os";
 import { resolveTranscriptPath, resolveTranscriptPaths, readLastPromptAt } from "./last-turn";
 import { isTeammateDelivery, lastAssistantMessage, parseActiveBranch, parseTranscript } from "./transcript";
-import { pendingToolCall } from "./hook-events";
+import { eventsNewestFirst, pendingToolCall } from "./hook-events";
 import { loadPaneSessions, savePaneSessions } from "./state";
 import { findClaudeProcesses } from "./process";
 import {
@@ -1551,25 +1551,35 @@ export function parseMacDraft(styled: string): MacDraft | null {
 export async function macDraft(sessionId: string, paneId: string): Promise<MacDraft | null> {
   try {
     const draft = parseMacDraft(await capturePane(paneId, { escapes: true }));
-    if (draft?.text && (await isLeftoverDraft(sessionId, draft.text))) draft.text = "";
+    if (!draft?.text) promptsMemo.delete(sessionId);
+    else if (await isLeftoverDraft(sessionId, draft.text)) draft.text = "";
     return draft && (draft.text || draft.stashed) ? draft : null;
   } catch {
     return null;
   }
 }
 
-// The leftover verdict for the text last seen in each session's box. `submittedPrompts`
-// streams every transcript file (seconds on a 100MB+ session) and `macDraft` runs on every
-// transcript push and poll; concurrent composes share the one in-flight scan.
-const leftoverMemo = new Map<string, { text: string; leftover: Promise<boolean> }>();
+// Each session's submitted prompts while its box holds a draft, until the next submitted
+// prompt (its UserPromptSubmit hook event) adds one. `submittedPrompts` streams every
+// transcript file (seconds on a 100MB+ session) and `macDraft` runs on every transcript
+// push and poll, while the box text changes with each keystroke at the Mac.
+const promptsMemo = new Map<string, { promptId: string; prompts: Promise<string[]> }>();
 
-function isLeftoverDraft(sessionId: string, text: string): Promise<boolean> {
-  if (text.replace(/\s+/g, "").length < MIN_LEFTOVER_CHARS) return Promise.resolve(false);
-  const hit = leftoverMemo.get(sessionId);
-  if (hit?.text === text) return hit.leftover;
-  const leftover = submittedPrompts(sessionId).then((prompts) => isSubmittedText(text, prompts));
-  leftoverMemo.set(sessionId, { text, leftover });
-  return leftover;
+async function isLeftoverDraft(sessionId: string, text: string): Promise<boolean> {
+  if (text.replace(/\s+/g, "").length < MIN_LEFTOVER_CHARS) return false;
+  let promptId = "";
+  for (const e of eventsNewestFirst(sessionId)) {
+    if (e.hook_event_name === "UserPromptSubmit") {
+      promptId = e.prompt_id ?? "";
+      break;
+    }
+  }
+  let hit = promptsMemo.get(sessionId);
+  if (hit?.promptId !== promptId) {
+    hit = { promptId, prompts: submittedPrompts(sessionId) };
+    promptsMemo.set(sessionId, hit);
+  }
+  return isSubmittedText(text, await hit.prompts);
 }
 
 /**
