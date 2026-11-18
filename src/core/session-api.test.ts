@@ -57,6 +57,7 @@ import {
   inputCursor,
   footerFocused,
   stashPresent,
+  parseMacDraft,
   parseDialog,
   isModelArg,
   isEffortArg,
@@ -1464,4 +1465,20 @@ test("stashPresent: the marker shares the slot above the box with other hints", 
   expect(stashPresent(flattenStyled(fixture("viewport/stash-marker-draft.txt"), false))).toBe(true);
   expect(stashPresent(flattenStyled(fixture("viewport/input-cursor-top.txt"), false))).toBe(false);
   expect(stashPresent(flattenStyled(fixture("viewport/shell-details.txt"), false))).toBe(false);
+});
+
+test("parseMacDraft: a typed draft, a stash, both, or nothing", () => {
+  expect(parseMacDraft(fixture("viewport/input-cursor-top.txt"))).toEqual({
+    text: "row one text row two text row three text",
+    stashed: false,
+  });
+  expect(parseMacDraft(fixture("viewport/stash-marker.txt"))).toEqual({ text: "", stashed: true });
+  const both = fixture("viewport/stash-marker-draft.txt").replace("❯\u00a0\x1b[7m", "❯\u00a0typed at the Mac\x1b[7m");
+  expect(both).toContain("typed at the Mac");
+  expect(parseMacDraft(both)).toEqual({ text: "typed at the Mac", stashed: true });
+  // Ghost text (a dim placeholder under the cursor cell) is an empty box.
+  const ghost = "\x1b[38;5;246m❯ \x1b[7m\x1b[39mP\x1b[0;2mress up to edit queued messages\x1b[0m";
+  expect(parseMacDraft([RULE, ghost, RULE].join("\n"))).toBeNull();
+  // A dialog covers the box: the echoed prompt above it is not a draft.
+  expect(parseMacDraft(fixture("viewport/model-switch-dialog.plain.txt"))).toBeNull();
 });

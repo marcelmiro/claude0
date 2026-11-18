@@ -758,6 +758,11 @@ export function fixtureData(method: string, path: string, params?: URLSearchPara
   const tm = path.match(/^\/sessions\/([^/]+)\/transcript$/);
   if (method === "GET" && tm) {
     if (tm[1] === "fix-dialog") return { ...FIXTURE_TRANSCRIPT, openQuestion: null, dialog: FIXTURE_DIALOG };
+    // A typed draft and a stash-only box at the Mac (the composer's macDraft note).
+    if (tm[1] === "push-retry") {
+      return { ...FIXTURE_TRANSCRIPT, openQuestion: null, macDraft: { text: "skip #1. how would you do #2? and keep the retry budget per device, not global", stashed: false } };
+    }
+    if (tm[1] === "docs-pass") return { ...FIXTURE_TRANSCRIPT, openQuestion: null, macDraft: { text: "", stashed: true } };
     return tm[1] === "fix-auth" ? FIXTURE_TRANSCRIPT : { ...FIXTURE_TRANSCRIPT, openQuestion: null };
   }
   if (method === "GET" && /^\/sessions\/[^/]+\/changes$/.test(path)) return FIXTURE_CHANGES;

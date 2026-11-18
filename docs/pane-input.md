@@ -36,6 +36,11 @@ Rewind is stricter than send: it discards a leftover but refuses a real draft wi
 `draft-present`, and refuses `stash-occupied` even without one, because the rewound prompt
 overwrites the input and a completed `/rewind` loses the stash.
 
+Portkey shows the same classification before a send: every transcript payload (full and
+`unchanged`) carries `macDraft` — the box's real draft text and whether a stash is held —
+read from one styled capture with no keys sent (`macDraft`). The composer renders it
+as a note; it refreshes with the payload, not on each Mac-side keystroke.
+
 ## Where keys go wrong
 
 The hazards behind each pre-flight step — `Down` into the footer, notification rows

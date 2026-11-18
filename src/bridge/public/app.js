@@ -444,6 +444,7 @@ const VOLATILE_FIELDS = [
   "subagents",
   "pendingScripts",
   "statusline",
+  "macDraft",
   "mode",
   "model",
   "effort",
@@ -3689,6 +3690,7 @@ function Composer({ disabled, status }) {
           </div>`,
         )}
       </div>`}
+      <${MacDraftNote} draft=${transcript.value && transcript.value.macDraft} />
       ${attachments.value.length > 0 &&
       html`<div class="thumbs">
         ${attachments.value.map(
@@ -3745,6 +3747,22 @@ function Composer({ disabled, status }) {
       </div>
     </div>
   `;
+}
+
+// What sits in the Mac's input box, read at each transcript refresh. A send works around
+// it (prepareInput): a draft is stashed and comes back after the submit; a draft on top of
+// an existing stash refuses the send with stash-occupied.
+function MacDraftNote({ draft }) {
+  if (!draft) return null;
+  const note = !draft.text
+    ? "stashed draft at the Mac — it returns to the box after your next send"
+    : draft.stashed
+      ? "draft at the Mac, plus a stashed one — clear one there before sending"
+      : "draft at the Mac — sending sets it aside, then puts it back";
+  return html`<div class="macdraft">
+    ${draft.text && html`<div class="macdraft-text">${draft.text}</div>`}
+    <div class="macdraft-note">${note}</div>
+  </div>`;
 }
 
 // Walk up from a touch target to the nearest ancestor that actually scrolls horizontally
