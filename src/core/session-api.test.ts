@@ -42,6 +42,7 @@ import {
   answerSessionQuestion,
   clarifySessionQuestion,
   interruptSession,
+  sendWasQueued,
   clearPaneInput,
   readContextUsage,
   pickerCursorText,
@@ -1080,6 +1081,18 @@ test("clarifySessionQuestion: hook holding → writes a clarify decision, no pan
 test("interruptSession: no pane mapping → no-pane, sends nothing", async () => {
   const r = await interruptSession("ghost-session");
   expect(r).toEqual({ ok: false, reason: "no-pane" });
+});
+
+test("sendWasQueued: an enqueue appended past the mark, even if already drained; none → false", async () => {
+  const path = join(PATHS.dir, "q-live.jsonl");
+  const before = JSON.stringify({ type: "queue-operation", operation: "enqueue", content: "earlier" }) + "\n";
+  writeFileSync(path, before);
+  const mark = { path, size: before.length };
+  expect(await sendWasQueued(mark, 100)).toBe(false); // the earlier enqueue predates the send
+  const op = (operation: string) => JSON.stringify({ type: "queue-operation", operation, content: "M" });
+  writeFileSync(path, before + [op("enqueue"), op("dequeue")].join("\n") + "\n");
+  expect(await sendWasQueued(mark)).toBe(true);
+  expect(await sendWasQueued({ path: join(PATHS.dir, "missing.jsonl"), size: 0 }, 100)).toBe(false);
 });
 
 test("clearPaneInput: no pane mapping → no-pane, sends nothing", async () => {

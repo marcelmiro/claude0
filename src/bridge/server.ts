@@ -32,6 +32,8 @@ import {
   pendingToolFields,
   transcriptRevAt,
   sendMessage,
+  sendWasQueued,
+  transcriptMark,
   answerSessionQuestion,
   clarifySessionQuestion,
   createSession,
@@ -268,6 +270,19 @@ function staticResponse(rel: string): Response {
 
 function sendResult(r: SendResult): Response {
   return json(r, r.ok ? 200 : 409);
+}
+
+// Session id → its /message send still typing into the pane. The phone fires Stop without
+// waiting for its send to return, and an Escape landing mid-typing splits the message.
+const typing = new Map<string, Promise<unknown>>();
+
+/** Send; when Claude was busy, also answer whether it queued the message (`sendWasQueued`). */
+async function sendTracked(id: string, send: () => Promise<SendResult>): Promise<SendResult> {
+  const mark = (await nativeStatus(id)) === "running" ? await transcriptMark(id) : null;
+  const typed = send();
+  typing.set(id, typed);
+  const r = await typed.finally(() => typing.get(id) === typed && typing.delete(id));
+  return r.ok && mark ? { ...r, queued: await sendWasQueued(mark) } : r;
 }
 
 // ---------------------------------------------------------------------------
@@ -1643,15 +1658,16 @@ async function route(req: Request): Promise<Response> {
       const saved = await saveUploadedImages(files);
       if ("error" in saved) return json({ ok: false, reason: saved.error }, 400);
       pruneOldUploads();
-      const r = await sendMessage(id, text, saved.paths);
+      const r = await sendTracked(id, () => sendMessage(id, text, saved.paths));
       // Image-only (empty text) can't text-match; fall back to the turn's prompt_id anchor.
       if (r.ok) markPortkeySource(id, { deviceId: deviceOf(req), text: text.trim() ? text : undefined });
       return sendResult(r);
     }
     const body = (await req.json().catch(() => ({}))) as { text?: unknown };
-    if (typeof body.text !== "string") return json({ ok: false, reason: "bad-text" }, 400);
-    const r = await sendMessage(id, body.text);
-    if (r.ok) markPortkeySource(id, { deviceId: deviceOf(req), text: body.text });
+    const text = body.text;
+    if (typeof text !== "string") return json({ ok: false, reason: "bad-text" }, 400);
+    const r = await sendTracked(id, () => sendMessage(id, text));
+    if (r.ok) markPortkeySource(id, { deviceId: deviceOf(req), text });
     return sendResult(r);
   }
 
@@ -1876,6 +1892,7 @@ async function route(req: Request): Promise<Response> {
   const interrupt = path.match(/^\/sessions\/([^/]+)\/interrupt$/);
   if (method === "POST" && interrupt) {
     const id = decodeURIComponent(interrupt[1]!);
+    await typing.get(id)?.catch(() => {});
     const result = await interruptSession(id);
     if (result.ok) reconcileAfterInterrupt(id);
     return sendResult(result);

@@ -218,6 +218,8 @@ export type SendResult = {
   reason?: "no-pane" | "no-question" | "stale-question" | "not-presented" | "not-held" | "no-prompt" | "no-session" | "rewind-unavailable" | "rewind-mismatch" | "rewind-mode" | "bad-image" | "bad-selection" | "no-confirm" | "no-repo" | "no-transcript" | "resume-failed" | "not-found" | "shell-draft" | "shell-clear-failed" | "draft-stash-failed" | "clear-failed" | "notification-clear-failed" | "agent-list-focused" | "draft-present" | "draft-clear-failed" | "no-input-box" | "no-dialog" | "stale-dialog" | "stash-occupied";
   /** Fresh session id, set by createSession to the dictated id. */
   sessionId?: string;
+  /** A message sent while Claude was busy, confirmed queued (see `sendWasQueued`). */
+  queued?: boolean;
 };
 
 /**
@@ -1365,6 +1367,36 @@ export async function interruptSession(sessionId: string): Promise<SendResult> {
   if (!paneId) return { ok: false, reason: "no-pane" };
   await sendKey(paneId, "Escape");
   return { ok: true };
+}
+
+/** End of the session's live transcript file, before a send — the mark `sendWasQueued` reads past. */
+export async function transcriptMark(sessionId: string): Promise<{ path: string; size: number } | null> {
+  const txId = (await parkedJobSessions()).get(sessionId) ?? sessionId;
+  const path = (await resolveTranscriptPaths(txId)).at(-1);
+  return path ? { path, size: Bun.file(path).size } : null;
+}
+
+/**
+ * Whether Claude queued a send made after `mark`: an enqueue record appended past it. Look for
+ * the enqueue, not the queue's state — an Escape right after the send drains it at once. Claude
+ * flushes the line a beat after taking the message, so poll briefly; a send that started a turn
+ * instead (the busy read lagged a turn end) times out as false.
+ */
+export async function sendWasQueued(mark: { path: string; size: number }, timeoutMs = 600): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      for (const line of (await Bun.file(mark.path).slice(mark.size).text()).split("\n")) {
+        if (!line.includes('"queue-operation"')) continue;
+        const rec: { type?: unknown; operation?: unknown } = JSON.parse(line);
+        if (rec.type === "queue-operation" && rec.operation === "enqueue") return true;
+      }
+    } catch {
+      // torn last line or unreadable file — retry until the deadline
+    }
+    if (Date.now() >= deadline) return false;
+    await Bun.sleep(50);
+  }
 }
 
 /**

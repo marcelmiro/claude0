@@ -227,7 +227,7 @@ const composerPrefill = signal(null);
 // After a Stop fires we watch the refetched transcript: if the last-sent text is no longer
 // a user turn (and not queued), it returns to the composer, mirroring the TUI. If it's
 // still in the thread (a mid-turn interrupt), the intent expires silently.
-const lastSentText = new Map(); // sid → {text, whileRunning}; read only inside event handlers, not reactive
+const lastSentText = new Map(); // sid → {text, queued}; read only inside event handlers, not reactive
 const interruptRestore = signal(null); // {sessionId, text, settleAt, until, seen?} | null
 // Interrupted prompts hidden from the thread once their text was restored to the composer:
 // [{sessionId, index, text, at}]. Claude Code never deletes the turn from the JSONL — the
@@ -930,8 +930,9 @@ const REASON_TEXT = {
 const reasonText = (data, status) => REASON_TEXT[data.reason] || data.reason || status;
 
 // Send an action and report ok/failure to the caller — the bridge gates
-// answer/decision/message server-side and returns {ok,reason}. Failures flash; success
-// is silent (the caller updates the UI optimistically).
+// answer/decision/message server-side and returns {ok,reason}. Failures flash and return
+// false; success is silent and returns the response body (the caller updates the UI
+// optimistically).
 async function action(path, body, { pushed = false } = {}) {
   try {
     const r = await fetch(path, {
@@ -948,7 +949,7 @@ async function action(path, body, { pushed = false } = {}) {
       // `pushed`: the change lands as a transcript append the live stream pushes.
       if (!(pushed && streamLive())) refreshTranscriptSoon();
       refreshSessionsSoon();
-      return true;
+      return data;
     }
     flashError(`✗ ${reasonText(data, r.status)}`);
     return false;
@@ -3349,11 +3350,11 @@ function Composer({ disabled, status }) {
     const id = selectedId.value;
     // With messages in Claude's input queue, Escape never reverts: the queue auto-submits
     // as the next prompt and the session keeps running (docs/pane-input.md § Interrupts).
-    // Its record looks like a revert (or is off-branch entirely), so arm nothing. A send
-    // made while running counts until it lands: the queue entry reaches us only after it.
+    // Its record looks like a revert (or is off-branch entirely), so arm nothing. Our copy of
+    // the queue lags a just-sent message, so its send's `queued` answer counts too — here if
+    // it already came back, else it disarms in `send()`.
     const last = lastSentText.get(id);
-    const queued =
-      transcript.value?.queuedPending?.length > 0 || (!!last?.whileRunning && pendingSends.value.includes(last.text));
+    const queued = transcript.value?.queuedPending?.length > 0 || !!last?.queued;
     if (!queued) setStatusOverlay(id, "ready");
     // Arm restore-on-interrupt: if the refetched transcript shows the last-sent message
     // fell off the active branch, it comes back into the composer (see interruptRestore).
@@ -3509,8 +3510,16 @@ function Composer({ disabled, status }) {
     setStatusOverlay(sid, "running");
     if (items.length === 0) {
       pendingSends.value = [...pendingSends.value, text];
-      lastSentText.set(sid, { text, whileRunning: status === "running" }); // restore-on-interrupt candidate
+      lastSentText.set(sid, { text, queued: false }); // restore-on-interrupt candidate
       const ok = await action(`/sessions/${encodeURIComponent(sid)}/message`, { text }, { pushed: true });
+      // Claude queued it, so a Stop tapped meanwhile auto-submitted it: nothing comes back,
+      // and the session is still running.
+      const ir = interruptRestore.value;
+      if (ok?.queued && lastSentText.get(sid)?.text === text) lastSentText.set(sid, { text, queued: true });
+      if (ok?.queued && ir?.sessionId === sid && ir.text === text) {
+        interruptRestore.value = null;
+        clearStatusOverlay(sid);
+      }
       if (ok && text.trim().startsWith("!")) deliveredBangs.value = [...deliveredBangs.value, { text, at: Date.now() }];
       if (!ok) {
         clearStatusOverlay(sid); // never reached the pane — no turn is starting

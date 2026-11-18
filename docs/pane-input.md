@@ -76,9 +76,12 @@ whether the input box was occupied:
   live process started before the interrupt (`liveProcessStartedAt`, `core/session-state.ts`).
   That start time is part of the transcript `rev` so a resume re-ships the thread.
 - Portkey's Stop arms no revert-restore and no "ready" overlay while `queuedPending` is
-  non-empty, or while a message sent during a running turn hasn't landed yet: its queue
-  entry reaches the phone only after the send returns (`onStop`, `app.js`). The queue
-  auto-submits, so nothing comes back.
+  non-empty (`onStop`, `app.js`). The queue auto-submits, so nothing comes back. The
+  phone's copy of the queue lags a just-sent message, and Claude flushes the queue entry a
+  beat after taking it. So a `/message` sent while Claude is busy answers `queued` only once
+  that entry is in the transcript (`sendWasQueued`), and the client disarms on that answer.
+  `/interrupt` waits for a send still typing into the pane (`sendTracked`, `server.ts`), so
+  an Escape never splits one.
 - `/rewind` lists every sent prompt, including several submitted together with no reply
   in between and back-to-back `!cmd` turns. It never lists a prompt followed only by an
   interrupt marker before the next prompt (`promptCheckpointIndices`, `app.js`).
