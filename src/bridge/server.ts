@@ -51,6 +51,7 @@ import {
   isModelArg,
   isEffortArg,
   pendingScriptsFor,
+  macDraft,
   type SendResult,
 } from "../core/session-api";
 import { nativeStatus, parkedJobSessions } from "../core/session-state";
@@ -139,6 +140,8 @@ const STATIC: Record<string, string> = {
   // Tunnel-wake recovery decisions (burst retry + fetch timeouts), shared with
   // its test suite — served unbuilt.
   "/reconnect.js": "../../shared/reconnect.js",
+  // Whether a send replaces the Mac draft, shared with the send pre-flight — served unbuilt.
+  "/mac-draft.js": "../../shared/mac-draft.js",
   "/manifest.json": "manifest.json",
   "/icon-512.png": "icon-512.png",
   "/apple-touch-icon.png": "apple-touch-icon.png",
@@ -1281,7 +1284,8 @@ async function composeTranscriptPayload(id: string): Promise<Record<string, unkn
   // source for the user's custom statusline and the auto/plan mode).
   const statusline = pane ? await readPaneStatusline(pane, capture) : {};
   if (tx.pendingScripts) tx.pendingScripts = withScreenTotals(tx.pendingScripts, capture);
-  return { ...tx, approval, dialog, ...statusline };
+  const draft = pane ? await macDraft(txId, pane) : null;
+  return { ...tx, approval, dialog, ...statusline, macDraft: draft };
 }
 
 /**
@@ -1445,7 +1449,7 @@ async function route(req: Request): Promise<Response> {
     // Fast path: the client holds this exact file revision (`?rev=`), so skip rebuilding
     // and re-shipping the turns — the payload that scales with thread length. Everything
     // that can change WITHOUT the file changing still ships fresh: the pending
-    // tool/question (hook events log), approval + statusline (pane scrape), the
+    // tool/question (hook events log), approval + statusline + Mac draft (pane scrape), the
     // subagent list (separate per-agent files — an agent finishing doesn't bump the
     // session file), and the pending scripts (runner liveness, agents' files, workflow
     // run dirs, the screen-read workflow total). The client merges these over its held turns.
@@ -1472,6 +1476,7 @@ async function route(req: Request): Promise<Response> {
           approval,
           dialog: pane ? resolveDialog(await nativeStatus(id), approval, pt, capture) : null,
           ...statusline,
+          macDraft: pane ? await macDraft(txId, pane) : null,
         });
       }
     }

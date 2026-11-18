@@ -1,7 +1,7 @@
 # 9. Interrupts mirror the TUI: revert restores to the composer, keeps stay in the thread
 
 Date: 2026-07-24
-Status: accepted; amended 2026-09-30 (drafts ride Claude's Ctrl+S stash)
+Status: accepted; amended 2026-09-30 (drafts ride Claude's Ctrl+S stash); amended 2026-11-18 (a message carrying the whole draft cuts it)
 
 How the bridge drives the input box — the interrupt table, pre-flight, stash, the
 `killInput` walk, and the widgets that steal keystrokes — is in
@@ -41,7 +41,12 @@ Two send-path rules fall out of the lab findings:
 
 - **A send never types over a draft.** A draft in the input is set aside before the send
   and comes back after it; if it can't be set aside cleanly, the send aborts
-  (`draft-stash-failed`) rather than splicing the message into the remnant.
+  (`draft-stash-failed`) rather than splicing the message into the remnant. The exception
+  is a message that carries the whole draft (portkey's "use" copies it into the composer):
+  that draft is cut instead, since restoring it would invite a double send, and nothing is
+  lost — the text is in the message and Ctrl+Y recovers the cut. A cut that is never
+  yanked back leaves a held stash intact (lab, 2026-11-18); the merge recorded on
+  2026-09-30 came from the old cut followed by a C-y restore.
 - **Clear-on-revert.** After a confirmed revert-restore the pane input is cleared.
   Without this, the parked text flips every future pre-stream interrupt to a keep and
   feeds the draft guard a phantom draft forever.

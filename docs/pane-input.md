@@ -26,8 +26,11 @@ Step 5 yields a `DraftAction`, which `buildSendPlan` turns into the first send s
 
 - `none` — empty input.
 - `discard` — a leftover of an already-submitted prompt (Claude itself puts text back on
-  `/rewind` and on a pre-stream interrupt). Cut with `killInput`, never restored; the
-  prompt is still in the transcript.
+  `/rewind` and on a pre-stream interrupt), or — for a message send only — a draft the
+  outgoing message carries whole (`replacesDraft`, `shared/mac-draft.js`: the same text,
+  or the draft followed by more) and `killInput` can clear (`fitsKillInput`; a taller
+  draft is stashed as usual). Cut with `killInput`, never restored; the text is in the
+  transcript either way, and Ctrl+Y at the Mac recovers the cut.
 - `stash` — a real Mac-side draft, set aside with Claude's own Ctrl+S (`stashInput`) and
   put back by Claude after the next submit. A failed stash aborts the send with
   `draft-stash-failed`.
@@ -35,6 +38,16 @@ Step 5 yields a `DraftAction`, which `buildSendPlan` turns into the first send s
 Rewind is stricter than send: it discards a leftover but refuses a real draft with
 `draft-present`, and refuses `stash-occupied` even without one, because the rewound prompt
 overwrites the input and a completed `/rewind` loses the stash.
+
+Portkey shows the same classification before a send: every transcript payload (full and
+`unchanged`) carries `macDraft` — the box's real draft text, whether a stash is held, and
+whether the text sits on a shell-mode prompt — read from one styled capture with no keys
+sent (`macDraft`). The composer renders it as a note; it refreshes with the payload, not
+on each Mac-side keystroke. "use" copies the draft into the composer (not offered for a
+shell draft, a draft too tall to cut (`cuttable`), or one holding a `[Pasted text #N]`/
+`[Image #N]` placeholder, whose content the capture doesn't have); the note then says the send replaces the Mac draft, by the
+same `replacesDraft` rule the send applies. The capture flattens the draft's line breaks
+to spaces — a wrapped row and a real newline render alike.
 
 ## Where keys go wrong
 
