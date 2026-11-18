@@ -974,6 +974,15 @@ export async function pendingScriptsFor(paths: string[], liveSince: number | nul
 }
 
 /**
+ * Whether a queue entry is a message the user queued. Task notifications and Teams
+ * deliveries ride the same queue but are harness plumbing — a delivery becomes a teammate
+ * turn, not the user's message.
+ */
+function isUserQueueEntry(text: string): boolean {
+  return !text.trimStart().startsWith("<task-notification>") && !isTeammateDelivery(text);
+}
+
+/**
  * Replay a transcript's `queue-operation` records into the messages still queued at EOF.
  * These are op-log lines, not tree nodes (no `uuid`), so this cannot be derived from the
  * active-branch turns — it mirrors `parseBackgroundTasks`'s linear scan instead. Observed
@@ -993,15 +1002,6 @@ export async function pendingScriptsFor(paths: string[], liveSince: number | nul
  * turn at turn-end, or `queued_command` attachment mid-turn), it was consumed — drop it.
  * A genuinely queued message has landed nowhere yet, so it always survives this check.
  */
-/**
- * Whether a queue entry is a message the user queued. Task notifications and Teams
- * deliveries ride the same queue but are harness plumbing — a delivery becomes a teammate
- * turn, not the user's message.
- */
-function isUserQueueEntry(text: string): boolean {
-  return !text.trimStart().startsWith("<task-notification>") && !isTeammateDelivery(text);
-}
-
 export function parseQueuedPending(jsonl: string | string[]): string[] {
   const lines = typeof jsonl === "string" ? jsonl.split("\n") : jsonl;
   const queue: { line: number; text: string }[] = [];
@@ -1441,7 +1441,7 @@ export async function userEnqueueAfter(mark: { path: string; size: number }, tim
       }
       offset += end;
     } catch {
-      // unreadable file or a non-JSON line — retry until the deadline
+      // unreadable file — retry until the deadline
     }
     if (Date.now() >= deadline) return false;
     await Bun.sleep(50);
