@@ -86,8 +86,8 @@ export interface SessionTranscript {
    */
   lastPromptAt?: string;
   /**
-   * Opaque disk revision of the transcript file (`size:mtimeMs`) — bumps on ANY JSONL write
-   * (append OR rewind's new branch). The phone snapshots it at rewind time and clears its
+   * Opaque revision of the transcript (`combinedRev`) — bumps on ANY JSONL write (append OR
+   * rewind's new branch) and when the live process changes (a resume). The phone snapshots it at rewind time and clears its
    * optimistic (truncated + prefilled) view once `rev` changes, i.e. once the resend lands.
    */
   rev?: string;
