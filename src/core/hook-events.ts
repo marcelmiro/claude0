@@ -3,7 +3,7 @@
  *
  * The WRITER is the installed hook script (`event.sh` / `pretooluse.sh`), which
  * appends the raw hook payload — one JSON object per line — to
- * `events/<session_id>.jsonl`. This module only reads.
+ * `events/<session_id>.jsonl`. This module only reads, except `logQuestionClosed`.
  *
  * Read WITHOUT truncation (append order, newest last) — `deriveStatus` needs the
  * recent edge history, which is incompatible with the consume-and-truncate
@@ -13,7 +13,7 @@
  * discovery hot path (the log is bounded to 200–400 lines).
  */
 
-import { closeSync, fstatSync, openSync, readFileSync, readSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, fstatSync, openSync, readFileSync, readSync } from "node:fs";
 import { PATHS } from "./config";
 import { edgeStatus } from "./event-status";
 import type { PendingToolCall } from "./jsonl-reader";
@@ -143,6 +143,25 @@ export async function eventSourcedStatus(sessionId: string): Promise<SessionStat
 }
 
 /**
+ * Log the close of an AskUserQuestion the question hook denied ("Chat about this"): Claude
+ * fires no PostToolUse for a hook-denied tool, so `pendingToolCall` would keep reporting
+ * it as held until the turn's Stop. Appends only to an existing log — creating one would
+ * opt the session into event-sourced status.
+ */
+export function logQuestionClosed(pre: HookEvent): void {
+  const path = eventLogPath(pre.session_id);
+  if (!existsSync(path)) return;
+  const { session_id, transcript_path, cwd, tool_name, tool_use_id, agent_id } = pre;
+  const event: HookEvent = { session_id, transcript_path, cwd, hook_event_name: "PostToolUse", tool_name, tool_use_id };
+  if (agent_id) event.agent_id = agent_id;
+  try {
+    appendFileSync(path, JSON.stringify(event) + "\n");
+  } catch {
+    // unwritable log — the question then reads as held until the turn's Stop
+  }
+}
+
+/**
  * The tool/question awaiting approval, sourced from the last open PreToolUse
  * event (A3: pending interactions are NOT in the transcript before they resolve).
  * Returns null when no PreToolUse is open. Shape mirrors `jsonl-reader`'s
@@ -159,17 +178,14 @@ export function pendingToolCall(sessionId: string): PendingToolCall | null {
   // Subagents log into the parent's session log and keep opening tools while the main
   // thread blocks, so their calls would shadow a held question. Their AskUserQuestion
   // still counts: the question hook doesn't filter subagents, so it can be held too.
-  // A hook-denied tool ("Chat about this") never gets a PostToolUse; AskUserQuestion runs
-  // alone on its thread, so any newer main-thread tool means that question was resolved.
+  // A question denied from the hook ("Chat about this") gets no PostToolUse from Claude;
+  // the question hook logs one itself (`logQuestionClosed`).
   const closed = new Set<string>();
   let pre: HookEvent | undefined;
-  let laterMainTool = false;
   for (const e of eventsNewestFirst(sessionId)) {
     if (e.hook_event_name === "Stop") break;
     if (e.hook_event_name === "PostToolUse" && e.tool_use_id) closed.add(e.tool_use_id);
     if (e.agent_id && e.tool_name !== "AskUserQuestion") continue;
-    if (e.hook_event_name === "PreToolUse" && !e.agent_id && e.tool_name === "AskUserQuestion" && laterMainTool) break;
-    if (e.hook_event_name === "PreToolUse" && !e.agent_id) laterMainTool = true;
     if (e.hook_event_name === "PreToolUse" && e.tool_use_id && !closed.has(e.tool_use_id)) {
       pre = e;
       break;

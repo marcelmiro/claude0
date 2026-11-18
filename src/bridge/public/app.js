@@ -3443,8 +3443,9 @@ function Composer({ disabled, status }) {
       rerender();
     }
   }
-  // Double-tap Stop: first tap arms (relabels), a second within 3s interrupts. Firing sets
-  // an optimistic "ready" STATUS OVERLAY so the button becomes Send this frame — the
+  // Double-tap Stop: first tap arms (relabels), a second within 3s interrupts. Unless
+  // Claude's queue will auto-submit (below), firing sets an optimistic "ready" STATUS
+  // OVERLAY so the button becomes Send this frame — the
   // overlay is applied over every incoming payload, so a snapshot computed pre-interrupt
   // can't flicker Stop back; it retires when the server shows non-running, or expires.
   // A bare POST (not action(), which would immediately refetch) sends the interrupt; the

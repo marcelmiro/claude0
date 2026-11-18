@@ -19,6 +19,8 @@ import {
   pendingToolCall,
   eventLogPath,
   EVENTS_DIR,
+  hasEventLog,
+  logQuestionClosed,
 } from "./hook-events";
 import { fixtureJson } from "../../test/helpers/fixture";
 import type { HookEvent } from "../types";
@@ -233,16 +235,28 @@ test("pendingToolCall: a subagent's open tool doesn't shadow the main thread's h
   expect(pendingToolCall(id)?.toolUseId).toBe("tu_ask");
 });
 
-test("pendingToolCall: a denied AskUserQuestion is closed by the main thread's next tool", () => {
-  // A hook deny ("Chat about this") never fires PostToolUse; if the agent keeps working
-  // instead of yielding, the question must not resurface whenever no tool is in flight.
+test("pendingToolCall: a question denied from the hook is closed by the close it logs", () => {
+  // A hook deny ("Chat about this") fires no PostToolUse, so the question hook logs one.
   const id = "sess-denied-ask";
+  const ask = ev({ hook_event_name: "PreToolUse", tool_name: "AskUserQuestion", tool_use_id: "tu_ask", tool_input: { questions: [{ question: "Q?", header: "H", multiSelect: false, options: [{ label: "A" }, { label: "B" }] }] } }, "x");
+  writeLog(id, [ask]);
+  expect(pendingToolCall(id)?.toolUseId).toBe("tu_ask");
+  logQuestionClosed({ ...ask, session_id: id });
+  expect(pendingToolCall(id)).toBeNull();
+  // No log, no opt-in: the close never creates one (event-sourced status is opt-in by presence).
+  logQuestionClosed({ ...ask, session_id: "sess-no-log" });
+  expect(hasEventLog("sess-no-log")).toBe(false);
+});
+
+test("pendingToolCall: a held question batched with a tool that finished stays pending", () => {
+  // AskUserQuestion is concurrency-safe (Claude Code 2.1.327), so it can run beside a Read.
+  const id = "sess-batched-ask";
   writeLog(id, [
     ev({ hook_event_name: "PreToolUse", tool_name: "AskUserQuestion", tool_use_id: "tu_ask", tool_input: { questions: [{ question: "Q?", header: "H", multiSelect: false, options: [{ label: "A" }, { label: "B" }] }] } }, "x"),
-    ev({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_use_id: "tu_1", tool_input: { command: "ls" } }, "x"),
-    ev({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_use_id: "tu_1" }, "x"),
+    ev({ hook_event_name: "PreToolUse", tool_name: "Read", tool_use_id: "tu_read", tool_input: { file_path: "/a" } }, "x"),
+    ev({ hook_event_name: "PostToolUse", tool_name: "Read", tool_use_id: "tu_read" }, "x"),
   ]);
-  expect(pendingToolCall(id)).toBeNull();
+  expect(pendingToolCall(id)?.toolUseId).toBe("tu_ask");
 });
 
 test("pendingToolCall: a subagent's open tool alone is not the session's pending call", () => {
