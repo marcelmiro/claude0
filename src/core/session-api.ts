@@ -1551,11 +1551,25 @@ export function parseMacDraft(styled: string): MacDraft | null {
 export async function macDraft(sessionId: string, paneId: string): Promise<MacDraft | null> {
   try {
     const draft = parseMacDraft(await capturePane(paneId, { escapes: true }));
-    if (draft?.text && isSubmittedText(draft.text, await submittedPrompts(sessionId))) draft.text = "";
+    if (draft?.text && (await isLeftoverDraft(sessionId, draft.text))) draft.text = "";
     return draft && (draft.text || draft.stashed) ? draft : null;
   } catch {
     return null;
   }
+}
+
+// The leftover verdict for the text last seen in each session's box. `submittedPrompts`
+// streams every transcript file (seconds on a 100MB+ session) and `macDraft` runs on every
+// transcript push and poll; concurrent composes share the one in-flight scan.
+const leftoverMemo = new Map<string, { text: string; leftover: Promise<boolean> }>();
+
+function isLeftoverDraft(sessionId: string, text: string): Promise<boolean> {
+  if (text.replace(/\s+/g, "").length < MIN_LEFTOVER_CHARS) return Promise.resolve(false);
+  const hit = leftoverMemo.get(sessionId);
+  if (hit?.text === text) return hit.leftover;
+  const leftover = submittedPrompts(sessionId).then((prompts) => isSubmittedText(text, prompts));
+  leftoverMemo.set(sessionId, { text, leftover });
+  return leftover;
 }
 
 /**
