@@ -218,8 +218,8 @@ export type SendResult = {
   reason?: "no-pane" | "no-question" | "stale-question" | "not-presented" | "not-held" | "no-prompt" | "no-session" | "rewind-unavailable" | "rewind-mismatch" | "rewind-mode" | "bad-image" | "bad-selection" | "no-confirm" | "no-repo" | "no-transcript" | "resume-failed" | "not-found" | "shell-draft" | "shell-clear-failed" | "draft-stash-failed" | "clear-failed" | "notification-clear-failed" | "agent-list-focused" | "draft-present" | "draft-clear-failed" | "no-input-box" | "no-dialog" | "stale-dialog" | "stash-occupied";
   /** Fresh session id, set by createSession to the dictated id. */
   sessionId?: string;
-  /** `/message`: sent while Claude was busy and confirmed queued (`sendWasQueued`).
-   *  `/interrupt`: Claude's queue held messages at the Escape (`queuedAtMark`). */
+  /** `/message`: sent while Claude was busy and confirmed queued (`queueOpAfter`).
+   *  `/interrupt`: Claude's queue held messages at the Escape (`queuedAtEscape`). */
   queued?: boolean;
 };
 
@@ -1370,25 +1370,37 @@ export async function interruptSession(sessionId: string): Promise<SendResult> {
   if (!paneId) return { ok: false, reason: "no-pane" };
   const mark = await transcriptMark(sessionId); // last, so a dequeue just before the Escape counts
   await sendKey(paneId, "Escape");
-  return { ok: true, queued: mark ? await queuedAtMark(mark) : false };
+  return { ok: true, queued: mark ? await queuedAtEscape(mark) : undefined };
+}
+
+/**
+ * Whether Claude's queue held messages at an Escape sent just after `mark`: queued at the
+ * mark, or — when Claude hadn't flushed the enqueue yet — any queue record the Escape's
+ * auto-submit writes past it. A revert writes none.
+ */
+export async function queuedAtEscape(mark: { path: string; size: number }): Promise<boolean | undefined> {
+  const atMark = await queuedAtMark(mark);
+  if (atMark !== false) return atMark;
+  return queueOpAfter(mark, ["enqueue", "dequeue", "popAll", "remove"], 400);
 }
 
 /**
  * Whether Claude's input queue held messages at `mark`, taken just before an Escape: a
  * non-empty queue auto-submits instead of reverting (docs/pane-input.md § Interrupts). Read
  * after the Escape so it never delays it; the bound keeps out the drain the Escape causes.
+ * Undefined when unreadable — "not queued" would make the phone arm a hand-back.
  */
-export async function queuedAtMark(mark: { path: string; size: number }): Promise<boolean> {
+export async function queuedAtMark(mark: { path: string; size: number }): Promise<boolean | undefined> {
   try {
     const lines: string[] = [];
     for await (const line of jsonlLines(mark.path, 0, mark.size)) lines.push(line);
     return parseQueuedPending(lines).length > 0;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
-/** End of the session's live transcript file, before a send — the mark `sendWasQueued` reads past. */
+/** End of the session's live transcript file — the mark `queueOpAfter` and `queuedAtMark` read from. */
 export async function transcriptMark(sessionId: string): Promise<{ path: string; size: number } | null> {
   const txId = (await parkedJobSessions()).get(sessionId) ?? sessionId;
   const path = (await resolveTranscriptPaths(txId)).at(-1);
@@ -1396,12 +1408,17 @@ export async function transcriptMark(sessionId: string): Promise<{ path: string;
 }
 
 /**
- * Whether Claude queued a send made after `mark`: an enqueue record appended past it. Look for
- * the enqueue, not the queue's state — an Escape right after the send drains it at once. Claude
- * flushes the line a beat after taking the message, so poll briefly; a send that started a turn
- * instead (the busy read lagged a turn end) times out as false.
+ * Whether a `queue-operation` record with one of `ops` is appended past `mark` within
+ * `timeoutMs`. A send to a busy session was queued iff an enqueue lands past the pre-send mark
+ * — look for the record, not the queue's state, since an Escape right after the send drains
+ * it at once. Claude flushes these lines a beat late, sometimes only with the auto-submit an
+ * Escape triggers, so poll; a send that started a turn instead times out as false.
  */
-export async function sendWasQueued(mark: { path: string; size: number }, timeoutMs = 600): Promise<boolean> {
+export async function queueOpAfter(
+  mark: { path: string; size: number },
+  ops: readonly string[],
+  timeoutMs: number,
+): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   let offset = mark.size; // past the complete lines already scanned — each poll reads only new bytes
   for (;;) {
@@ -1411,7 +1428,7 @@ export async function sendWasQueued(mark: { path: string; size: number }, timeou
       for (const line of new TextDecoder().decode(bytes.subarray(0, end)).split("\n")) {
         if (!line.includes('"queue-operation"')) continue;
         const rec: { type?: unknown; operation?: unknown } = JSON.parse(line);
-        if (rec.type === "queue-operation" && rec.operation === "enqueue") return true;
+        if (rec.type === "queue-operation" && typeof rec.operation === "string" && ops.includes(rec.operation)) return true;
       }
       offset += end;
     } catch {

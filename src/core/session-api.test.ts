@@ -42,7 +42,8 @@ import {
   answerSessionQuestion,
   clarifySessionQuestion,
   interruptSession,
-  sendWasQueued,
+  queueOpAfter,
+  queuedAtEscape,
   queuedAtMark,
   clearPaneInput,
   readContextUsage,
@@ -1084,19 +1085,19 @@ test("interruptSession: no pane mapping → no-pane, sends nothing", async () =>
   expect(r).toEqual({ ok: false, reason: "no-pane" });
 });
 
-test("sendWasQueued: an enqueue appended past the mark, even if already drained; none → false", async () => {
+test("queueOpAfter: an enqueue appended past the mark, even if already drained; none → false", async () => {
   const path = join(PATHS.dir, "q-live.jsonl");
   const before = JSON.stringify({ type: "queue-operation", operation: "enqueue", content: "earlier" }) + "\n";
   writeFileSync(path, before);
   const mark = { path, size: before.length };
-  expect(await sendWasQueued(mark, 100)).toBe(false); // the earlier enqueue predates the send
+  expect(await queueOpAfter(mark, ["enqueue"], 100)).toBe(false); // the earlier enqueue predates the send
   const op = (operation: string) => JSON.stringify({ type: "queue-operation", operation, content: "M" });
   writeFileSync(path, before + [op("enqueue"), op("dequeue")].join("\n") + "\n");
-  expect(await sendWasQueued(mark)).toBe(true);
-  expect(await sendWasQueued({ path: join(PATHS.dir, "missing.jsonl"), size: 0 }, 100)).toBe(false);
+  expect(await queueOpAfter(mark, ["enqueue"], 600)).toBe(true);
+  expect(await queueOpAfter({ path: join(PATHS.dir, "missing.jsonl"), size: 0 }, ["enqueue"], 100)).toBe(false);
   // Claude's write lands mid-poll, the first read seeing only a torn line
   writeFileSync(path, before + '{"type":"queue-oper');
-  const pending = sendWasQueued(mark, 500);
+  const pending = queueOpAfter(mark, ["enqueue"], 500);
   await Bun.sleep(120);
   writeFileSync(path, before + op("enqueue") + "\n");
   expect(await pending).toBe(true);
@@ -1110,7 +1111,20 @@ test("queuedAtMark: the queue as it stood at the mark — the drain the Escape w
   writeFileSync(path, queued + op("dequeue") + JSON.stringify({ type: "user", message: { content: "M" } }) + "\n");
   expect(await queuedAtMark({ path, size: queued.length })).toBe(true); // Escape before Claude took M
   expect(await queuedAtMark({ path, size: Bun.file(path).size })).toBe(false); // M already dequeued
-  expect(await queuedAtMark({ path: join(PATHS.dir, "missing.jsonl"), size: 0 })).toBe(false);
+  expect(await queuedAtMark({ path: join(PATHS.dir, "missing.jsonl"), size: 0 })).toBeUndefined();
+});
+
+test("queuedAtEscape: an enqueue Claude flushes only with the Escape's auto-submit still counts", async () => {
+  const path = join(PATHS.dir, "q-late.jsonl");
+  const op = (operation: string, content: string | null = null) =>
+    JSON.stringify({ type: "queue-operation", operation, content }) + "\n";
+  writeFileSync(path, "");
+  const mark = { path, size: 0 };
+  expect(await queuedAtEscape(mark)).toBe(false); // a revert writes no queue record
+  const pending = queuedAtEscape(mark);
+  await Bun.sleep(80);
+  writeFileSync(path, op("enqueue", "M") + op("dequeue")); // both land after the Escape
+  expect(await pending).toBe(true);
 });
 
 test("clearPaneInput: no pane mapping → no-pane, sends nothing", async () => {

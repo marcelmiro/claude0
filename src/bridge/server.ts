@@ -32,7 +32,7 @@ import {
   pendingToolFields,
   transcriptRevAt,
   sendMessage,
-  sendWasQueued,
+  queueOpAfter,
   transcriptMark,
   answerSessionQuestion,
   clarifySessionQuestion,
@@ -289,13 +289,16 @@ function sendResult(r: SendResult): Response {
 const typing = new Map<string, Promise<unknown>>();
 
 /** Send; when Claude was busy and `confirmQueued`, also answer whether it queued the message
- *  (`sendWasQueued`). Image sends skip it: the phone hands back only text sends on Stop. */
+ *  (an enqueue past the pre-send mark, `queueOpAfter`). Image sends skip it: the phone hands back only text sends on Stop. */
 async function sendTracked(id: string, send: () => Promise<SendResult>, confirmQueued = true): Promise<SendResult> {
-  const mark = confirmQueued && (await nativeStatus(id)) === "running" ? await transcriptMark(id) : null;
-  const typed = send();
+  // Registered before the status read, so a Stop arriving at once still waits for the typing.
+  const typed = (async () => {
+    const mark = confirmQueued && (await nativeStatus(id)) === "running" ? await transcriptMark(id) : null;
+    return { r: await send(), mark };
+  })();
   typing.set(id, typed);
-  const r = await typed.finally(() => typing.get(id) === typed && typing.delete(id));
-  return r.ok && mark ? { ...r, queued: await sendWasQueued(mark) } : r;
+  const { r, mark } = await typed.finally(() => typing.get(id) === typed && typing.delete(id));
+  return r.ok && mark ? { ...r, queued: await queueOpAfter(mark, ["enqueue"], 600) } : r;
 }
 
 // ---------------------------------------------------------------------------

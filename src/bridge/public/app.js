@@ -3485,14 +3485,13 @@ function Composer({ disabled, status }) {
       // so no push would arrive to resolve the restore before it expires.
       setTimeout(() => interruptRestore.value?.sessionId === id && refreshTranscript(), 3100);
     };
-    if (!queued) {
-      arm();
-      // Focus NOW, inside the tap gesture — iOS only raises the keyboard for a focus that
-      // is gesture-driven, and the restore resolves ~2s too late to qualify. The prefill
-      // then lands in an already-focused box. If the restore never fires (mid-turn stop),
-      // the raised keyboard is still where an interrupting user is headed next.
-      if (lastSentText.get(id)?.text && ref.current) ref.current.focus();
-    }
+    if (!queued) arm();
+    // Focus NOW, inside the tap gesture — iOS only raises the keyboard for a focus that
+    // is gesture-driven, and the restore resolves ~2s too late to qualify (it may also be
+    // armed late, on the bridge's answer). The prefill then lands in an already-focused
+    // box. If the restore never fires, the raised keyboard is still where an interrupting
+    // user is headed next.
+    if (lastSentText.get(id)?.text && ref.current) ref.current.focus();
     const restore = (reason) => {
       flashError(`✗ ${reason}`);
       clearStatusOverlay(id); // failed → the true "running" resurfaces (Stop returns)
