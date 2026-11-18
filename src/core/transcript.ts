@@ -372,7 +372,9 @@ export function parseTranscript(raw: string | string[]): TranscriptTurn[] {
  * `parentUuid` to the root and reverse to oldest-first. Sidechain turns fall out naturally
  * (they branch off the main line and are never ancestors of the main leaf); we also skip
  * any sidechain record defensively. A broken parent link (missing uuid) just stops the
- * walk, yielding the deepest intact suffix rather than crashing.
+ * walk, yielding the deepest intact suffix rather than crashing. With `liveSince` (the
+ * live process's start, epoch ms), prompts an interrupt auto-submitted off-branch are
+ * spliced back in (`withInterruptSubmissions`).
  */
 export function parseActiveBranch(raw: string | string[], liveSince: number | null = null): TranscriptTurn[] {
   const byId = new Map<string, RawRecord>();

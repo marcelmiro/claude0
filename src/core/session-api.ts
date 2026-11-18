@@ -1185,9 +1185,9 @@ export async function getTranscript(sessionId: string): Promise<SessionTranscrip
   // tree, and a rewind/edit can SHRINK the logical conversation, so an append-only
   // byte-delta would leak abandoned-branch turns. We read every file the session spans
   // and rebuild the leaf→root path each time, always returning a full replacement (no
-  // cursor). The full re-parse is gated behind a per-file size+mtime cache, plus the live
-  // process's start (any change grows the live file), so an idle session re-uses the prior parse instead of
-  // re-reading multi-MB logs every refresh. Subagent listing and the last-prompt
+  // cursor). The full re-parse is gated behind a per-file size+mtime cache plus the live
+  // process's start (a resume changes it without writing), so an idle session re-uses
+  // the prior parse instead of re-reading multi-MB logs every refresh. Subagent listing and the last-prompt
   // boundary only need the paths — overlap them with the branch read.
   const [branch, subagents, lastPromptAt] = await Promise.all([
     readActiveBranchCached(paths, await liveProcessStartedAt(sessionId)),
