@@ -288,9 +288,10 @@ function sendResult(r: SendResult): Response {
 // waiting for its send to return, and an Escape landing mid-typing splits the message.
 const typing = new Map<string, Promise<unknown>>();
 
-/** Send; when Claude was busy, also answer whether it queued the message (`sendWasQueued`). */
-async function sendTracked(id: string, send: () => Promise<SendResult>): Promise<SendResult> {
-  const mark = (await nativeStatus(id)) === "running" ? await transcriptMark(id) : null;
+/** Send; when Claude was busy and `confirmQueued`, also answer whether it queued the message
+ *  (`sendWasQueued`). Image sends skip it: the phone hands back only text sends on Stop. */
+async function sendTracked(id: string, send: () => Promise<SendResult>, confirmQueued = true): Promise<SendResult> {
+  const mark = confirmQueued && (await nativeStatus(id)) === "running" ? await transcriptMark(id) : null;
   const typed = send();
   typing.set(id, typed);
   const r = await typed.finally(() => typing.get(id) === typed && typing.delete(id));
@@ -1457,7 +1458,7 @@ async function route(req: Request): Promise<Response> {
     // Same shape check as /stream/open (and enforced again inside the resolver): a
     // metacharacter id must 400, not glob its way into other sessions' transcripts.
     if (!isValidSessionId(id)) return json({ ok: false, reason: "bad-args" }, 400);
-    // Fast path: the client holds this exact file revision (`?rev=`), so skip rebuilding
+    // Fast path: the client holds this exact transcript revision (`?rev=`), so skip rebuilding
     // and re-shipping the turns — the payload that scales with thread length. Everything
     // that can change WITHOUT the file changing still ships fresh: the pending
     // tool/question (hook events log), approval + statusline (pane scrape), the
@@ -1496,7 +1497,7 @@ async function route(req: Request): Promise<Response> {
   // Transcript subscription (versioned state push): the device tells the bridge which
   // ONE session it has open; the bridge pushes that session's transcript over the
   // stream — a snapshot now (a zero-turn append when `rev` says the device already
-  // holds the current file revision), then append/snapshot deltas as it changes
+  // holds the current transcript revision), then append/snapshot deltas as it changes
   // (JSONL watcher + hook events). `sessionId: null` unsubscribes.
   if (method === "POST" && path === "/stream/open") {
     const body = (await req.json().catch(() => ({}))) as { sessionId?: unknown; rev?: unknown };
@@ -1732,7 +1733,7 @@ async function route(req: Request): Promise<Response> {
       const saved = await saveUploadedImages(files);
       if ("error" in saved) return json({ ok: false, reason: saved.error }, 400);
       pruneOldUploads();
-      const r = await sendTracked(id, () => sendMessage(id, text, saved.paths));
+      const r = await sendTracked(id, () => sendMessage(id, text, saved.paths), false);
       // Image-only (empty text) can't text-match; fall back to the turn's prompt_id anchor.
       if (r.ok) markPortkeySource(id, { deviceId: deviceOf(req), text: text.trim() ? text : undefined });
       return sendResult(r);

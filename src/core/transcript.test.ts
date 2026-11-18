@@ -555,6 +555,20 @@ test("parseActiveBranch: a rewound branch's prompt with no interrupt marker stay
   expect(texts(parseActiveBranch(raw, 0))).not.toContain("abandoned");
 });
 
+test("parseActiveBranch: a reverted prompt beside a re-sent one stays hidden when the re-send is interrupted", () => {
+  // Esc pre-stream leaves p0 as a bare leaf; the re-send p1 forks past it; Esc again lands a
+  // marker after p1 — no tool_result before it, so p0 is not an auto-submitted prompt.
+  const at = (s: string) => `2026-11-18T01:04:${s}Z`;
+  const raw = [
+    JSON.stringify({ type: "user", uuid: "a", parentUuid: null, timestamp: at("10.000"), message: { role: "user", content: "first" } }),
+    JSON.stringify({ type: "assistant", uuid: "b", parentUuid: "a", timestamp: at("12.000"), message: { role: "assistant", content: [{ type: "text", text: "reply" }] } }),
+    JSON.stringify({ type: "user", uuid: "p0", parentUuid: "b", timestamp: at("20.000"), message: { role: "user", content: "fix the thing" } }),
+    JSON.stringify({ type: "user", uuid: "p1", parentUuid: "b", timestamp: at("20.900"), message: { role: "user", content: "fix the thing" } }),
+    JSON.stringify({ type: "user", uuid: "mk", parentUuid: "p1", timestamp: at("21.800"), message: { role: "user", content: [{ type: "text", text: "[Request interrupted by user]" }] } }),
+  ].join("\n");
+  expect(texts(parseActiveBranch(raw, LIVE_BEFORE))).toEqual(["first", "reply", "fix the thing", "[Request interrupted by user]"]);
+});
+
 // --- queued_command prompt attachments (messages consumed from the queue mid-turn) ---
 
 // Mirrors the real record shape: a message sent mid-turn and consumed inside a tool loop

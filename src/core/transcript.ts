@@ -484,7 +484,8 @@ function withInterruptSubmissions(
     const marker = chain[i]!;
     out.push(marker);
     const toolResult = chain[i - 1];
-    if (!isInterruptMarker(marker) || typeof toolResult?.parentUuid !== "string") continue;
+    if (!isInterruptMarker(marker) || !toolResult || !isToolResult(toolResult)) continue;
+    if (typeof toolResult.parentUuid !== "string") continue;
     const markerAt = Date.parse(marker.timestamp ?? "");
     if (liveSince === null || !(markerAt >= liveSince)) continue;
     for (const root of children.get(toolResult.parentUuid) ?? []) {
@@ -497,6 +498,11 @@ function withInterruptSubmissions(
     }
   }
   return out;
+}
+
+function isToolResult(record: RawRecord): boolean {
+  const content = record.message?.content;
+  return record.type === "user" && Array.isArray(content) && content.some((b) => b?.type === "tool_result");
 }
 
 function isInterruptMarker(record: RawRecord): boolean {

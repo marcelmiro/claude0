@@ -950,7 +950,8 @@ async function statSurvivors(
 /**
  * The transcript's current disk revision (matching the `rev` a full response carries),
  * or null when no transcript exists. The `/transcript?rev=` fast path compares this
- * against the client's held rev — one memoized path lookup + one stat per file.
+ * against the client's held rev — one memoized path lookup, one stat per file, and a read
+ * of the native session files for `liveSince`.
  */
 export async function transcriptRevAt(
   sessionId: string,
@@ -1051,9 +1052,10 @@ function deliveredAfter(lines: string[], afterLine: number, text: string): boole
 }
 
 // Per-session cache of the parsed active branch, keyed by the joined file paths and
-// validated by every file's size+mtime. Any change — append OR rewind (which still
-// appends a new branch), or a cwd move opening a new file — grows a file, bumps an
-// mtime, or changes the path set, so an unchanged stat vector means unchanged content:
+// validated by every file's size+mtime plus `liveSince` (it gates the interrupt splice).
+// Any change — append OR rewind (which still appends a new branch), or a cwd move opening
+// a new file — grows a file, bumps an mtime, or changes the path set, so an unchanged key
+// means an unchanged parse:
 // re-use the parse instead of re-reading and re-parsing multi-MB logs on every refresh.
 const branchCache = new Map<
   string,
@@ -1183,8 +1185,8 @@ export async function getTranscript(sessionId: string): Promise<SessionTranscrip
   // tree, and a rewind/edit can SHRINK the logical conversation, so an append-only
   // byte-delta would leak abandoned-branch turns. We read every file the session spans
   // and rebuild the leaf→root path each time, always returning a full replacement (no
-  // cursor). The full re-parse is gated behind a per-file size+mtime cache (any change
-  // grows the live file), so an idle session re-uses the prior parse instead of
+  // cursor). The full re-parse is gated behind a per-file size+mtime cache, plus the live
+  // process's start (any change grows the live file), so an idle session re-uses the prior parse instead of
   // re-reading multi-MB logs every refresh. Subagent listing and the last-prompt
   // boundary only need the paths — overlap them with the branch read.
   const [branch, subagents, lastPromptAt] = await Promise.all([

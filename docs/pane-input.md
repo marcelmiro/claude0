@@ -80,7 +80,7 @@ whether the input box was occupied:
 - Portkey's Stop arms no revert-restore and no "ready" overlay while `queuedPending` is
   non-empty (`onStop`, `app.js`). The queue auto-submits, so nothing comes back. The
   phone's copy of the queue lags a just-sent message, and Claude flushes the queue entry a
-  beat after taking it. So a `/message` sent while Claude is busy answers `queued` only once
+  beat after taking it. So a text `/message` sent while Claude is busy answers `queued` only once
   that entry is in the transcript (`sendWasQueued`), and the client disarms on that answer.
   `/interrupt` waits for a send still typing into the pane (`sendTracked`, `server.ts`), so
   an Escape never splits one.
