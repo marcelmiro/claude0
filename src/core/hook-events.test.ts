@@ -11,7 +11,7 @@
 
 import "../../test/helpers/home";
 import { test, expect, beforeEach } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import {
   readEvents,
   eventsNewestFirst,
@@ -246,6 +246,12 @@ test("pendingToolCall: a question denied from the hook is closed by the close it
   // No log, no opt-in: the close never creates one (event-sourced status is opt-in by presence).
   logQuestionClosed({ ...ask, session_id: "sess-no-log" });
   expect(hasEventLog("sess-no-log")).toBe(false);
+  // Just rotated: the open question sits in `.old` and there is no current file yet.
+  const rotated = "sess-rotated";
+  writeLog(rotated, [ask]);
+  renameSync(eventLogPath(rotated), `${eventLogPath(rotated)}.old`);
+  logQuestionClosed({ ...ask, session_id: rotated });
+  expect(pendingToolCall(rotated)).toBeNull();
 });
 
 test("pendingToolCall: a held question batched with a tool that finished stays pending", () => {

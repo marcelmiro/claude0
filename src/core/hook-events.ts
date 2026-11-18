@@ -145,12 +145,13 @@ export async function eventSourcedStatus(sessionId: string): Promise<SessionStat
 /**
  * Log the close of an AskUserQuestion the question hook denied ("Chat about this"): Claude
  * fires no PostToolUse for a hook-denied tool, so `pendingToolCall` would keep reporting
- * it as held until the turn's Stop. Appends only to an existing log — creating one would
- * opt the session into event-sourced status.
+ * it as held until the turn's Stop. Appends only to an existing log (either half: a
+ * rotation leaves no current file until the next append) — creating one would opt the
+ * session into event-sourced status.
  */
 export function logQuestionClosed(pre: HookEvent): void {
   const path = eventLogPath(pre.session_id);
-  if (!existsSync(path)) return;
+  if (!existsSync(path) && !existsSync(`${path}.old`)) return;
   const { session_id, transcript_path, cwd, tool_name, tool_use_id, agent_id } = pre;
   const event: HookEvent = { session_id, transcript_path, cwd, hook_event_name: "PostToolUse", tool_name, tool_use_id };
   if (agent_id) event.agent_id = agent_id;
