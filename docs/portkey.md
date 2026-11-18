@@ -55,10 +55,12 @@ Order of one dictation:
    (`micDown`/`micUp`, 350ms threshold). One mic stream lives for the page's lifetime
    (`ensureMic`): iOS asks permission once per app launch and re-prompts sooner for a
    stopped stream.
-2. **Wait, then speak.** The button is peach ("wait") until real samples arrive, then red.
-   A long-idle iOS track stays `live` but delivers exact zeros for seconds after recording
-   starts; that silently cut the first ~3.5s off a prompt. A mic's noise floor is never
-   exactly zero, so the first non-zero sample means audio is flowing (`whenAudioFlows`).
+2. **Speak on red.** The button turns peach ("wait") only while the mic stream is being
+   (re)acquired, which took ~1.7s after the stream had died. Nothing records then. The
+   button goes red the moment the recorder starts. Don't add an AnalyserNode "audio is
+   flowing" gate: in the iOS PWA it read pure silence for 8s while MediaRecorder captured
+   every word. In the test, counting aloud, 1–18 were all transcribed, and the gate only
+   opened on its timeout at "fifteen".
 3. **Transcribe.** `POST /sessions/:id/dictate` (multipart `audio`) sends the recording to
    OpenAI `gpt-transcribe` with a vocabulary hint, and returns the raw text in about 1s. The
    recorder is timesliced (`start(1000)`), and the container is sniffed from the bytes

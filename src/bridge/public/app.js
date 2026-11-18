@@ -3215,54 +3215,24 @@ function BangRunningTag({ since }) {
 // Best-effort: storage failures are swallowed. Bounded to the newest 20 sessions.
 // --- Dictation (ADR 37, docs/portkey.md § Dictation) ---
 // One mic stream for the page's life: iOS asks permission once per app launch and a
-// stopped stream re-prompts sooner. A long-idle track can stay "live" yet deliver silence
-// (exact zeros) for seconds after recording starts — the first words were lost that way —
-// so the button only turns red once real samples arrive (a mic's noise floor is never 0).
+// stopped stream re-prompts sooner. The button is "wait" only while that stream is being
+// (re)acquired — nothing records then — and red from the moment the recorder starts.
 const DICTATION_HOLD_MS = 350;
-const mic = { stream: null, actx: null, analyser: null, analysed: null };
+const mic = { stream: null };
 // TEMPORARY on-device tracing: each step lands in the bridge log (`dictation-trace:`).
 let dtraceT0 = 0;
 function dtrace(step, extra = {}) {
   const body = JSON.stringify({ step, ms: Math.round(performance.now() - dtraceT0), ...extra });
   fetch("/dictation/trace", { method: "POST", headers: { "content-type": "application/json" }, body, keepalive: true }).catch(() => {});
 }
-// iOS starts an AudioContext only from inside a user gesture — after an `await` the tap no
-// longer counts — so this must run synchronously at the top of the press handler.
-function primeAudioContext() {
-  try {
-    mic.actx = mic.actx || new AudioContext();
-    if (mic.actx.state !== "running") mic.actx.resume().catch(() => {});
-  } catch {}
-}
+// Don't gate recording on an AnalyserNode "is audio flowing" check: in the iOS PWA it read
+// pure silence for 8s while MediaRecorder captured every word (counted aloud: 1–18 all
+// transcribed, detector fired on its timeout at "fifteen").
 async function ensureMic() {
   const track = mic.stream && mic.stream.getAudioTracks()[0];
   if (!track || track.readyState !== "live") {
     mic.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
   }
-  if (mic.actx && mic.analysed !== mic.stream) {
-    try {
-      mic.analyser = mic.actx.createAnalyser();
-      mic.actx.createMediaStreamSource(mic.stream).connect(mic.analyser);
-      mic.analysed = mic.stream;
-    } catch {
-      mic.analyser = null;
-    }
-  }
-}
-// Calls onLive(reason) once audio flows. A detector that can't run (context not started)
-// must never hold the user in "wait", so that case goes live at once.
-function whenAudioFlows(stillRecording, onLive) {
-  if (!mic.analyser || !mic.actx || mic.actx.state !== "running") return onLive(`no-detector:${mic.actx ? mic.actx.state : "none"}`);
-  const buf = new Float32Array(mic.analyser.fftSize);
-  const t0 = performance.now();
-  const tick = () => {
-    if (!stillRecording()) return;
-    mic.analyser.getFloatTimeDomainData(buf);
-    if (buf.some((v) => v !== 0)) return onLive("samples");
-    if (performance.now() - t0 > 8000) return onLive("timeout");
-    requestAnimationFrame(tick);
-  };
-  tick();
 }
 function startRecorder() {
   const mimeType = ["audio/mp4", "audio/webm;codecs=opus"].find((m) => MediaRecorder.isTypeSupported(m)) || "";
@@ -3596,38 +3566,35 @@ function Composer({ disabled, status }) {
     dtrace("down", { phase: d.phase, toggle: d.toggle, pointer: e.pointerType });
     if (d.phase === "recording" && d.toggle) return finishDictation();
     if (d.phase !== "idle") return;
-    primeAudioContext();
     d.phase = "arming";
     d.downAt = performance.now();
     d.toggle = false;
     d.cancel = false;
+    const warm = setTimeout(() => setDictFace("warm"), 150); // only if acquiring the mic takes a moment
     try {
       await ensureMic();
     } catch (err) {
+      clearTimeout(warm);
       d.phase = "idle";
+      setDictFace("idle");
       dtrace("mic-error", { error: String(err && err.message) });
       return flashError(`✗ mic unavailable: ${err.message || err}`);
+    } finally {
+      clearTimeout(warm);
     }
     const track = mic.stream.getAudioTracks()[0];
-    dtrace("mic", { actx: mic.actx && mic.actx.state, track: track && track.readyState, muted: track && track.muted, cancel: d.cancel, toggle: d.toggle });
+    dtrace("mic", { track: track && track.readyState, muted: track && track.muted, cancel: d.cancel, toggle: d.toggle });
     if (d.cancel) {
       d.phase = "idle";
+      setDictFace("idle");
       return flashNotice("The mic was still starting — hold again");
     }
     d.recorder = startRecorder();
     dtrace("rec-start", { mime: d.recorder.mimeType });
     d.phase = "recording";
-    d.liveAt = 0;
-    setDictFace("warm");
-    whenAudioFlows(
-      () => dict.current.phase === "recording",
-      (reason) => {
-        dtrace("live", { reason });
-        d.liveAt = performance.now();
-        setDictFace("rec");
-        d.timer = setInterval(rerender, 250); // the face shows elapsed seconds
-      },
-    );
+    d.liveAt = performance.now();
+    setDictFace("rec");
+    d.timer = setInterval(rerender, 250); // the face shows elapsed seconds
   }
   function micUp(e) {
     e.preventDefault();
