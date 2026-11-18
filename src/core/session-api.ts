@@ -43,7 +43,7 @@ import { getLatestUserPrompt } from "./sessions";
 import { subagentStatus } from "./agent-status";
 import { parseBackgroundTasks, liveScripts, agentScriptsAt, withWorkflowProgress, endedWorkflows, type BackgroundTask } from "./background-tasks";
 import { decideQuestion, declineQuestion, buildAnswersMap } from "./approval";
-import { nativeStatus, parkedJobSessions } from "./session-state";
+import { liveProcessStartedAt, nativeStatus, parkedJobSessions } from "./session-state";
 import { jsonlLines, type PendingQuestion, type PendingToolCall } from "./jsonl-reader";
 import type { QuestionAnswer, RestoreState, ToolResultSummary, TranscriptBlock, TranscriptTurn } from "../types";
 
@@ -918,14 +918,16 @@ export function pendingToolFields(
  * file flip; the count term covers the flip instant itself, when a brand-new file could
  * otherwise leave size+mtime looking unchanged.
  */
-function combinedRev(stats: { size: number; mtimeMs: number }[]): string {
+// `liveSince` (the live process's start, see parseActiveBranch) changes the parsed turns
+// without touching the files — a resume must still read as a new revision.
+function combinedRev(stats: { size: number; mtimeMs: number }[], liveSince: number | null): string {
   let size = 0;
   let mtime = 0;
   for (const s of stats) {
     size += s.size;
     if (s.mtimeMs > mtime) mtime = s.mtimeMs;
   }
-  return `${stats.length}:${size}:${mtime}`;
+  return `${stats.length}:${size}:${mtime}:${liveSince}`;
 }
 
 /**
@@ -950,10 +952,11 @@ async function statSurvivors(
  */
 export async function transcriptRevAt(
   sessionId: string,
-): Promise<{ paths: string[]; rev: string } | null> {
+): Promise<{ paths: string[]; rev: string; liveSince: number | null } | null> {
   const files = await statSurvivors(await resolveTranscriptPaths(sessionId));
   if (files.length === 0) return null;
-  return { paths: files.map((f) => f.path), rev: combinedRev(files.map((f) => f.stat)) };
+  const liveSince = await liveProcessStartedAt(sessionId);
+  return { paths: files.map((f) => f.path), rev: combinedRev(files.map((f) => f.stat), liveSince), liveSince };
 }
 
 /**
@@ -962,8 +965,8 @@ export async function transcriptRevAt(
  * runner dying, an agent launching a script and a workflow's progress all change it
  * while the files don't.
  */
-export async function pendingScriptsFor(paths: string[]): Promise<BackgroundTask[]> {
-  return (await readActiveBranchCached(paths)).pendingScripts;
+export async function pendingScriptsFor(paths: string[], liveSince: number | null): Promise<BackgroundTask[]> {
+  return (await readActiveBranchCached(paths, liveSince)).pendingScripts;
 }
 
 /**
@@ -1106,14 +1109,15 @@ function emptyBranch(): BranchRead {
  * file was ever appended to. Frozen older files are re-streamed when the live file
  * changes — bounded by what a single large live file already costs.
  */
-async function readActiveBranchCached(allPaths: string[]): Promise<BranchRead> {
+async function readActiveBranchCached(allPaths: string[], liveSince: number | null): Promise<BranchRead> {
   try {
     // An older (frozen) file can vanish between the glob and the stat — retention
     // cleanup, a deleted project dir. Read the survivors rather than blanking the
     // whole session; the 3s resolve TTL heals the path list right after.
     const files = await statSurvivors(allPaths);
     if (files.length === 0) return emptyBranch();
-    const statKey = files.map((f) => `${f.path}:${f.stat.size}:${f.stat.mtimeMs}`).join(";");
+    // liveSince changes the parse (see parseActiveBranch) and moves only on a resume.
+    const statKey = files.map((f) => `${f.path}:${f.stat.size}:${f.stat.mtimeMs}`).join(";") + `|${liveSince}`;
     const cacheKey = files.map((f) => f.path).join(";");
     const hit = branchCache.get(cacheKey);
     // pendingScripts is derived per READ, not cached: the runner-liveness probe must
@@ -1141,8 +1145,8 @@ async function readActiveBranchCached(allPaths: string[]): Promise<BranchRead> {
     for (const f of files) for await (const line of jsonlLines(f.path)) lines.push(line);
     const entry = {
       statKey,
-      rev: combinedRev(files.map((f) => f.stat)),
-      turns: parseActiveBranch(lines),
+      rev: combinedRev(files.map((f) => f.stat), liveSince),
+      turns: parseActiveBranch(lines, liveSince),
       // Piggybacked on the same read: background tasks, the queued-message replay, and
       // context usage change only when the files do (all are transcript records), so
       // one cache covers all of them.
@@ -1182,7 +1186,7 @@ export async function getTranscript(sessionId: string): Promise<SessionTranscrip
   // re-reading multi-MB logs every refresh. Subagent listing and the last-prompt
   // boundary only need the paths — overlap them with the branch read.
   const [branch, subagents, lastPromptAt] = await Promise.all([
-    readActiveBranchCached(paths),
+    readActiveBranchCached(paths, await liveProcessStartedAt(sessionId)),
     listSubagents(paths),
     lastPromptAtAcross(paths),
   ]);

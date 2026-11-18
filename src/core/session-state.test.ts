@@ -10,7 +10,7 @@ import { test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadNativeStatuses, nativeFilePending, nativeSessionIdByPid, parkedJobSessions, resolveStatus } from "./session-state";
+import { liveProcessStartedAt, loadNativeStatuses, nativeFilePending, nativeSessionIdByPid, parkedJobSessions, resolveStatus } from "./session-state";
 
 let dir: string;
 
@@ -62,6 +62,14 @@ test("duplicate sessionId: larger updatedAt wins", async () => {
   writeFile("new.json", { ...base, sessionId: "dup", status: "idle", updatedAt: 200 });
   const map = await loadNativeStatuses(dir);
   expect(map.get("dup")).toBe("ready"); // idle (updatedAt 200) beats busy (100)
+});
+
+test("liveProcessStartedAt: the live interactive process's start; null when none runs", async () => {
+  writeFile("dead.json", { ...base, sessionId: "s", pid: 999999, startedAt: 5, updatedAt: 300 });
+  writeFile("live.json", { ...base, sessionId: "s", startedAt: 42, updatedAt: 200 });
+  writeFile("bg.json", { ...base, sessionId: "s", kind: "bg", startedAt: 7, updatedAt: 400 });
+  expect(await liveProcessStartedAt("s", dir)).toBe(42);
+  expect(await liveProcessStartedAt("other", dir)).toBeNull();
 });
 
 test("non-interactive kind and unknown status are excluded", async () => {

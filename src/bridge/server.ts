@@ -1445,7 +1445,7 @@ async function route(req: Request): Promise<Response> {
         const [pane, subagents, pendingScripts] = await Promise.all([
           resolveSessionPane(id),
           listSubagents(at.paths),
-          pendingScriptsFor(at.paths),
+          pendingScriptsFor(at.paths, at.liveSince),
         ]);
         const capture = pane ? await capturePane(pane) : "";
         const pt = pendingToolCall(txId);

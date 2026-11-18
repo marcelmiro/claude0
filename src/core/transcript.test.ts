@@ -488,6 +488,73 @@ test("parseActiveBranch drops subagent sidechain turns", () => {
   expect(texts(parseActiveBranch(raw))).toEqual(["main prompt", "main reply", "follow up"]);
 });
 
+// --- queued messages auto-submitted by an Escape on a running tool ---
+
+// Mirrors Claude Code 2.1.327's records (captured live): the queued prompts hang off the
+// interrupted tool_use as a sibling of the rejected tool_result, linked through an attachment.
+function interruptedToolLog(submitted: { uuid: string; parentUuid: string; text: string; at: string }[]): string {
+  const at = (s: string) => `2026-11-18T01:04:${s}Z`;
+  return [
+    JSON.stringify({ type: "user", uuid: "p", parentUuid: null, timestamp: at("44.799"), message: { role: "user", content: "run slow.sh" } }),
+    JSON.stringify({ type: "assistant", uuid: "tu", parentUuid: "p", timestamp: at("46.508"), message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "./slow.sh" } }] } }),
+    ...submitted.map((s) =>
+      s.uuid.startsWith("att")
+        ? JSON.stringify({ type: "attachment", uuid: s.uuid, parentUuid: s.parentUuid, timestamp: at(s.at), attachment: { type: "total_tokens_reminder" } })
+        : JSON.stringify({ type: "user", uuid: s.uuid, parentUuid: s.parentUuid, timestamp: at(s.at), message: { role: "user", content: s.text } }),
+    ),
+    JSON.stringify({ type: "user", uuid: "tr", parentUuid: "tu", timestamp: at("57.016"), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "The user doesn't want to proceed with this tool use." }] } }),
+    JSON.stringify({ type: "user", uuid: "mk", parentUuid: "tr", timestamp: at("57.018"), message: { role: "user", content: [{ type: "text", text: "[Request interrupted by user for tool use]" }] } }),
+    JSON.stringify({ type: "assistant", uuid: "re", parentUuid: "mk", timestamp: at("59.258"), message: { role: "assistant", content: [{ type: "text", text: "e1 e2" }] } }),
+  ].join("\n");
+}
+
+// The live Claude process started before the interrupt (it still holds the submissions).
+const LIVE_BEFORE = Date.parse("2026-11-18T01:00:00Z");
+
+test("parseActiveBranch shows queued prompts an interrupt auto-submitted off-branch, after the marker", () => {
+  const raw = interruptedToolLog([
+    { uuid: "q1", parentUuid: "tu", text: "QE1 say e1", at: "57.005" },
+    { uuid: "att1", parentUuid: "q1", text: "", at: "57.005" },
+    { uuid: "q2", parentUuid: "att1", text: "QE2 say e2", at: "57.006" },
+  ]);
+  expect(texts(parseActiveBranch(raw, LIVE_BEFORE))).toEqual([
+    "run slow.sh",
+    "[Request interrupted by user for tool use]",
+    "QE1 say e1",
+    "QE2 say e2",
+    "e1 e2",
+  ]);
+});
+
+test("parseActiveBranch: a lone auto-submitted prompt is shown too", () => {
+  const raw = interruptedToolLog([{ uuid: "q1", parentUuid: "tu", text: "QUEUED-M3", at: "57.005" }]);
+  expect(texts(parseActiveBranch(raw, LIVE_BEFORE))).toContain("QUEUED-M3");
+});
+
+test("parseActiveBranch: auto-submitted prompts stay hidden once no process holds them", () => {
+  // A resume rebuilds Claude's conversation from the parent chain, dropping them — so with
+  // no live process, or one started after the interrupt, the thread mirrors that.
+  const raw = interruptedToolLog([{ uuid: "q1", parentUuid: "tu", text: "QUEUED-M3", at: "57.005" }]);
+  expect(texts(parseActiveBranch(raw))).not.toContain("QUEUED-M3");
+  expect(texts(parseActiveBranch(raw, Date.parse("2026-11-18T01:10:00Z")))).not.toContain("QUEUED-M3");
+});
+
+test("parseActiveBranch: an old off-branch prompt beside an interrupted tool stays hidden", () => {
+  // Same tree position, but written long before the interrupt — an abandoned branch.
+  const raw = interruptedToolLog([{ uuid: "old", parentUuid: "tu", text: "abandoned", at: "47.000" }]);
+  expect(texts(parseActiveBranch(raw, LIVE_BEFORE))).not.toContain("abandoned");
+});
+
+test("parseActiveBranch: a rewound branch's prompt with no interrupt marker stays hidden", () => {
+  const raw = [
+    rec({ uuid: "a", parentUuid: null, role: "user", text: "first" }),
+    rec({ uuid: "b", parentUuid: "a", role: "assistant", text: "reply" }),
+    rec({ uuid: "c-old", parentUuid: "b", role: "user", text: "abandoned" }),
+    rec({ uuid: "d", parentUuid: "b", role: "user", text: "[Request interrupted by user]" }),
+  ].join("\n");
+  expect(texts(parseActiveBranch(raw, 0))).not.toContain("abandoned");
+});
+
 // --- queued_command prompt attachments (messages consumed from the queue mid-turn) ---
 
 // Mirrors the real record shape: a message sent mid-turn and consumed inside a tool loop

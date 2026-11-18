@@ -167,6 +167,26 @@ export async function nativeSessionIdByPid(
 }
 
 /**
+ * When the live interactive Claude process holding `sessionId` started (its native file's
+ * `startedAt`, epoch ms), or null when none runs. A resume rebuilds the conversation from
+ * the JSONL's parent chain, so records off that chain exist in a process's memory only if
+ * it was already running when they were written. On duplicates, newest `updatedAt` wins.
+ */
+export async function liveProcessStartedAt(sessionId: string, dir: string = NATIVE_STATUS_DIR): Promise<number | null> {
+  let startedAt: number | null = null;
+  let newest = -1;
+  for (const r of await scanRecords(dir)) {
+    if (r?.kind !== "interactive" || r?.sessionId !== sessionId || typeof r?.startedAt !== "number") continue;
+    if (!pidAlive(r?.pid)) continue;
+    const updatedAt = typeof r?.updatedAt === "number" ? r.updatedAt : 0;
+    if (updatedAt <= newest) continue;
+    newest = updatedAt;
+    startedAt = r.startedAt;
+  }
+  return startedAt;
+}
+
+/**
  * True while a live Claude process hasn't written its per-pid native file yet: the first
  * ~0.6s after launch (measured on 2.1.322), when neither this file nor the SessionStart hook
  * knows its id. False when the native dir doesn't exist at all (a Claude without native

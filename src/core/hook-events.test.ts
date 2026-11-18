@@ -233,6 +233,18 @@ test("pendingToolCall: a subagent's open tool doesn't shadow the main thread's h
   expect(pendingToolCall(id)?.toolUseId).toBe("tu_ask");
 });
 
+test("pendingToolCall: a denied AskUserQuestion is closed by the main thread's next tool", () => {
+  // A hook deny ("Chat about this") never fires PostToolUse; if the agent keeps working
+  // instead of yielding, the question must not resurface whenever no tool is in flight.
+  const id = "sess-denied-ask";
+  writeLog(id, [
+    ev({ hook_event_name: "PreToolUse", tool_name: "AskUserQuestion", tool_use_id: "tu_ask", tool_input: { questions: [{ question: "Q?", header: "H", multiSelect: false, options: [{ label: "A" }, { label: "B" }] }] } }, "x"),
+    ev({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_use_id: "tu_1", tool_input: { command: "ls" } }, "x"),
+    ev({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_use_id: "tu_1" }, "x"),
+  ]);
+  expect(pendingToolCall(id)).toBeNull();
+});
+
 test("pendingToolCall: a subagent's open tool alone is not the session's pending call", () => {
   const id = "sess-subagent-only";
   writeLog(id, [
