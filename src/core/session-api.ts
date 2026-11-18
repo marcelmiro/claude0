@@ -218,7 +218,7 @@ export type SendResult = {
   reason?: "no-pane" | "no-question" | "stale-question" | "not-presented" | "not-held" | "no-prompt" | "no-session" | "rewind-unavailable" | "rewind-mismatch" | "rewind-mode" | "bad-image" | "bad-selection" | "no-confirm" | "no-repo" | "no-transcript" | "resume-failed" | "not-found" | "shell-draft" | "shell-clear-failed" | "draft-stash-failed" | "clear-failed" | "notification-clear-failed" | "agent-list-focused" | "draft-present" | "draft-clear-failed" | "no-input-box" | "no-dialog" | "stale-dialog" | "stash-occupied";
   /** Fresh session id, set by createSession to the dictated id. */
   sessionId?: string;
-  /** `/message`: sent while Claude was busy and confirmed queued (`queueOpAfter`).
+  /** `/message`: sent while Claude was busy and confirmed queued (`userEnqueueAfter`).
    *  `/interrupt`: Claude's queue held messages at the Escape (`queuedAtEscape`). */
   queued?: boolean;
 };
@@ -993,6 +993,15 @@ export async function pendingScriptsFor(paths: string[], liveSince: number | nul
  * turn at turn-end, or `queued_command` attachment mid-turn), it was consumed — drop it.
  * A genuinely queued message has landed nowhere yet, so it always survives this check.
  */
+/**
+ * Whether a queue entry is a message the user queued. Task notifications and Teams
+ * deliveries ride the same queue but are harness plumbing — a delivery becomes a teammate
+ * turn, not the user's message.
+ */
+function isUserQueueEntry(text: string): boolean {
+  return !text.trimStart().startsWith("<task-notification>") && !isTeammateDelivery(text);
+}
+
 export function parseQueuedPending(jsonl: string | string[]): string[] {
   const lines = typeof jsonl === "string" ? jsonl.split("\n") : jsonl;
   const queue: { line: number; text: string }[] = [];
@@ -1024,10 +1033,7 @@ export function parseQueuedPending(jsonl: string | string[]): string[] {
     }
   }
   return queue
-    .filter(({ text }) => !text.trimStart().startsWith("<task-notification>"))
-    // Teams deliveries are enqueued by the harness, not the user — never render them
-    // as the user's queued message (delivery makes them a teammate turn instead).
-    .filter(({ text }) => !isTeammateDelivery(text))
+    .filter(({ text }) => isUserQueueEntry(text))
     .filter(({ line, text }) => !deliveredAfter(lines, line, text))
     .map(({ text }) => text);
 }
@@ -1121,7 +1127,7 @@ async function readActiveBranchCached(allPaths: string[], liveSince: number | nu
     // whole session; the 3s resolve TTL heals the path list right after.
     const files = await statSurvivors(allPaths);
     if (files.length === 0) return emptyBranch();
-    // liveSince changes the parse (see parseActiveBranch) and moves only on a resume.
+    // liveSince changes the parse (see parseActiveBranch); it moves when the live process does.
     const statKey = files.map((f) => `${f.path}:${f.stat.size}:${f.stat.mtimeMs}`).join(";") + `|${liveSince}`;
     const cacheKey = files.map((f) => f.path).join(";");
     const hit = branchCache.get(cacheKey);
@@ -1375,13 +1381,13 @@ export async function interruptSession(sessionId: string): Promise<SendResult> {
 
 /**
  * Whether Claude's queue held messages at an Escape sent just after `mark`: queued at the
- * mark, or — when Claude hadn't flushed the enqueue yet — any queue record the Escape's
+ * mark, or — when Claude hadn't flushed the enqueue yet — the user's enqueue the Escape's
  * auto-submit writes past it. A revert writes none.
  */
 export async function queuedAtEscape(mark: { path: string; size: number }): Promise<boolean | undefined> {
   const atMark = await queuedAtMark(mark);
   if (atMark !== false) return atMark;
-  return queueOpAfter(mark, ["enqueue", "dequeue", "popAll", "remove"], 400);
+  return userEnqueueAfter(mark, 400);
 }
 
 /**
@@ -1400,7 +1406,7 @@ export async function queuedAtMark(mark: { path: string; size: number }): Promis
   }
 }
 
-/** End of the session's live transcript file — the mark `queueOpAfter` and `queuedAtMark` read from. */
+/** End of the session's live transcript file — the mark `userEnqueueAfter` and `queuedAtMark` read from. */
 export async function transcriptMark(sessionId: string): Promise<{ path: string; size: number } | null> {
   const txId = (await parkedJobSessions()).get(sessionId) ?? sessionId;
   const path = (await resolveTranscriptPaths(txId)).at(-1);
@@ -1408,17 +1414,14 @@ export async function transcriptMark(sessionId: string): Promise<{ path: string;
 }
 
 /**
- * Whether a `queue-operation` record with one of `ops` is appended past `mark` within
- * `timeoutMs`. A send to a busy session was queued iff an enqueue lands past the pre-send mark
- * — look for the record, not the queue's state, since an Escape right after the send drains
- * it at once. Claude flushes these lines a beat late, sometimes only with the auto-submit an
- * Escape triggers, so poll; a send that started a turn instead times out as false.
+ * Whether an enqueue of a user message is appended past `mark` within `timeoutMs`. A send
+ * to a busy session was queued iff one lands past the pre-send mark — look for the record,
+ * not the queue's state, since an Escape right after the send drains it at once. Claude
+ * flushes the line a beat late, sometimes only with the auto-submit an Escape triggers, so
+ * poll; a send that started a turn instead times out as false. Harness entries (a Monitor's
+ * notifications) don't count: they arrive any time.
  */
-export async function queueOpAfter(
-  mark: { path: string; size: number },
-  ops: readonly string[],
-  timeoutMs: number,
-): Promise<boolean> {
+export async function userEnqueueAfter(mark: { path: string; size: number }, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   let offset = mark.size; // past the complete lines already scanned — each poll reads only new bytes
   for (;;) {
@@ -1427,8 +1430,14 @@ export async function queueOpAfter(
       const end = bytes.lastIndexOf(10) + 1; // a torn last line waits for the next poll
       for (const line of new TextDecoder().decode(bytes.subarray(0, end)).split("\n")) {
         if (!line.includes('"queue-operation"')) continue;
-        const rec: { type?: unknown; operation?: unknown } = JSON.parse(line);
-        if (rec.type === "queue-operation" && typeof rec.operation === "string" && ops.includes(rec.operation)) return true;
+        let rec: { type?: unknown; operation?: unknown; content?: unknown };
+        try {
+          rec = JSON.parse(line);
+        } catch {
+          continue; // a mark taken mid-line leaves a partial first line
+        }
+        const enqueue = rec.type === "queue-operation" && rec.operation === "enqueue";
+        if (enqueue && typeof rec.content === "string" && isUserQueueEntry(rec.content)) return true;
       }
       offset += end;
     } catch {

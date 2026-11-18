@@ -81,11 +81,11 @@ whether the input box was occupied:
   non-empty (`onStop`, `app.js`). The queue auto-submits, so nothing comes back. The
   phone's copy of the queue lags a just-sent message, and Claude flushes the queue entry a
   beat after taking it. So a text `/message` sent while Claude is busy answers `queued` only once
-  that entry is in the transcript (`queueOpAfter`), and the client disarms on that answer.
+  that entry is in the transcript (`userEnqueueAfter`), and the client disarms on that answer.
   `/interrupt` waits for a send still typing into the pane (`sendTracked`, `server.ts`), so
   an Escape never splits one. It also answers `queued`: whether Claude's queue held
   messages at the Escape (`queuedAtEscape`: the queue up to a byte mark taken just before
-  it, or a queue record written right after it — Claude sometimes flushes the enqueue only
+  it, or the user's enqueue written right after it — Claude sometimes flushes the enqueue only
   with the Escape's auto-submit, after the send's own check gave up).
   The phone's copy lags a turn-end dequeue too — Claude takes a queued message as the next
   prompt, and an Escape before it streams reverts it — so the client re-decides on that.

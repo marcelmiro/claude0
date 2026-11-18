@@ -42,7 +42,7 @@ import {
   answerSessionQuestion,
   clarifySessionQuestion,
   interruptSession,
-  queueOpAfter,
+  userEnqueueAfter,
   queuedAtEscape,
   queuedAtMark,
   clearPaneInput,
@@ -1085,19 +1085,19 @@ test("interruptSession: no pane mapping → no-pane, sends nothing", async () =>
   expect(r).toEqual({ ok: false, reason: "no-pane" });
 });
 
-test("queueOpAfter: an enqueue appended past the mark, even if already drained; none → false", async () => {
+test("userEnqueueAfter: an enqueue appended past the mark, even if already drained; none → false", async () => {
   const path = join(PATHS.dir, "q-live.jsonl");
   const before = JSON.stringify({ type: "queue-operation", operation: "enqueue", content: "earlier" }) + "\n";
   writeFileSync(path, before);
   const mark = { path, size: before.length };
-  expect(await queueOpAfter(mark, ["enqueue"], 100)).toBe(false); // the earlier enqueue predates the send
+  expect(await userEnqueueAfter(mark, 100)).toBe(false); // the earlier enqueue predates the send
   const op = (operation: string) => JSON.stringify({ type: "queue-operation", operation, content: "M" });
   writeFileSync(path, before + [op("enqueue"), op("dequeue")].join("\n") + "\n");
-  expect(await queueOpAfter(mark, ["enqueue"], 600)).toBe(true);
-  expect(await queueOpAfter({ path: join(PATHS.dir, "missing.jsonl"), size: 0 }, ["enqueue"], 100)).toBe(false);
+  expect(await userEnqueueAfter(mark, 600)).toBe(true);
+  expect(await userEnqueueAfter({ path: join(PATHS.dir, "missing.jsonl"), size: 0 }, 100)).toBe(false);
   // Claude's write lands mid-poll, the first read seeing only a torn line
   writeFileSync(path, before + '{"type":"queue-oper');
-  const pending = queueOpAfter(mark, ["enqueue"], 500);
+  const pending = userEnqueueAfter(mark, 500);
   await Bun.sleep(120);
   writeFileSync(path, before + op("enqueue") + "\n");
   expect(await pending).toBe(true);
@@ -1121,6 +1121,10 @@ test("queuedAtEscape: an enqueue Claude flushes only with the Escape's auto-subm
   writeFileSync(path, "");
   const mark = { path, size: 0 };
   expect(await queuedAtEscape(mark)).toBe(false); // a revert writes no queue record
+  // A Monitor's notification queued right after a revert is not the user's message.
+  writeFileSync(path, op("enqueue", "<task-notification>tick</task-notification>"));
+  expect(await queuedAtEscape(mark)).toBe(false);
+  writeFileSync(path, "");
   const pending = queuedAtEscape(mark);
   await Bun.sleep(80);
   writeFileSync(path, op("enqueue", "M") + op("dequeue")); // both land after the Escape
