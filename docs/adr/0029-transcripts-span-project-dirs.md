@@ -1,7 +1,7 @@
 # 29. A session's transcript spans project dirs — readers stitch, never pick one file
 
 Date: 2026-09-01
-Status: accepted
+Status: accepted; amended 2026-11-18 (`rev` also carries the live process's start, `count:totalSize:maxMtime:liveSince` — see docs/pane-input.md § Interrupts)
 
 ## Context
 

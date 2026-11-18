@@ -227,7 +227,7 @@ const composerPrefill = signal(null);
 // After a Stop fires we watch the refetched transcript: if the last-sent text is no longer
 // a user turn (and not queued), it returns to the composer, mirroring the TUI. If it's
 // still in the thread (a mid-turn interrupt), the intent expires silently.
-const lastSentText = new Map(); // sid → text; read only inside event handlers, not reactive
+const lastSentText = new Map(); // sid → {text, whileRunning}; read only inside event handlers, not reactive
 const interruptRestore = signal(null); // {sessionId, text, settleAt, until, seen?} | null
 // Interrupted prompts hidden from the thread once their text was restored to the composer:
 // [{sessionId, index, text, at}]. Claude Code never deletes the turn from the JSONL — the
@@ -3349,12 +3349,15 @@ function Composer({ disabled, status }) {
     const id = selectedId.value;
     // With messages in Claude's input queue, Escape never reverts: the queue auto-submits
     // as the next prompt and the session keeps running (docs/pane-input.md § Interrupts).
-    // Its record looks like a revert (or is off-branch entirely), so arm nothing.
-    const queued = transcript.value?.queuedPending?.length > 0;
+    // Its record looks like a revert (or is off-branch entirely), so arm nothing. A send
+    // made while running counts until it lands: the queue entry reaches us only after it.
+    const last = lastSentText.get(id);
+    const queued =
+      transcript.value?.queuedPending?.length > 0 || (!!last?.whileRunning && pendingSends.value.includes(last.text));
     if (!queued) setStatusOverlay(id, "ready");
     // Arm restore-on-interrupt: if the refetched transcript shows the last-sent message
     // fell off the active branch, it comes back into the composer (see interruptRestore).
-    const lastText = !queued && lastSentText.get(id);
+    const lastText = !queued && last?.text;
     if (lastText) {
       interruptRestore.value = { sessionId: id, text: lastText, settleAt: Date.now() + 3000, until: Date.now() + 8000 };
       // Re-check at the grace mark: a prompt that never reached the JSONL changes no file,
@@ -3506,7 +3509,7 @@ function Composer({ disabled, status }) {
     setStatusOverlay(sid, "running");
     if (items.length === 0) {
       pendingSends.value = [...pendingSends.value, text];
-      lastSentText.set(sid, text); // restore-on-interrupt candidate
+      lastSentText.set(sid, { text, whileRunning: status === "running" }); // restore-on-interrupt candidate
       const ok = await action(`/sessions/${encodeURIComponent(sid)}/message`, { text }, { pushed: true });
       if (ok && text.trim().startsWith("!")) deliveredBangs.value = [...deliveredBangs.value, { text, at: Date.now() }];
       if (!ok) {

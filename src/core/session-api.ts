@@ -914,12 +914,12 @@ export function pendingToolFields(
 /**
  * One revision string over EVERY file of a session's transcript (a cwd move re-homes the
  * JSONL, so one session can span several — see `resolveTranscriptPaths`). Only the live
- * (newest) file ever grows, so `count:totalSize:maxMtime` moves on any append, rewind, or
- * file flip; the count term covers the flip instant itself, when a brand-new file could
- * otherwise leave size+mtime looking unchanged.
+ * (newest) file ever grows, so `count:totalSize:maxMtime:liveSince` moves on any append,
+ * rewind, or file flip; the count term covers the flip instant itself, when a brand-new file
+ * could otherwise leave size+mtime looking unchanged. `liveSince` (the live process's start,
+ * see `parseActiveBranch`) changes the parsed turns without touching the files, so a resume
+ * still reads as a new revision.
  */
-// `liveSince` (the live process's start, see parseActiveBranch) changes the parsed turns
-// without touching the files — a resume must still read as a new revision.
 function combinedRev(stats: { size: number; mtimeMs: number }[], liveSince: number | null): string {
   let size = 0;
   let mtime = 0;
