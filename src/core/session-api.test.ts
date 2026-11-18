@@ -1093,6 +1093,12 @@ test("sendWasQueued: an enqueue appended past the mark, even if already drained;
   writeFileSync(path, before + [op("enqueue"), op("dequeue")].join("\n") + "\n");
   expect(await sendWasQueued(mark)).toBe(true);
   expect(await sendWasQueued({ path: join(PATHS.dir, "missing.jsonl"), size: 0 }, 100)).toBe(false);
+  // Claude's write lands mid-poll, the first read seeing only a torn line
+  writeFileSync(path, before + '{"type":"queue-oper');
+  const pending = sendWasQueued(mark, 500);
+  await Bun.sleep(120);
+  writeFileSync(path, before + op("enqueue") + "\n");
+  expect(await pending).toBe(true);
 });
 
 test("clearPaneInput: no pane mapping → no-pane, sends nothing", async () => {

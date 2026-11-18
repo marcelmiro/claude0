@@ -1384,15 +1384,19 @@ export async function transcriptMark(sessionId: string): Promise<{ path: string;
  */
 export async function sendWasQueued(mark: { path: string; size: number }, timeoutMs = 600): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
+  let offset = mark.size; // past the complete lines already scanned — each poll reads only new bytes
   for (;;) {
     try {
-      for (const line of (await Bun.file(mark.path).slice(mark.size).text()).split("\n")) {
+      const bytes = new Uint8Array(await Bun.file(mark.path).slice(offset).arrayBuffer());
+      const end = bytes.lastIndexOf(10) + 1; // a torn last line waits for the next poll
+      for (const line of new TextDecoder().decode(bytes.subarray(0, end)).split("\n")) {
         if (!line.includes('"queue-operation"')) continue;
         const rec: { type?: unknown; operation?: unknown } = JSON.parse(line);
         if (rec.type === "queue-operation" && rec.operation === "enqueue") return true;
       }
+      offset += end;
     } catch {
-      // torn last line or unreadable file — retry until the deadline
+      // unreadable file or a non-JSON line — retry until the deadline
     }
     if (Date.now() >= deadline) return false;
     await Bun.sleep(50);

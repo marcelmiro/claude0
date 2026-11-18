@@ -74,7 +74,9 @@ whether the input box was occupied:
   rebuilds from the parent chain and drops them. So `parseActiveBranch`
   (`withInterruptSubmissions`) splices them in after the marker only while the session's
   live process started before the interrupt (`liveProcessStartedAt`, `core/session-state.ts`).
-  That start time is part of the transcript `rev` so a resume re-ships the thread.
+  That start time is part of the transcript `rev`, so the next read after a resume re-ships
+  the thread. A resume writes no transcript line and logs no hook event, so an open phone
+  only refetches on its next poll or push.
 - Portkey's Stop arms no revert-restore and no "ready" overlay while `queuedPending` is
   non-empty (`onStop`, `app.js`). The queue auto-submits, so nothing comes back. The
   phone's copy of the queue lags a just-sent message, and Claude flushes the queue entry a

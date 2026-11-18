@@ -959,8 +959,8 @@ async function action(path, body, { pushed = false } = {}) {
   }
 }
 
-// Like action(), but returns the parsed response so callers can read extra fields (the
-// /config confirmation `line`). Refreshes on success; flashes + returns null on failure.
+// Like action(), but always refreshes on success (no `pushed` gate) and returns null on
+// failure — for callers reading extra fields (the /config confirmation `line`).
 async function actionJson(path, body) {
   try {
     const r = await fetch(path, {
@@ -3351,10 +3351,11 @@ function Composer({ disabled, status }) {
     // With messages in Claude's input queue, Escape never reverts: the queue auto-submits
     // as the next prompt and the session keeps running (docs/pane-input.md § Interrupts).
     // Its record looks like a revert (or is off-branch entirely), so arm nothing. Our copy of
-    // the queue lags a just-sent message, so its send's `queued` answer counts too — here if
-    // it already came back, else it disarms in `send()`.
+    // the queue lags a just-sent message, so its send's `queued` answer counts too until the
+    // message lands — here if it already came back, else it disarms in `send()`.
     const last = lastSentText.get(id);
-    const queued = transcript.value?.queuedPending?.length > 0 || !!last?.queued;
+    const queued =
+      transcript.value?.queuedPending?.length > 0 || (!!last?.queued && pendingSends.value.includes(last.text));
     if (!queued) setStatusOverlay(id, "ready");
     // Arm restore-on-interrupt: if the refetched transcript shows the last-sent message
     // fell off the active branch, it comes back into the composer (see interruptRestore).
