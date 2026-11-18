@@ -180,11 +180,13 @@ export function pendingToolCall(sessionId: string): PendingToolCall | null {
   // thread blocks, so their calls would shadow a held question. Their AskUserQuestion
   // still counts: the question hook doesn't filter subagents, so it can be held too.
   // A question denied from the hook ("Chat about this") gets no PostToolUse from Claude;
-  // the question hook logs one itself (`logQuestionClosed`).
+  // the question hook logs one itself (`logQuestionClosed`). An Escape logs neither a
+  // PostToolUse nor a Stop, so the next turn's UserPromptSubmit ends the turn too — a new
+  // turn can't start while a tool is still blocking.
   const closed = new Set<string>();
   let pre: HookEvent | undefined;
   for (const e of eventsNewestFirst(sessionId)) {
-    if (e.hook_event_name === "Stop") break;
+    if (e.hook_event_name === "Stop" || (e.hook_event_name === "UserPromptSubmit" && !e.agent_id)) break;
     if (e.hook_event_name === "PostToolUse" && e.tool_use_id) closed.add(e.tool_use_id);
     if (e.agent_id && e.tool_name !== "AskUserQuestion") continue;
     if (e.hook_event_name === "PreToolUse" && e.tool_use_id && !closed.has(e.tool_use_id)) {

@@ -254,6 +254,19 @@ test("pendingToolCall: a question denied from the hook is closed by the close it
   expect(pendingToolCall(rotated)).toBeNull();
 });
 
+test("pendingToolCall: a question dismissed with Escape is over once the next turn starts", () => {
+  // Escape at the picker logs no PostToolUse and no Stop; the next prompt's
+  // UserPromptSubmit is the first sign the question's turn ended.
+  const id = "sess-escaped-ask";
+  writeLog(id, [
+    ev({ hook_event_name: "PreToolUse", tool_name: "AskUserQuestion", tool_use_id: "tu_ask", tool_input: { questions: [{ question: "Q?", header: "H", multiSelect: false, options: [{ label: "A" }, { label: "B" }] }] } }, "x"),
+    ev({ hook_event_name: "UserPromptSubmit", prompt: "never mind, do X", prompt_id: "p2" }, "x"),
+    ev({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_use_id: "tu_1", tool_input: { command: "ls" } }, "x"),
+    ev({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_use_id: "tu_1" }, "x"),
+  ]);
+  expect(pendingToolCall(id)).toBeNull();
+});
+
 test("pendingToolCall: a held question batched with a tool that finished stays pending", () => {
   // AskUserQuestion is concurrency-safe (Claude Code 2.1.327), so it can run beside a Read.
   const id = "sess-batched-ask";
