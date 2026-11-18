@@ -43,6 +43,7 @@ import {
   clarifySessionQuestion,
   interruptSession,
   sendWasQueued,
+  queuedAtMark,
   clearPaneInput,
   readContextUsage,
   pickerCursorText,
@@ -1099,6 +1100,17 @@ test("sendWasQueued: an enqueue appended past the mark, even if already drained;
   await Bun.sleep(120);
   writeFileSync(path, before + op("enqueue") + "\n");
   expect(await pending).toBe(true);
+});
+
+test("queuedAtMark: the queue as it stood at the mark — the drain the Escape writes after it is ignored", async () => {
+  const path = join(PATHS.dir, "q-escape.jsonl");
+  const op = (operation: string, content: string | null = null) =>
+    JSON.stringify({ type: "queue-operation", operation, content }) + "\n";
+  const queued = op("enqueue", "M");
+  writeFileSync(path, queued + op("dequeue") + JSON.stringify({ type: "user", message: { content: "M" } }) + "\n");
+  expect(await queuedAtMark({ path, size: queued.length })).toBe(true); // Escape before Claude took M
+  expect(await queuedAtMark({ path, size: Bun.file(path).size })).toBe(false); // M already dequeued
+  expect(await queuedAtMark({ path: join(PATHS.dir, "missing.jsonl"), size: 0 })).toBe(false);
 });
 
 test("clearPaneInput: no pane mapping → no-pane, sends nothing", async () => {

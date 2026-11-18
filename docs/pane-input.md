@@ -83,7 +83,10 @@ whether the input box was occupied:
   beat after taking it. So a text `/message` sent while Claude is busy answers `queued` only once
   that entry is in the transcript (`sendWasQueued`), and the client disarms on that answer.
   `/interrupt` waits for a send still typing into the pane (`sendTracked`, `server.ts`), so
-  an Escape never splits one.
+  an Escape never splits one. It also answers `queued`: whether Claude's queue held
+  messages at the Escape (`queuedAtMark`, read up to a byte mark taken just before it).
+  The phone's copy lags a turn-end dequeue too — Claude takes a queued message as the next
+  prompt, and an Escape before it streams reverts it — so the client re-decides on that.
 - `/rewind` lists every sent prompt, including several submitted together with no reply
   in between and back-to-back `!cmd` turns. It never lists a prompt followed only by an
   interrupt marker before the next prompt (`promptCheckpointIndices`, `app.js`).

@@ -218,7 +218,8 @@ export type SendResult = {
   reason?: "no-pane" | "no-question" | "stale-question" | "not-presented" | "not-held" | "no-prompt" | "no-session" | "rewind-unavailable" | "rewind-mismatch" | "rewind-mode" | "bad-image" | "bad-selection" | "no-confirm" | "no-repo" | "no-transcript" | "resume-failed" | "not-found" | "shell-draft" | "shell-clear-failed" | "draft-stash-failed" | "clear-failed" | "notification-clear-failed" | "agent-list-focused" | "draft-present" | "draft-clear-failed" | "no-input-box" | "no-dialog" | "stale-dialog" | "stash-occupied";
   /** Fresh session id, set by createSession to the dictated id. */
   sessionId?: string;
-  /** A message sent while Claude was busy, confirmed queued (see `sendWasQueued`). */
+  /** `/message`: sent while Claude was busy and confirmed queued (`sendWasQueued`).
+   *  `/interrupt`: Claude's queue held messages at the Escape (`queuedAtMark`). */
   queued?: boolean;
 };
 
@@ -1187,8 +1188,8 @@ export async function getTranscript(sessionId: string): Promise<SessionTranscrip
   // and rebuild the leaf→root path each time, always returning a full replacement (no
   // cursor). The full re-parse is gated behind a per-file size+mtime cache plus the live
   // process's start (a resume changes it without writing), so an idle session re-uses
-  // the prior parse instead of re-reading multi-MB logs every refresh. Subagent listing and the last-prompt
-  // boundary only need the paths — overlap them with the branch read.
+  // the prior parse instead of re-reading multi-MB logs every refresh. Subagent listing
+  // and the last-prompt boundary only need the paths — overlap them with the branch read.
   const [branch, subagents, lastPromptAt] = await Promise.all([
     readActiveBranchCached(paths, await liveProcessStartedAt(sessionId)),
     listSubagents(paths),
@@ -1365,10 +1366,25 @@ export async function archiveSession(sessionId: string): Promise<SendResult> {
  * it to "ready" ~1.5s later; the bridge's `/interrupt` route pushes that flip via SSE.
  */
 export async function interruptSession(sessionId: string): Promise<SendResult> {
-  const paneId = await resolveSessionPane(sessionId);
+  const [paneId, mark] = await Promise.all([resolveSessionPane(sessionId), transcriptMark(sessionId)]);
   if (!paneId) return { ok: false, reason: "no-pane" };
   await sendKey(paneId, "Escape");
-  return { ok: true };
+  return { ok: true, queued: mark ? await queuedAtMark(mark) : false };
+}
+
+/**
+ * Whether Claude's input queue held messages at `mark`, taken just before an Escape: a
+ * non-empty queue auto-submits instead of reverting (docs/pane-input.md § Interrupts). Read
+ * after the Escape so it never delays it; the bound keeps out the drain the Escape causes.
+ */
+export async function queuedAtMark(mark: { path: string; size: number }): Promise<boolean> {
+  try {
+    const lines: string[] = [];
+    for await (const line of jsonlLines(mark.path, 0, mark.size)) lines.push(line);
+    return parseQueuedPending(lines).length > 0;
+  } catch {
+    return false;
+  }
 }
 
 /** End of the session's live transcript file, before a send — the mark `sendWasQueued` reads past. */

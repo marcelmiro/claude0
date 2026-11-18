@@ -3465,23 +3465,31 @@ function Composer({ disabled, status }) {
     // Its record looks like a revert (or is off-branch entirely), so arm nothing. Our copy of
     // the queue lags a just-sent message, so its send's `queued` answer counts too until the
     // message lands — here if it already came back, else it disarms in `send()`.
-    const last = lastSentText.get(id);
-    const queued =
-      transcript.value?.queuedPending?.length > 0 || (!!last?.queued && pendingSends.value.includes(last.text));
-    if (!queued) setStatusOverlay(id, "ready");
+    // The bridge's answer reads Claude's queue as it stood at the Escape, which our copy
+    // lags in both directions (a dequeue at turn end too), so it corrects this guess below.
+    const sentQueued = () => {
+      const last = lastSentText.get(id);
+      return !!last?.queued && pendingSends.value.includes(last.text);
+    };
+    const queued = transcript.value?.queuedPending?.length > 0 || sentQueued();
     // Arm restore-on-interrupt: if the refetched transcript shows the last-sent message
     // fell off the active branch, it comes back into the composer (see interruptRestore).
-    const lastText = !queued && last?.text;
-    if (lastText) {
+    const arm = () => {
+      setStatusOverlay(id, "ready");
+      const lastText = lastSentText.get(id)?.text;
+      if (!lastText) return;
       interruptRestore.value = { sessionId: id, text: lastText, settleAt: Date.now() + 3000, until: Date.now() + 8000 };
       // Re-check at the grace mark: a prompt that never reached the JSONL changes no file,
       // so no push would arrive to resolve the restore before it expires.
       setTimeout(() => interruptRestore.value?.sessionId === id && refreshTranscript(), 3100);
+    };
+    if (!queued) {
+      arm();
       // Focus NOW, inside the tap gesture — iOS only raises the keyboard for a focus that
       // is gesture-driven, and the restore resolves ~2s too late to qualify. The prefill
       // then lands in an already-focused box. If the restore never fires (mid-turn stop),
       // the raised keyboard is still where an interrupting user is headed next.
-      if (ref.current) ref.current.focus();
+      if (lastSentText.get(id)?.text && ref.current) ref.current.focus();
     }
     const restore = (reason) => {
       flashError(`✗ ${reason}`);
@@ -3495,7 +3503,12 @@ function Composer({ disabled, status }) {
     })
       .then((r) => r.json().catch(() => ({})))
       .then((d) => {
-        if (d && d.ok === false) restore(d.reason || "interrupt failed");
+        if (d && d.ok === false) return restore(d.reason || "interrupt failed");
+        const nowQueued = !!d?.queued || sentQueued();
+        if (nowQueued === queued) return;
+        if (!nowQueued) return arm();
+        if (interruptRestore.value?.sessionId === id) interruptRestore.value = null;
+        clearStatusOverlay(id); // the queue auto-submits — the session keeps running
       })
       .catch(() => restore("bridge unreachable"));
   }
