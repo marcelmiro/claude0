@@ -59,6 +59,7 @@ import {
   stashPresent,
   parseMacDraft,
   fitsKillInput,
+  isOutgoingEcho,
   parseDialog,
   isModelArg,
   isEffortArg,
@@ -1492,6 +1493,19 @@ test("fitsKillInput: a box within half the kill budget fits; a taller one, or no
   expect(fitsKillInput(box(6))).toBe(true);
   expect(fitsKillInput(box(7))).toBe(false);
   expect(fitsKillInput(fixture("viewport/model-switch-dialog.plain.txt").split("\n"))).toBe(false);
+});
+
+test("isOutgoingEcho: the box mid-send holds a prefix of the message, after any paste placeholders", () => {
+  const msg = "after that, tell me\nthe capital of Portugal";
+  const echo = (text: string, shell = false) => isOutgoingEcho({ text, shell }, msg);
+  expect(echo("after that, tell me the capital of Portugal")).toBe(true);
+  expect(echo("after that, te")).toBe(true); // typing not finished yet
+  expect(echo("[Image #1] after that")).toBe(true); // an image send pastes first
+  expect(echo("[Pasted text #1 +12 lines]")).toBe(true); // a long message collapses
+  expect(echo("fix the flaky test")).toBe(false); // the Mac's own draft, restored after the send
+  // A bash-mode send: the shell prompt shows the command without its `!`.
+  expect(isOutgoingEcho({ text: "git sta", shell: true }, "!git status")).toBe(true);
+  expect(isOutgoingEcho({ text: "ls", shell: true }, "!git status")).toBe(false);
 });
 
 test("parseMacDraft: a command typed on a shell-mode prompt is a shell draft; an empty one is nothing", () => {

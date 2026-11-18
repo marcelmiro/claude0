@@ -1569,17 +1569,42 @@ export function parseMacDraft(styled: string): MacDraft | null {
 
 /**
  * The pane's draft and stash, minus a leftover of a submitted prompt (a send discards it
- * rather than stashing it; a shell-mode draft is never a leftover). `sessionId` is the conversation on screen. Null on any error.
+ * rather than stashing it; a shell-mode draft is never a leftover) and minus a message
+ * the bridge is mid-sending (`isOutgoingEcho`). `sessionId` is the conversation on screen.
+ * Null on any error.
  */
 export async function macDraft(sessionId: string, paneId: string): Promise<MacDraft | null> {
   try {
     const draft = parseMacDraft(await capturePane(paneId, { escapes: true }));
+    const sending = inFlightSends.get(paneId);
+    if (sending && sending.until < Date.now()) inFlightSends.delete(paneId);
+    else if (sending && draft?.text && isOutgoingEcho(draft, sending.text)) draft.text = "";
     if (!draft?.text) promptsMemo.delete(sessionId);
     else if (!draft.shell && (await isLeftoverDraft(sessionId, draft.text))) draft.text = "";
     return draft && (draft.text || draft.stashed) ? draft : null;
   } catch {
     return null;
   }
+}
+
+// Messages `sendMessage` is typing, per pane: a push composed between its keystrokes and
+// Claude clearing the box after Enter (a busy session's hook events trigger these) would
+// otherwise report the phone's own message as a Mac draft. Held a grace past the send for
+// Claude's redraw; text still in the box after it is a real draft (e.g. a dropped Enter).
+const inFlightSends = new Map<string, { text: string; until: number }>();
+const OUTGOING_GRACE_MS = 2000;
+
+/**
+ * Whether a box draft is (the start of) a message being sent: its text minus the
+ * `[Image #N]`/`[Pasted text #N …]` placeholders the send's pastes and a long typed
+ * message turn into, compared whitespace-free since the capture flattens line breaks.
+ * A `!cmd` send puts the pane in shell mode, whose draft reads without the `!`; a real
+ * shell draft can't be up mid-send, since prepareInput refuses one before any key.
+ */
+export function isOutgoingEcho(draft: Pick<MacDraft, "text" | "shell">, message: string): boolean {
+  if (draft.shell) message = message.replace(/^!/, "");
+  const d = draft.text.replace(/\[(?:Image|Pasted text) #\d+[^\]]*\]/g, "").replace(/\s+/g, "");
+  return message.replace(/\s+/g, "").startsWith(d);
 }
 
 // Each session's submitted prompts while its box holds a draft, until the next submitted
@@ -1716,13 +1741,18 @@ export async function sendMessage(
   if (!paneId) return { ok: false, reason: "no-pane" };
   const input = await prepareInput(sessionId, paneId, text);
   if (!input.ok) return input;
-  for (const step of buildSendPlan(text, imagePaths, input.draft)) {
-    // A failed stash aborts BEFORE the message is typed: proceeding would splice it into
-    // the remnant draft and submit both as one turn. The phone surfaces the failure and
-    // the partially-killed draft stays recoverable at the Mac (C-y).
-    if (!(await runSendStep(paneId, step))) return { ok: false, reason: "draft-stash-failed" };
+  inFlightSends.set(paneId, { text, until: Infinity });
+  try {
+    for (const step of buildSendPlan(text, imagePaths, input.draft)) {
+      // A failed stash aborts BEFORE the message is typed: proceeding would splice it into
+      // the remnant draft and submit both as one turn. The phone surfaces the failure and
+      // the partially-killed draft stays recoverable at the Mac (C-y).
+      if (!(await runSendStep(paneId, step))) return { ok: false, reason: "draft-stash-failed" };
+    }
+    return { ok: true };
+  } finally {
+    inFlightSends.set(paneId, { text, until: Date.now() + OUTGOING_GRACE_MS });
   }
-  return { ok: true };
 }
 
 /**

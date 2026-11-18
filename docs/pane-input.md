@@ -42,7 +42,10 @@ overwrites the input and a completed `/rewind` loses the stash.
 Portkey shows the same classification before a send: every transcript payload (full and
 `unchanged`) carries `macDraft` — the box's real draft text, whether a stash is held, and
 whether the text sits on a shell-mode prompt — read from one styled capture with no keys
-sent (`macDraft`). The composer renders it as a note; it refreshes with the payload, not
+sent (`macDraft`). It leaves out a message the bridge is mid-sending (`isOutgoingEcho`):
+a busy session's hook events push between the typed text and Claude clearing the box
+after Enter, and that capture would show the phone's own message as a Mac draft. The
+composer renders it as a note; it refreshes with the payload, not
 on each Mac-side keystroke. "use" copies the draft into the composer (not offered for a
 shell draft, a draft too tall to cut (`cuttable`), or one holding a `[Pasted text #N]`/
 `[Image #N]` placeholder, whose content the capture doesn't have); the note then says the send replaces the Mac draft, by the
