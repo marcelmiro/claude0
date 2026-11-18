@@ -1488,4 +1488,8 @@ test("parseMacDraft: a command typed on a shell-mode prompt is a shell draft; an
   const hint = "  \x1b[2m! for shell mode\x1b[0m";
   expect(parseMacDraft([RULE, "! git push", RULE, hint].join("\n"))).toEqual({ text: "git push", stashed: false, shell: true });
   expect(parseMacDraft([RULE, "! ", RULE, hint].join("\n"))).toBeNull();
+  // With a stash held, an empty shell prompt reads as the stash alone (a send goes through).
+  expect(parseMacDraft(["  draft stashed", RULE, "! ", RULE, hint].join("\n"))).toEqual({ text: "", stashed: true, shell: false });
+  // A dim-rendered prompt glyph still frames the box (the send pre-flight checks the plain view too).
+  expect(parseMacDraft([RULE, "\x1b[2m!\x1b[0m git push", RULE, hint].join("\n"))).toEqual({ text: "git push", stashed: false, shell: true });
 });

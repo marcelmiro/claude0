@@ -1540,13 +1540,14 @@ export type MacDraft = { text: string; stashed: boolean; shell: boolean };
  * nothing is stashed, or when no box is on screen (a dialog covers it).
  */
 export function parseMacDraft(styled: string): MacDraft | null {
-  const typed = flattenStyled(styled, true);
-  if (inputBoxRow(typed.split("\n")) === -1) return null;
   const plain = flattenStyled(styled, false);
+  if (inputBoxRow(plain.split("\n")) === -1) return null;
+  const typed = flattenStyled(styled, true);
   const stashed = stashPresent(plain);
   const shell = shellModeInput(plain);
   const text = shell ? shell.text : inputPending(typed) ? draftText(typed) : "";
-  return text || stashed ? { text, stashed, shell: !!shell } : null;
+  // An empty shell prompt is no draft: a send leaves it with Backspace and goes through.
+  return text || stashed ? { text, stashed, shell: !!shell?.text } : null;
 }
 
 /**
