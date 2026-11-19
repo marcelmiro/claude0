@@ -54,3 +54,47 @@ export function displaySection(section, status, pendingScripts) {
   if (section === "running" && (status === "ready" || status === "waiting") && !pendingScripts) return "needs-you";
   return section;
 }
+
+// Claude prefixes an image message's caption with literal "[Image #N] " markers; strip
+// them so optimistic-image retirement matches our (prefix-free) caption, and so history
+// renders the caption without the noise (the 🖼 chip already conveys the image).
+export const stripImagePrefix = (t) => String(t || "").replace(/^(?:\[Image #\d+\]\s*)+/, "");
+
+const atMs = (turn) => (turn && turn.at ? Date.parse(turn.at) || 0 : 0);
+
+/**
+ * The anchor an optimistic send is stamped with at tap: the newest turn `at` (epoch ms)
+ * in the transcript the client holds. A send has landed only once a user turn with its
+ * text is stamped AFTER its anchor (`landedSends`) — matching the whole thread let an
+ * older identical message (a second `/compact`, another "yes") retire the bubble at once.
+ * Both sides are host JSONL timestamps, so the phone's clock never enters. The max, not
+ * the last turn: a `/compact` record and a dequeued message carry their submit time but
+ * are written later, out of timestamp order.
+ */
+export function newestTurnAt(turns) {
+  let max = 0;
+  for (const t of turns || []) max = Math.max(max, atMs(t));
+  return max;
+}
+
+/**
+ * Each text that landed as a user turn → the newest such turn's `at` (epoch ms). Keys
+ * match what a send carries: a slash command's `command`, a `!cmd` as "!" + its trimmed
+ * command, prompt text trimmed with any image prefix stripped.
+ */
+export function landedSends(turns) {
+  const out = new Map();
+  const add = (key, at) => {
+    if (!(out.get(key) >= at)) out.set(key, at);
+  };
+  for (const turn of turns || []) {
+    if (turn.role !== "user") continue;
+    const at = atMs(turn);
+    if (turn.command) add(turn.command.trim(), at);
+    if (turn.bash) add("!" + turn.bash.command, at);
+    for (const b of turn.content || []) {
+      if (b.type === "text" && b.text) add(stripImagePrefix(b.text).trim(), at);
+    }
+  }
+  return out;
+}

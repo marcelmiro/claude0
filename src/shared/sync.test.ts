@@ -1,5 +1,5 @@
-import { test, expect } from "bun:test";
-import { applyTranscriptEvent, overlayResolved, displaySection } from "./sync.js";
+import { describe, test, expect } from "bun:test";
+import { applyTranscriptEvent, overlayResolved, displaySection, landedSends, newestTurnAt } from "./sync.js";
 
 const turn = (text: string) => ({ role: "user", content: [{ type: "text", text }] });
 
@@ -119,4 +119,50 @@ test("authored sections are never rerouted", () => {
   expect(displaySection("done", "running", 0)).toBe("done");
   // pane-less projected rows carry non-live statuses — untouched
   expect(displaySection("needs-you", "archived", 0)).toBe("needs-you");
+});
+
+describe("optimistic send landing", () => {
+  const user = (at: string, extra: Record<string, unknown>) => ({ role: "user", at, content: [], ...extra });
+  const said = (at: string, text: string) => user(at, { content: [{ type: "text", text }] });
+  const landedAfter = (turns: Parameters<typeof landedSends>[0], key: string, after: number) =>
+    (landedSends(turns).get(key) ?? -Infinity) > after;
+
+  test("a repeat of an older message has not landed until its own turn arrives", () => {
+    const held = [said("2026-11-19T08:00:00.000Z", "yes"), { role: "assistant", at: "2026-11-19T08:01:00.000Z", content: [] }];
+    const after = newestTurnAt(held);
+    expect(landedAfter(held, "yes", after)).toBe(false);
+    expect(landedAfter([...held, said("2026-11-19T08:02:00.000Z", "yes")], "yes", after)).toBe(true);
+  });
+
+  test("a second /compact retires on its own late-written record, not the earlier compaction's", () => {
+    // Shape from a real compaction: the /compact record keeps its submit time but is written
+    // after the summary, so it sits out of timestamp order.
+    const held = [
+      user("2026-11-18T10:14:46.066Z", { command: "/compact" }),
+      { role: "assistant", at: "2026-11-19T08:41:05.000Z", content: [] },
+    ];
+    const after = newestTurnAt(held);
+    expect(landedAfter(held, "/compact", after)).toBe(false);
+    const landed = [
+      ...held,
+      user("2026-11-19T08:43:34.395Z", { compactSummary: true, content: [{ type: "text", text: "This session is being continued" }] }),
+      user("2026-11-19T08:42:20.125Z", { command: "/compact" }),
+    ];
+    expect(landedAfter(landed, "/compact", after)).toBe(true);
+    // A send after the compaction anchors past the summary, not on the older /compact record.
+    expect(newestTurnAt(landed)).toBe(Date.parse("2026-11-19T08:43:34.395Z"));
+  });
+
+  test("an image-only send does not retire on an earlier image-only turn", () => {
+    const held = [said("2026-11-19T08:00:00.000Z", "[Image #1]")];
+    const after = newestTurnAt(held);
+    expect(landedAfter(held, "", after)).toBe(false);
+    expect(landedAfter([...held, said("2026-11-19T08:05:00.000Z", "[Image #2] ")], "", after)).toBe(true);
+  });
+
+  test("bash turns key as !command; an empty thread anchors at 0", () => {
+    expect(landedAfter([user("2026-11-19T08:00:00.000Z", { bash: { command: "ls" } })], "!ls", 0)).toBe(true);
+    expect(newestTurnAt([])).toBe(0);
+    expect(newestTurnAt(undefined)).toBe(0);
+  });
 });

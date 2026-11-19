@@ -16,7 +16,7 @@ import { formatWakeAbs } from "/wake-abs.js";
 import { tapTarget } from "/tap-target.js";
 // Stream-event apply logic (versioned state push), served unbuilt and covered by
 // shared/sync.test.ts.
-import { applyTranscriptEvent, overlayResolved, displaySection } from "/sync.js";
+import { applyTranscriptEvent, overlayResolved, displaySection, landedSends, newestTurnAt, stripImagePrefix } from "/sync.js";
 // Tunnel-wake recovery decisions (burst retry + fetch timeouts), served unbuilt
 // and covered by shared/reconnect.test.ts.
 import { burstAction, withTimeout } from "/reconnect.js";
@@ -96,7 +96,13 @@ const historySession = signal(null); // session-shaped stand-in for a History ro
 const flash = signal(""); // transient FAILURE feedback in the detail view (successes stay silent)
 const flashKind = signal(""); // "" = error styling; "notice" = neutral (restore-on-interrupt)
 const copied = signal(false); // transient "✓ copied" pill (clipboard success needs visible feedback)
-const pendingSends = signal([]); // optimistic user bubbles awaiting transcript catch-up
+// Optimistic user bubbles awaiting transcript catch-up: { text, after, deliveredAt? }. `after`
+// is the held thread's newest turn time at tap (`newestTurnAt`, shared/sync.js) — only a user
+// turn stamped after it retires the bubble. `deliveredAt` marks a `!cmd` or `/command` the
+// bridge typed: Claude Code writes those to the transcript only once they FINISH (a
+// /compact takes over a minute), so the bubble shows "running" with the elapsed time
+// instead of "sending…".
+const pendingSends = signal([]);
 const showNewSession = signal(false); // repo picker for launching a new session
 const showShell = signal(false); // shell sheet: run one command on the host, read its output
 const shellRuns = signal(null); // scrollback from GET /shell: null = loading, [] = empty
@@ -115,7 +121,7 @@ const configSheet = signal(false); // /model, /effort or the session sheet → c
 const notice = signal(""); // transient SUCCESS notice, e.g. Claude's model/effort confirmation line
 const loadingAuth = signal(true); // boot-time auth check + initial session load
 const attachments = signal([]); // images staged in the composer: {blob, url} (object URLs)
-const pendingImageSends = signal([]); // optimistic image bubbles awaiting transcript catch-up: {text, urls}
+const pendingImageSends = signal([]); // optimistic image bubbles awaiting transcript catch-up: {text, urls, after}
 const connected = signal(true); // SSE stream health — false shows a "reconnecting" banner
 const showAgents = signal(false); // subagent-list sheet open over the detail
 const openSubagent = signal(null); // drilled-in agent {agentId, description, agentType, siblings:[]} | null
@@ -230,8 +236,8 @@ const composerPrefill = signal(null);
 // After a Stop fires we watch the refetched transcript: if the last-sent text is no longer
 // a user turn (and not queued), it returns to the composer, mirroring the TUI. If it's
 // still in the thread (a mid-turn interrupt), the intent expires silently.
-const lastSentText = new Map(); // sid → {text, queued}; read only inside event handlers, not reactive
-const interruptRestore = signal(null); // {sessionId, text, settleAt, until, seen?} | null
+const lastSentText = new Map(); // sid → {text, after, queued}; read only inside event handlers, not reactive
+const interruptRestore = signal(null); // {sessionId, text, after, settleAt, until, seen?} | null
 // Interrupted prompts hidden from the thread once their text was restored to the composer:
 // [{sessionId, index, text, at}]. Claude Code never deletes the turn from the JSONL — the
 // revert only materializes as branch abandonment at the NEXT send, and sometimes not even
@@ -283,10 +289,6 @@ const transcriptCache = new Map(); // sessionId → last /transcript payload (op
 // Whether the open thread has been confirmed current since it was opened or the app
 // foregrounded — until then it may be a cached copy, shown with a "syncing…" label.
 const transcriptFresh = signal(false);
-// `!cmd` sends the bridge accepted (keys are in the pane), with when. Claude Code writes a
-// bang command to the transcript only once it EXITS, so until then its optimistic bubble
-// shows "running" with the elapsed time instead of "sending…".
-const deliveredBangs = signal([]); // [{ text, at }]
 
 const changesDataCache = new Map(); // sessionId → last /changes payload (ChangesCard/FilesView)
 const prDataCache = new Map(); // sessionId → last /pr payload (usePullRequest)
@@ -315,27 +317,9 @@ function commandBody(command) {
 // Whether not-yet-run text is a slash command ("/tmp/x is broken" is a prompt, not one).
 const isSlashCommand = (text) => /^\/[\w:.-]+(\s|$)/.test(String(text || "").trim());
 
-// Text of every user turn already in the transcript — used to retire optimistic
-// bubbles once the real send lands (the transcript lags the pane by a few seconds).
-function userTurnTexts(t) {
-  const out = new Set();
-  for (const turn of (t && t.turns) || []) {
-    if (turn.role !== "user") continue;
-    // Executed slash commands land with their text on `command` (content is empty) — the
-    // optimistic bubble for a "/cmd args" send must retire against that, not content.
-    if (turn.command) out.add(turn.command.trim());
-    // A `!cmd` send lands as a bash turn whose text lives on `bash.command` (the `!` is
-    // stripped by Claude's record) — retire the optimistic `!cmd` bubble against it.
-    if (turn.bash) out.add("!" + turn.bash.command);
-    for (const b of turn.content || []) if (b.type === "text" && b.text) out.add(b.text.trim());
-  }
-  return out;
-}
-
-// Claude prefixes an image message's caption with literal "[Image #N] " markers; strip
-// them so optimistic-image retirement matches our (prefix-free) caption, and so history
-// renders the caption without the noise (the 🖼 chip already conveys the image).
-const stripImagePrefix = (t) => String(t || "").replace(/^(?:\[Image #\d+\]\s*)+/, "");
+// Whether a send stamped `after` (newestTurnAt at tap) has landed in `landed`
+// (landedSends of the thread). The transcript lags the pane by a few seconds.
+const sendLanded = (landed, key, after) => (landed.get(key) ?? -Infinity) > after;
 
 // --- data ---------------------------------------------------------------
 
@@ -568,7 +552,7 @@ function applyTranscript(id, data) {
       isPromptTurn(last) &&
       (last.content || []).some((b) => b.type === "text" && (b.text || "").trim() === txt);
     const present =
-      userTurnTexts(transcript.value).has(txt) ||
+      sendLanded(landedSends(turns), txt, ir.after) ||
       (transcript.value.queuedPending || []).some((q) => q.trim() === txt);
     if (present) ir.seen = true;
     // A Stop tapped right after Send can beat the prompt into the JSONL; "absent" then
@@ -588,7 +572,7 @@ function applyTranscript(id, data) {
         fetch(`/sessions/${encodeURIComponent(id)}/clear-input`, { method: "POST" }).catch(() => {});
       }
       composerPrefill.value = { text: ir.text, sessionId: id, keepDraft: true };
-      pendingSends.value = pendingSends.value.filter((p) => p !== ir.text);
+      pendingSends.value = pendingSends.value.filter((p) => p.text !== ir.text);
       interruptRestore.value = null;
       // iOS won't raise the keyboard from a programmatic focus this long after the Stop
       // tap, so announce the restore where the user is looking.
@@ -599,26 +583,18 @@ function applyTranscript(id, data) {
   }
   // Drop optimistic bubbles that have now materialized as real user turns — or as
   // server-confirmed queue entries (the outlined queued bubble takes over from there).
-  if (pendingSends.value.length) {
-    const seen = userTurnTexts(transcript.value);
-    for (const q of transcript.value.queuedPending || []) seen.add(q.trim());
-    const remaining = pendingSends.value.filter((p) => !seen.has(bangKey(p)));
-    if (remaining.length !== pendingSends.value.length) {
-      pendingSends.value = remaining;
-      deliveredBangs.value = deliveredBangs.value.filter((d) => remaining.includes(d.text));
-    }
-  }
-  // Same for optimistic image bubbles, matched on the prefix-stripped caption (an
-  // image-only send has caption "" and the transcript text is just "[Image #N]" → "").
-  if (pendingImageSends.value.length) {
-    const seen = new Set();
-    for (const turn of transcript.value.turns || []) {
-      if (turn.role !== "user") continue;
-      for (const b of turn.content || []) if (b.type === "text") seen.add(stripImagePrefix(b.text).trim());
-    }
+  if (pendingSends.value.length || pendingImageSends.value.length) {
+    const landed = landedSends(transcript.value.turns);
+    const queued = new Set((transcript.value.queuedPending || []).map((q) => q.trim()));
+    const remaining = pendingSends.value.filter(
+      (p) => !queued.has(bangKey(p.text)) && !sendLanded(landed, bangKey(p.text), p.after),
+    );
+    if (remaining.length !== pendingSends.value.length) pendingSends.value = remaining;
+    // Same for optimistic image bubbles, matched on the prefix-stripped caption (an
+    // image-only send has caption "" and the transcript text is just "[Image #N]" → "").
     const keep = [];
     for (const e of pendingImageSends.value) {
-      if (seen.has(stripImagePrefix(e.text).trim())) e.urls.forEach(URL.revokeObjectURL);
+      if (sendLanded(landed, stripImagePrefix(e.text).trim(), e.after)) e.urls.forEach(URL.revokeObjectURL);
       else keep.push(e);
     }
     if (keep.length !== pendingImageSends.value.length) pendingImageSends.value = keep;
@@ -1055,7 +1031,6 @@ function open(id) {
   transcript.value = transcriptCache.get(id) ?? null;
   flash.value = ""; // drop any stale error from the previously-open session
   pendingSends.value = [];
-  deliveredBangs.value = [];
   rewindFloor.value = null; // never carry an optimistic rewind across sessions
   composerPrefill.value = null;
   closeAgents(); // drop any agent list/drill-in from the previously-open session
@@ -1184,7 +1159,6 @@ function back() {
   transcript.value = null;
   historySession.value = null; // the stand-in belongs to the closed detail only
   pendingSends.value = [];
-  deliveredBangs.value = [];
   rewindFloor.value = null;
   composerPrefill.value = null;
   closeAgents();
@@ -3217,7 +3191,7 @@ function SendingTag() {
   return on ? html`<div class="queuedtag">sending…</div>` : null;
 }
 
-function BangRunningTag({ since }) {
+function RunningTag({ since }) {
   useTick(true);
   return html`<div class="queuedtag"><span class="livedot">⦿</span> running · ${fmtElapsed(Math.max(0, Math.floor((Date.now() - since) / 1000)))}</div>`;
 }
@@ -3487,7 +3461,7 @@ function Composer({ disabled, status }) {
     // lags in both directions (a dequeue at turn end too), so it corrects this guess below.
     const sentQueued = () => {
       const last = lastSentText.get(id);
-      return !!last?.queued && pendingSends.value.includes(last.text);
+      return !!last?.queued && pendingSends.value.some((p) => p.text === last.text);
     };
     const sentAtTap = sentQueued();
     const queued = transcript.value?.queuedPending?.length > 0 || sentAtTap;
@@ -3497,7 +3471,8 @@ function Composer({ disabled, status }) {
       setStatusOverlay(id, "ready");
       const lastText = lastSentText.get(id)?.text;
       if (!lastText) return;
-      interruptRestore.value = { sessionId: id, text: lastText, settleAt: Date.now() + 3000, until: Date.now() + 8000 };
+      const after = lastSentText.get(id).after;
+      interruptRestore.value = { sessionId: id, text: lastText, after, settleAt: Date.now() + 3000, until: Date.now() + 8000 };
       // Re-check at the grace mark: a prompt that never reached the JSONL changes no file,
       // so no push would arrive to resolve the restore before it expires.
       setTimeout(() => interruptRestore.value?.sessionId === id && refreshTranscript(), 3100);
@@ -3816,24 +3791,27 @@ function Composer({ disabled, status }) {
     // Optimistic status: a delivered message means the turn is (about to be) running —
     // don't wait for the server's recompute to say so. Retires on confirmation/expiry.
     setStatusOverlay(sid, "running");
+    const after = newestTurnAt(transcript.value?.turns);
     if (items.length === 0) {
-      pendingSends.value = [...pendingSends.value, text];
-      lastSentText.set(sid, { text, queued: false }); // restore-on-interrupt candidate
+      const entry = { text, after };
+      pendingSends.value = [...pendingSends.value, entry];
+      lastSentText.set(sid, { text, after, queued: false }); // restore-on-interrupt candidate
       const ok = await action(`/sessions/${encodeURIComponent(sid)}/message`, { text }, { pushed: true });
       // Claude queued it, so a Stop tapped meanwhile auto-submitted it: nothing comes back,
       // and the session is still running.
       const ir = interruptRestore.value;
-      if (ok?.queued && lastSentText.get(sid)?.text === text) lastSentText.set(sid, { text, queued: true });
+      if (ok?.queued && lastSentText.get(sid)?.text === text) lastSentText.set(sid, { text, after, queued: true });
       if (ok?.queued && ir?.sessionId === sid && ir.text === text) {
         interruptRestore.value = null;
         clearStatusOverlay(sid);
       }
-      if (ok && text.trim().startsWith("!")) deliveredBangs.value = [...deliveredBangs.value, { text, at: Date.now() }];
+      if (ok && (text.trim().startsWith("!") || isSlashCommand(text)) && pendingSends.value.includes(entry)) {
+        pendingSends.value = pendingSends.value.map((p) => (p === entry ? { ...p, deliveredAt: Date.now() } : p));
+      }
       if (ok) logDictations(sid, text, dictated);
       if (!ok) {
         clearStatusOverlay(sid); // never reached the pane — no turn is starting
-        const idx = pendingSends.value.lastIndexOf(text);
-        if (idx >= 0) pendingSends.value = pendingSends.value.filter((_, i) => i !== idx);
+        pendingSends.value = pendingSends.value.filter((p) => p !== entry);
         lastSentText.delete(sid); // never reached the pane — an interrupt can't hand it back
         // Restore so nothing is silently lost (mirrors the image path below). If the user
         // navigated away mid-await the box belongs to another session (or is unmounted) —
@@ -3848,7 +3826,7 @@ function Composer({ disabled, status }) {
     const fd = new FormData();
     fd.append("text", text);
     items.forEach((it, i) => fd.append("image", it.blob, `image${i}.jpg`));
-    const entry = { text, urls: items.map((it) => it.url) };
+    const entry = { text, urls: items.map((it) => it.url), after };
     pendingImageSends.value = [...pendingImageSends.value, entry];
     attachments.value = [];
     const ok = await actionForm(`/sessions/${encodeURIComponent(sid)}/message`, fd);
@@ -4284,8 +4262,8 @@ function Detail() {
   const floor = rewindFloor.value;
   const keepTurns = floor ? floor.keepTurns : turns.length;
   const displayTurns = floor ? turns.slice(0, keepTurns) : turns;
-  // Real user-turn texts in the DISPLAYED thread (image prefix stripped, matching the
-  // optimistic captions). Used to suppress optimistic bubbles whose message has landed — a
+  // User turns in the DISPLAYED thread, by text (landedSends). Used to suppress optimistic
+  // bubbles whose message has landed since it was sent — a
   // render-time guard so a just-sent message never shows twice (the SSE only watches hook
   // events, so the pendingSends cleanup in refreshTranscript can lag the fetch). Scoped to
   // displayTurns so a rewound-then-resent message still shows as a pending bubble.
@@ -4294,18 +4272,11 @@ function Detail() {
   // leftover (interrupt/popAll edge), not something about to run.
   const queued =
     t && (status === "running" || status === "waiting") ? t.queuedPending || [] : [];
-  const landed = new Set();
-  for (const turn of displayTurns) {
-    if (turn.role !== "user") continue;
-    if (turn.command) landed.add(turn.command.trim());
-    if (turn.bash) landed.add("!" + turn.bash.command);
-    for (const b of turn.content || []) {
-      if (b.type === "text" && b.text) landed.add(stripImagePrefix(b.text).trim());
-    }
-  }
+  const landed = landedSends(displayTurns);
   // Queue entries count as landed too: the outlined queued bubble renders them, so the
   // optimistic copy of the same text must stand down.
-  for (const q of queued) landed.add(q.trim());
+  const queuedTexts = new Set(queued.map((q) => q.trim()));
+  const hasLanded = (key, after) => queuedTexts.has(key) || sendLanded(landed, key, after);
   const rawQuestions = t && (t.openQuestions || (t.openQuestion ? [t.openQuestion] : null));
   // "Chat about this" and a just-tapped answer/decision optimistically hide the blocking
   // card so the dock flips immediately, before the server resolves and the poll catches up.
@@ -4610,31 +4581,30 @@ function Detail() {
               </div>`,
         )}
         ${pendingSends.value
-          .filter((text) => !landed.has(bangKey(text)))
-          .map((text, i) =>
+          .filter((p) => !hasLanded(bangKey(p.text), p.after))
+          .map(({ text, deliveredAt }, i) =>
             // A `!cmd` echo renders as the bash command bubble (no output yet) so the
             // optimistic bubble matches the folded turn it retires into.
             // Once delivered it renders as running (the live tool chip's mint frame, full opacity).
             text.trim().startsWith("!")
-              ? (() => {
-                  const d = deliveredBangs.value.find((x) => x.text === text);
-                  return html`<div
-                    class=${`bang-cmd ${d ? "running" : "pending"}`}
-                    key=${`p${i}`}
-                    ...${lpProps(lpStartCopyOnly(text))}
-                  >
-                    <span class="glyph">!</span>${text.trim().slice(1)}
-                    ${d ? html`<${BangRunningTag} since=${d.at} />` : html`<${SendingTag} />`}
-                  </div>`;
-                })()
+              ? html`<div
+                  class=${`bang-cmd ${deliveredAt ? "running" : "pending"}`}
+                  key=${`p${i}`}
+                  ...${lpProps(lpStartCopyOnly(text))}
+                >
+                  <span class="glyph">!</span>${text.trim().slice(1)}
+                  ${deliveredAt ? html`<${RunningTag} since=${deliveredAt} />` : html`<${SendingTag} />`}
+                </div>`
               : html`<div
                   class="bubble user pending"
                   key=${`p${i}`}
                   ...${lpProps(lpStartCopyOnly(text))}
-                >${isSlashCommand(text) ? commandBody(text) : text}<${SendingTag} /></div>`,
+                >${isSlashCommand(text) ? commandBody(text) : text}${deliveredAt
+                  ? html`<${RunningTag} since=${deliveredAt} />`
+                  : html`<${SendingTag} />`}</div>`,
           )}
         ${pendingImageSends.value
-          .filter((e) => !landed.has(stripImagePrefix(e.text).trim()))
+          .filter((e) => !hasLanded(stripImagePrefix(e.text).trim(), e.after))
           .map(
             (entry, i) => html`<div
             class="bubble user pending imgbubble"

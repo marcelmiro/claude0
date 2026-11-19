@@ -34,6 +34,7 @@ subscriptions), `bridge/server.ts` (payload composition, watchers, consumer mark
 | Concern | Where |
 |---|---|
 | Optimistic status overlays retire on confirmation or expiry, never contradiction | `overlayResolved` (`shared/sync.js`) |
+| An optimistic send bubble retires only on a user turn stamped after the newest turn held at tap — never on an older identical message | `newestTurnAt`, `landedSends` (`shared/sync.js`) |
 | Tail-first paint (`?tail=40`, `partial`, no `rev`) | `applyTail` (`bridge/server.ts`), `fetchTailPaint` (`app.js`) |
 | Stream liveness (`streamLive`: OPEN + heard within 20s) and the zombie-socket watchdog | `app.js`, comments above `streamLive` and the watchdog interval |
 

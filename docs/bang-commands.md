@@ -10,7 +10,7 @@ shell-mode hazard itself is a CLAUDE.md gotcha.
 | The two JSONL records (input, then stdout+stderr), folded into one turn | the `BASH_INPUT` comment in `core/transcript.ts`; `foldBashTurns` |
 | Bash turns are rewind checkpoints, slash-command turns aren't | the comment above `isPromptTurn` (`bridge/public/app.js`) |
 | The optimistic bubble retires on `"!"` + the trimmed command | `bangKey` (`app.js`) |
-| An accepted bang shows "running · <elapsed>" until its turn lands | `deliveredBangs` (`app.js`) |
+| An accepted bang (or `/command`) shows "running · <elapsed>" until its turn lands | `deliveredAt` on the pending send, the `pendingSends` comment (`app.js`) |
 | Composer bash mode: a `!` opening an empty draft, typed or pasted | the composer's `onInput` (`app.js`, `pasteWasEmpty`) |
 | The send: `"!"` + the trimmed field text | the composer's `send` (`app.js`) |
 

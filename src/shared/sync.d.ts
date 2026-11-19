@@ -10,3 +10,19 @@ export function overlayResolved(
 ): boolean;
 
 export function displaySection(section: string, status: string, pendingScripts: number | undefined): string;
+
+export function stripImagePrefix(text: string): string;
+
+export function newestTurnAt(turns: { at?: string }[] | undefined): number;
+
+export function landedSends(
+  turns:
+    | {
+        role: string;
+        at?: string;
+        command?: string;
+        bash?: { command: string };
+        content?: { type: string; text?: string }[];
+      }[]
+    | undefined,
+): Map<string, number>;
