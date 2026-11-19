@@ -3817,7 +3817,8 @@ function Composer({ disabled, status }) {
     dictations.current.push(entry);
     if (res.id) cleanDictation(forSid, res.id, entry);
   }
-  // Insert at the caret (or replace the selection), spaced from its neighbours. If the user
+  // Append to the end of the box, spaced from what's there — never at the caret, which a
+  // tap mid-message leaves behind and which put dictations mid-message. If the user
   // switched sessions mid-transcription, append to the dictating session's saved draft.
   function insertDictation(forSid, text) {
     const el = ref.current;
@@ -3826,21 +3827,16 @@ function Composer({ disabled, status }) {
       saveDraft(forSid, prev ? `${prev.replace(/\s+$/, "")} ${text}` : text);
       return false;
     }
-    const start = el.selectionStart ?? el.value.length;
-    const end = el.selectionEnd ?? start;
-    const before = el.value.slice(0, start);
-    const after = el.value.slice(end);
-    const lead = before && !/\s$/.test(before) ? " " : "";
-    const trail = after && !/^\s/.test(after) ? " " : "";
-    el.value = before + lead + text + trail + after;
-    const caret = start + lead.length + text.length;
-    el.setSelectionRange(caret, caret);
+    const before = el.value;
+    el.value = before + (before && !/\s$/.test(before) ? " " : "") + text;
+    el.setSelectionRange(el.value.length, el.value.length);
     grow();
     syncHasText();
     return true;
   }
   // Swap the raw transcript for the cleaned text — only while it's still in the box exactly
-  // as inserted, so an edit made during the ~5s cleanup always wins.
+  // as inserted, so an edit made during the cleanup always wins. Every outcome flashes, so
+  // "finished, nothing to fix" never looks like "still running".
   async function cleanDictation(forSid, id, entry) {
     let res;
     setCleaning((n) => n + 1);
@@ -3848,16 +3844,22 @@ function Composer({ disabled, status }) {
       const r = await fetch(`/dictation/${encodeURIComponent(id)}/clean`, { method: "POST", signal: AbortSignal.timeout(45_000) });
       res = await r.json();
     } catch {
-      return; // the raw transcript stays — cleanup is an improvement, not a requirement
+      res = null; // the raw transcript stays — cleanup is an improvement, not a requirement
     } finally {
       setCleaning((n) => n - 1);
     }
     dtrace("clean", { ok: res && res.ok, guarded: res && res.guarded, changed: !!res && res.text !== entry.raw });
-    if (!res || !res.ok || !res.text || res.text === entry.raw) return;
     const el = ref.current;
-    if (selectedId.value !== forSid || !el) return dtrace("swap", { applied: false, why: "left" });
+    // Sent already, or dictated into another session's draft: nothing here to report on.
+    if (!dictations.current.includes(entry) || selectedId.value !== forSid || !el) return dtrace("swap", { applied: false, why: "left" });
+    if (!res || !res.ok || !res.text) return flashNotice("Cleanup failed — kept as dictated");
+    if (res.guarded) return flashNotice("Cleanup dropped words — kept as dictated");
+    if (res.text === entry.raw) return flashNotice("✓ Cleanup: nothing to fix");
     const at = el.value.indexOf(entry.raw);
-    if (at < 0 || el.value.indexOf(entry.raw, at + 1) >= 0) return dtrace("swap", { applied: false, why: at < 0 ? "edited" : "twice" });
+    if (at < 0 || el.value.indexOf(entry.raw, at + 1) >= 0) {
+      dtrace("swap", { applied: false, why: at < 0 ? "edited" : "twice" });
+      return flashNotice("Cleanup not applied — the text was edited");
+    }
     dtrace("swap", { applied: true });
     // Keep the caret where the user is: past the dictation it shifts by the length change,
     // inside it lands at the cleaned text's end, before it stays put.
@@ -3870,7 +3872,7 @@ function Composer({ disabled, status }) {
     grow();
     syncHasText();
     const changes = wordChanges(entry.raw, res.text);
-    if (changes.length) flashNotice(`Fixed: ${changes.slice(0, 3).join(", ")}${changes.length > 3 ? ` (+${changes.length - 3})` : ""}`);
+    flashNotice(changes.length ? `Fixed: ${changes.slice(0, 3).join(", ")}${changes.length > 3 ? ` (+${changes.length - 3})` : ""}` : "✓ Cleanup: punctuation and layout");
   }
   // Fire-and-forget: what dictation inserted vs what was finally sent (tuning signal).
   function logDictations(forSid, sent, list) {

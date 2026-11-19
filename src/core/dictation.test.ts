@@ -95,6 +95,9 @@ describe("corrections", () => {
   test("additions, case/punctuation-only edits and long rewrites are not corrections", () => {
     expect(corrections("run the tests", "run the tests, then open a PR")).toEqual([]);
     expect(corrections("portkey works.", "Portkey works")).toEqual([]);
+    // a tense or plural fix is grammar, not a mis-heard term (a Haiku term check passed this one)
+    expect(corrections("I think it works, but", "I think it worked, but")).toEqual([]);
+    expect(corrections("the test passes now", "the tests passed now")).toEqual([]);
     expect(corrections("we should probably move this over to the other service", "we should merge it")).toEqual([]);
   });
   test("repeats bump the count and the newest leads", () => {

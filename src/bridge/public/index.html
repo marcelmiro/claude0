@@ -887,6 +887,8 @@
       }
       .cbtn.busy { border-color: var(--peach); }
       .cbtn.cleaning { border-color: var(--peach); color: var(--peach); }
+      /* the rim arc spins while cleanup runs; a flash reports how it ended */
+      .cbtn.cleaning::after { border-top-color: var(--peach); border-right-color: var(--peach); animation: mic-spin 1s linear infinite; }
       .cbtn .spin {
         display: inline-block;
         width: 16px;

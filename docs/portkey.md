@@ -121,16 +121,20 @@ Order of one dictation:
    recorder is timesliced (`start(1000)`), and the container is sniffed from the bytes
    (`audioExt`). An un-sliced Safari WebM recording once arrived as just its 5-byte tail,
    with an empty MIME type.
-4. **Insert.** The raw text goes in at the caret, spaced from its neighbours
-   (`insertDictation`). A take belongs to the session it was started in. If you switched
+4. **Insert.** The raw text is appended to the end of the box, never at the caret: a caret
+   left mid-message put dictations in the middle of the draft (`insertDictation`). A take belongs to the session it was started in. If you switched
    sessions, left the thread or backgrounded the app meanwhile, the take is finished and
    appended to that session's saved draft instead. Starting a take leaves bash mode, and a
    take can always be stopped, even with the composer disabled.
 5. **Clean.** `POST /dictation/:id/clean` runs `claude -p` (haiku) with the session's terms,
    its recent prose, the personal vocabulary and the learned mis-hearings (`cleanDictation`
-   in `core/dictation.ts`). It takes about 3.5–4.5s, and the time is mostly the model, not
-   CLI start-up: pre-starting the process while you talk saved only ~0.3s median, so it
-   isn't done.
+   in `core/dictation.ts`). It took a median 3.9s and up to 10.7s over 51 takes. The time is
+   mostly the model, not CLI start-up: pre-starting the process while you talk saved only
+   ~0.3s median, so it isn't done. Haiku thinks adaptively on long takes (up to ~2K thinking
+   tokens), and neither `--effort low`, `MAX_THINKING_TOKENS` nor
+   `CLAUDE_CODE_DISABLE_THINKING` turns that off. What `claudePrint` does cut is the tool,
+   MCP and skill definitions (`--tools ""`), about 22K of ~32K input tokens. On 5 long takes
+   that halved the mean, ~8.0s to ~4.7s, with the same fixes.
 
    Haiku, not Sonnet, though Sonnet is ~1.5s faster. On a 48-clip benchmark Sonnet turned
    correct words into vocabulary terms 4–7 times per run ("CSM", "local Claude", "Camp One"
@@ -145,8 +149,10 @@ Order of one dictation:
    prompt polished fluent sentences and doubled word error against typed prompts.
 
    The client swaps the cleaned text in only if the raw text is still in the box exactly as
-   inserted, so an edit you make meanwhile wins. The swapped words are flashed
-   ("Fixed: myatron → Maestro").
+   inserted, so an edit you make meanwhile wins. While cleanup runs, the arc on the
+   button's rim spins peach. Every outcome then flashes: the swapped words ("Fixed: myatron
+   → Maestro"), "nothing to fix", kept as dictated (guard or failure) or not applied
+   (edited). Before this, 8 of 17 changed cleanups landed after the message was sent.
 6. **Guard.** Cleanup once deleted a whole sentence. So every raw sentence with 3+ real
    words must keep 40%+ of them, and so must the message overall; otherwise the raw text
    is kept (`guardCleanup`). It checks per sentence, not by word count or longest run:
@@ -163,7 +169,8 @@ Order of one dictation:
    need this: history mining keeps only words used 15+ times, and "betterstack" had 6.
 
    A learned pair is a rule applied to every later dictation, so a swap is kept only when:
-   - it isn't an addition, a case-only edit or a rewrite over three words;
+   - it isn't an addition, a case-only edit, a tense or plural change, or a rewrite over
+     three words. The `claude -p` check below passed "works" → "worked";
    - it looks like its replacement (character-bigram overlap); and
    - a one-word background `claude -p` check confirms it's a mangled name or term.
 

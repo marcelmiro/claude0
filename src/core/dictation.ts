@@ -189,6 +189,8 @@ export interface Correction { heard: string; meant: string; count: number; at: n
 const tokens = (s: string) => s.split(/\s+/).filter(Boolean);
 const bare = (s: string) => s.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
 const folded = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+// "works"/"worked", "passes"/"passed": the same word in another tense or number.
+const stem = (s: string) => folded(s).replace(/(ing|ed|es|s|d)$/, "");
 
 /** Dice overlap of character bigrams — how alike two strings look/sound, 0..1. */
 function similarity(a: string, b: string): number {
@@ -221,7 +223,8 @@ export function corrections(inserted: string, sent: string): { heard: string; me
   const flush = () => {
     const heard = bare(del.join(" ")), meant = bare(ins.join(" "));
     const h = folded(heard), m = folded(meant);
-    if (del.length && ins.length && del.length <= 3 && ins.length <= 3 && h !== m && m.length >= 3 && similarity(h, m) >= 0.25) out.push({ heard, meant });
+    const inflection = del.length === ins.length && del.every((w, k) => stem(w) === stem(ins[k]!));
+    if (del.length && ins.length && del.length <= 3 && ins.length <= 3 && h !== m && m.length >= 3 && !inflection && similarity(h, m) >= 0.25) out.push({ heard, meant });
     del = []; ins = [];
   };
   let i = 0, j = 0;
