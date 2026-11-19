@@ -39,7 +39,10 @@ already at the top after tapping +, then **All** repos A–Z (`NewSession`).
   disabled so a second tap can't launch twice. A failure shows on the row and a tap retries
   it (`launchSession`, `pickerLaunch`). If the picker was left meanwhile, the session is not
   auto-opened: Home shows "launching…", then a ready/failed card with open, retry or dismiss
-  (`launchNotice`), and the + button pulses while a launch is pending.
+  (`launchNotice`), and the + button pulses while a launch is pending. The phone mints the
+  session id and sends it with `/sessions/new`, so when the response is lost (timeout or a
+  dropped tunnel) it looks for that id in the list before calling the launch failed — the
+  bridge may have opened the pane anyway, and a blind retry would start a second session.
 - The sidebar's `n` mode is a separate surface: it keeps `discoverRepos` order (repos with a
   live session, then A–Z) and has no Recent section.
 
@@ -204,6 +207,27 @@ missed "DNC", "Maestro" and "EmailBison" whenever you dictated about another top
 - **Judged by Claude.** The remaining frequent words go to batched `claude -p` calls that
   keep the domain terms. Their output is matched back against the batch, so a hallucinated
   term can't enter.
+
+## Network trace
+
+"no response (network)" means a request got no HTTP response at all: it timed out
+(`TimeoutError`, 12s; 30s for slow endpoints) or the connection failed (`TypeError`). That
+is the path between the device and the VM — usually the device's Tailscale tunnel, which
+iOS suspends in the background and which can take minutes to carry traffic again. A dead
+bridge is different: Tailscale serve still answers, with a 502.
+
+The patched `fetch` records every such failure, and every 5xx, with its path (no query),
+duration, and whether the page was hidden, how long since it was foregrounded, and
+`navigator.onLine`. The stream records a gap when it stayed down for 3s+ with the app on
+screen (`visibleMs`). Entries can't be sent while the network is down, so they queue in
+localStorage (`claude0-net-trace`, newest 50) and flush to `POST /net/trace` on the next
+request that gets a non-5xx response (`fetchFailure`, `streamGap`, `shared/net-trace.js`).
+
+Reading an outage: `journalctl --user -u claude0-bridge | grep net-trace`. The journal time
+is when the network came back; each entry's `at` is when its request started. Then compare
+with the VM's Tailscale side: `sudo journalctl -u tailscaled | grep "new contact"` shows a
+check-in from an active peer about every 5s, so a gap there covering the failures means
+nothing from the device reached the VM. Failures with no such gap point at the bridge.
 
 ## iOS status bar (installed PWA, iOS 27)
 

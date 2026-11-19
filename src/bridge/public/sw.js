@@ -23,6 +23,7 @@ const SHELL_PATHS = [
   "/wake-abs.js",
   "/sync.js",
   "/reconnect.js",
+  "/net-trace.js",
   "/mac-draft.js",
   "/message-text.js",
   "/manifest.json",

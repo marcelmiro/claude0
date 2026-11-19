@@ -143,6 +143,8 @@ const STATIC: Record<string, string> = {
   // Tunnel-wake recovery decisions (burst retry + fetch timeouts), shared with
   // its test suite — served unbuilt.
   "/reconnect.js": "../../shared/reconnect.js",
+  // Network failure trace entries, shared with its test suite — served unbuilt.
+  "/net-trace.js": "../../shared/net-trace.js",
   // Whether a send replaces the Mac draft, shared with the send pre-flight — served unbuilt.
   "/mac-draft.js": "../../shared/mac-draft.js",
   // Attachment refs + skill insertion: built by the bridge, read back by the phone — served unbuilt.
@@ -1462,11 +1464,14 @@ async function route(req: Request): Promise<Response> {
   }
 
   if (method === "POST" && path === "/sessions/new") {
-    const body = (await req.json().catch(() => ({}))) as { path?: unknown; name?: unknown };
+    const body = (await req.json().catch(() => ({}))) as { path?: unknown; name?: unknown; sessionId?: unknown };
     if (typeof body.path !== "string" || typeof body.name !== "string") {
       return json({ ok: false, reason: "bad-args" }, 400);
     }
-    return sendResult(await createSession(body.path, body.name));
+    // The phone mints the id so a launch whose response the network lost is still found by it.
+    const sid = body.sessionId ?? crypto.randomUUID();
+    if (typeof sid !== "string" || !isValidSessionId(sid)) return json({ ok: false, reason: "bad-args" }, 400);
+    return sendResult(await createSession(body.path, body.name, sid));
   }
 
   const transcript = path.match(TRANSCRIPT_PATH);
@@ -1562,6 +1567,16 @@ async function route(req: Request): Promise<Response> {
     return json({ skills: cfg.ui.composerSkills ?? DEFAULT_CONFIG.ui.composerSkills });
   }
   // TEMPORARY: on-device step tracing while the iOS recording flow is being debugged.
+  // Portkey's network trace (docs/portkey.md § Network trace): one `net-trace:` line per
+  // failure the device queued while the network was down.
+  if (method === "POST" && path === "/net/trace") {
+    const entries = (await req.json().catch(() => [])) as unknown;
+    if (Array.isArray(entries)) {
+      for (const e of entries.slice(0, 50)) console.error(`net-trace: ${JSON.stringify({ device: deviceOf(req), entry: e }).slice(0, 500)}`);
+    }
+    return json({ ok: true });
+  }
+
   if (method === "POST" && path === "/dictation/trace") {
     console.error(`dictation-trace: ${(await req.text().catch(() => "")).slice(0, 1000)}`);
     return json({ ok: true });

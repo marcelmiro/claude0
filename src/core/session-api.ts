@@ -275,10 +275,9 @@ async function acceptTrustPrompt(paneId: string): Promise<boolean> {
   return false;
 }
 
-export async function createSession(repoPath: string, name: string): Promise<SendResult> {
+export async function createSession(repoPath: string, name: string, sessionId: string): Promise<SendResult> {
   const target = await getMainSession();
   if (!target) return { ok: false, reason: "no-session" };
-  const sessionId = crypto.randomUUID();
   const paneId = await launchClaudeWindow(target, repoPath, name, sessionId);
   // We minted the id, so the pane→session map is known now — write it ourselves so a phone
   // send resolves the pane immediately, without waiting on the SessionStart hook's write.

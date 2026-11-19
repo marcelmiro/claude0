@@ -21,6 +21,8 @@ import { attachedFileNames, stripAttachmentPrefix, withSkill } from "/message-te
 // Tunnel-wake recovery decisions (burst retry + fetch timeouts), served unbuilt
 // and covered by shared/reconnect.test.ts.
 import { burstAction, withTimeout } from "/reconnect.js";
+// Network failure trace entries, covered by shared/net-trace.test.ts.
+import { fetchFailure, streamGap, appendCapped } from "/net-trace.js";
 // Whether a send replaces the Mac draft — the same rule the send pre-flight applies.
 import { replacesDraft } from "/mac-draft.js";
 
@@ -56,11 +58,73 @@ const slowTimeout = () => AbortSignal.timeout(SLOW_API_TIMEOUT_MS);
 const FILE_SEND_TIMEOUT_MS = 5 * 60_000;
 const MAX_FILE_BYTES = 30 * 1024 * 1024; // under the bridge's 32MB request cap, with room for the rest
 const rawFetch = window.fetch.bind(window);
+// A rejected request got no HTTP response at all — the tunnel, not the bridge (a dead
+// bridge behind Tailscale serve answers 502).
+const NO_RESPONSE = "no response (network)";
 window.fetch = (input, init = {}) => {
   const headers = new Headers(init.headers || {});
   headers.set("x-claude0-device", DEVICE_ID);
-  return rawFetch(input, withTimeout({ ...init, headers }, API_TIMEOUT_MS));
+  const startedAt = Date.now();
+  const traced = (extra) =>
+    traceNet(fetchFailure({ url: typeof input === "string" ? input : input.url, method: init.method || "GET", startedAt, now: Date.now(), ...extra, ...pageContext() }));
+  return rawFetch(input, withTimeout({ ...init, headers }, API_TIMEOUT_MS)).then(
+    (r) => {
+      if (r.status >= 500) traced({ status: r.status });
+      else flushNetTrace();
+      return r;
+    },
+    (error) => {
+      traced({ error });
+      throw error;
+    },
+  );
 };
+
+// Network trace (docs/portkey.md § Network trace): failures can't be reported while the
+// network is down, so they queue in localStorage (surviving iOS evicting the page) and
+// flush to the bridge log on the next request that gets through.
+const NET_TRACE_KEY = "claude0-net-trace";
+let foregroundAt = Date.now();
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) foregroundAt = Date.now();
+});
+const pageContext = () => ({ hidden: document.hidden, foregroundAt, online: navigator.onLine });
+function readNetTrace() {
+  try {
+    return JSON.parse(localStorage.getItem(NET_TRACE_KEY) || "[]");
+  } catch {
+    return [];
+  }
+}
+function traceNet(entry) {
+  if (!entry) return;
+  try {
+    localStorage.setItem(NET_TRACE_KEY, JSON.stringify(appendCapped(readNetTrace(), entry)));
+  } catch {
+    /* private mode / quota — tracing is best-effort */
+  }
+}
+let netTraceFlushing = false;
+async function flushNetTrace() {
+  if (netTraceFlushing) return;
+  const sent = readNetTrace();
+  if (!sent.length) return;
+  netTraceFlushing = true;
+  try {
+    const r = await rawFetch("/net/trace", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-claude0-device": DEVICE_ID },
+      body: JSON.stringify(sent),
+      signal: AbortSignal.timeout(API_TIMEOUT_MS),
+    });
+    // Drop only what was sent: failures recorded meanwhile stay queued.
+    if (r.ok) localStorage.setItem(NET_TRACE_KEY, JSON.stringify(readNetTrace().slice(sent.length)));
+  } catch {
+    /* still down — the queue waits for the next success */
+  } finally {
+    netTraceFlushing = false;
+  }
+}
 
 // Render assistant markdown the way the native terminal does: real paragraphs, list
 // spacing, and soft line breaks (`breaks: true` turns single newlines into <br>).
@@ -402,7 +466,7 @@ function applySessions(data) {
   // stale at open() — still gets its ⚡ consumed.
   if (selectedId.value) markRead(selectedId.value);
   authed.value = true;
-  if (error.value === "bridge unreachable") error.value = ""; // recovered — drop the banner
+  if (error.value === NO_RESPONSE) error.value = ""; // recovered — drop the banner
   // Persist for the next cold open (iOS evicts the page constantly): boot hydrates
   // from this so reopening paints the list instantly instead of a spinner.
   try {
@@ -429,7 +493,7 @@ async function refreshSessions() {
     listAppliedSeq = seq;
     listStale.value = false; // a direct GET is fresh-enough by construction (bounded staleness)
   } catch {
-    error.value = "bridge unreachable";
+    error.value = NO_RESPONSE;
   }
 }
 
@@ -665,6 +729,8 @@ const stampStream = () => (lastStreamActivity = Date.now());
 // Distinct from lastStreamActivity, which the watchdog also stamps on its own
 // rebuild attempts; the burst must only stand down on a real connection.
 let lastOpenAt = 0;
+// When the stream last stopped working (0 = up): the start of a gap the trace records.
+let streamDownAt = 0;
 
 // Tell the bridge which session this device has open (null = none). The server
 // answers with a forced transcript snapshot over the stream and keeps pushing
@@ -710,7 +776,10 @@ let lastTranscriptPushAt = 0;
 let pendingTapCheck = false;
 
 function connectStream() {
-  if (es) es.close();
+  if (es) {
+    es.close();
+    streamDownAt ||= Date.now();
+  }
   es = new EventSource(`/stream?device=${encodeURIComponent(DEVICE_ID)}`);
   // On every (re)connect the SERVER pushes fresh snapshots (sessions + the
   // subscribed transcript) — that replaces the old re-fetch-everything dance.
@@ -719,6 +788,8 @@ function connectStream() {
   es.onopen = () => {
     stampStream();
     lastOpenAt = Date.now();
+    if (streamDownAt) traceNet(streamGap({ downAt: streamDownAt, now: lastOpenAt, foregroundAt }));
+    streamDownAt = 0;
     connected.value = true;
     if (selectedId.value) subscribeFresh(selectedId.value);
     if (openSubagent.value) refreshSubagent();
@@ -728,7 +799,10 @@ function connectStream() {
   es.addEventListener("ping", stampStream);
   // EventSource auto-reconnects; surface the gap so a dropped tailnet/socket isn't silent.
   es.onerror = () => {
-    if (!es || es.readyState !== 1) connected.value = false;
+    if (!es || es.readyState !== 1) {
+      connected.value = false;
+      streamDownAt ||= Date.now();
+    }
   };
   es.onmessage = (ev) => {
     stampStream();
@@ -866,7 +940,7 @@ async function connect() {
       initPush();
     }
   } catch {
-    error.value = "bridge unreachable";
+    error.value = NO_RESPONSE;
   } finally {
     loadingAuth.value = false;
   }
@@ -949,7 +1023,7 @@ async function action(path, body, { pushed = false } = {}) {
     flashError(`✗ ${reasonText(data, r.status)}`);
     return false;
   } catch {
-    flashError("✗ bridge unreachable");
+    flashError(`✗ ${NO_RESPONSE}`);
     return false;
   }
 }
@@ -976,7 +1050,7 @@ async function actionJson(path, body) {
     flashError(`✗ ${reasonText(data, r.status)}`);
     return null;
   } catch {
-    flashError("✗ bridge unreachable");
+    flashError(`✗ ${NO_RESPONSE}`);
     return null;
   }
 }
@@ -998,7 +1072,7 @@ async function actionForm(path, formData, signal = slowTimeout()) {
     flashError(`✗ ${reasonText(data, r.status)}`);
     return false;
   } catch {
-    flashError("✗ bridge unreachable");
+    flashError(`✗ ${NO_RESPONSE}`);
     return false;
   }
 }
@@ -1277,34 +1351,38 @@ async function launchSession(repo) {
   // The /sessions/new request blocks until claude boots and its SessionStart hook
   // registers the new session id (~1-4s). The picker stays up meanwhile with the tapped
   // row pending (and every row locked, so a second tap can't launch twice), then opens
-  // exactly that session — server-determined id, no fragile before/after diffing. A
-  // failure stays on the row, where a second tap retries.
+  // exactly that session — the id is minted here, so even a launch whose response was
+  // lost to the network is found in the list by id. A failure stays on the row, where a
+  // second tap retries.
   if (pickerLaunch.value && !pickerLaunch.value.error) return;
   error.value = "";
   launchNotice.value = null;
   pickerLaunch.value = { path: repo.path, label: launchLabel(repo) };
+  const sessionId = crypto.randomUUID();
   try {
     const r = await fetch("/sessions/new", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ path: repo.path, name: repo.name }),
+      body: JSON.stringify({ path: repo.path, name: repo.name, sessionId }),
       signal: slowTimeout(), // blocks until the new pane's prompt is live
     });
     const data = await r.json().catch(() => ({}));
-    if (r.ok && data.ok !== false) {
-      await refreshSessions();
-      pickerLaunch.value = null;
-      if (showNewSession.value) {
-        showNewSession.value = false;
-        if (data.sessionId) open(data.sessionId);
-      } else {
-        launchNotice.value = { label: launchLabel(repo), repo, sessionId: data.sessionId };
-      }
-    } else {
-      launchFailed(repo, `launch failed: ${data.reason || r.status}`);
-    }
+    if (!r.ok || data.ok === false) return launchFailed(repo, `launch failed: ${data.reason || r.status}`);
+    await refreshSessions();
   } catch {
-    launchFailed(repo, "bridge unreachable");
+    // The response was lost, not necessarily the launch: the bridge may have opened the
+    // pane before the network dropped.
+    await refreshSessions();
+    if (!sessions.value.some((s) => s.id === sessionId)) {
+      return launchFailed(repo, `${NO_RESPONSE} — it may still have launched; check Home before retrying`);
+    }
+  }
+  pickerLaunch.value = null;
+  if (showNewSession.value) {
+    showNewSession.value = false;
+    open(sessionId);
+  } else {
+    launchNotice.value = { label: launchLabel(repo), repo, sessionId };
   }
 }
 // The picker shows a failure on its row; if the picker was left meanwhile, Home shows it.
@@ -1335,7 +1413,7 @@ async function restoreSession() {
       flash.value = `restore failed: ${data.reason || r.status}`;
     }
   } catch {
-    flash.value = "bridge unreachable";
+    flash.value = NO_RESPONSE;
   } finally {
     restoring.value = false;
   }
@@ -1797,7 +1875,7 @@ function Unavailable() {
   return html`
     <div class="center login">
       <h1 class="brand">portkey</h1>
-      <div class="err">${error.value || "bridge unreachable"}</div>
+      <div class="err">${error.value || NO_RESPONSE}</div>
       <button class="primary" onClick=${connect}>Retry</button>
     </div>
   `;
@@ -1959,7 +2037,7 @@ function List() {
             +
           </button>
         </div>
-        ${error.value && error.value !== "bridge unreachable" && html`<div class="err">${error.value}</div>`}
+        ${error.value && error.value !== NO_RESPONSE && html`<div class="err">${error.value}</div>`}
         ${launching.value && html`<div class="sub" style="padding:4px 4px 10px">launching ${launching.value}…</div>`}
         ${pickerLaunch.value &&
         !pickerLaunch.value.error &&
@@ -2092,7 +2170,7 @@ function Shell() {
       if (r.ok && data.run) shellRuns.value = [...(shellRuns.value || []), data.run];
       else error.value = data.reason === "busy" ? "a command is still running" : "command failed to run";
     } catch {
-      error.value = "bridge unreachable";
+      error.value = NO_RESPONSE;
     } finally {
       shellPending.value = "";
     }
@@ -2104,7 +2182,7 @@ function Shell() {
         <h1 style="margin:0">shell</h1>
       </div>
       <div class="scroll thread" ref=${scrollRef}>
-        ${error.value && error.value !== "bridge unreachable" && html`<div class="err">${error.value}</div>`}
+        ${error.value && error.value !== NO_RESPONSE && html`<div class="err">${error.value}</div>`}
         ${runs === null && html`<div class="sub" style="padding:8px">loading…</div>`}
         ${runs && runs.length === 0 && !pending && html`<div class="shellhint">one command at a time, run on the host as you from your home directory · no tty, 30s limit · output stays until the bridge restarts</div>`}
         ${runs && runs.map((r, i) => html`<${ShellRunRow} run=${r} latest=${!pending && i === runs.length - 1} key=${r.at} />`)}
@@ -2336,7 +2414,7 @@ function NewSession() {
       <main class="scroll nsscroll">
         <div class="vh" role="status" aria-live="polite">${busy ? `launching ${launch.label}…` : announce}</div>
         <div class="vh" role="alert">${launch?.error ? `${launch.error}, ${launch.label}. Tap it again to retry.` : ""}</div>
-        ${error.value && error.value !== "bridge unreachable" && html`<div class="err">${error.value}</div>`}
+        ${error.value && error.value !== NO_RESPONSE && html`<div class="err">${error.value}</div>`}
         ${list === null && html`<div class="nsload" role="img" aria-label="loading repos"></div>`}
         ${list && list.length === 0 && html`<div class="nsempty">No repos found</div>`}
         ${words.length > 0 &&
@@ -2913,7 +2991,7 @@ function QuestionCard({ questions, toolUseId }) {
       .catch(() => {
         if (active()) decidingQuestion.value = null;
         clearStatusOverlay(id);
-        flashError("✗ bridge unreachable");
+        flashError(`✗ ${NO_RESPONSE}`);
       });
   };
   // "Chat about this": decline the whole prompt (regardless of wizard step) so the agent
@@ -2957,7 +3035,7 @@ function QuestionCard({ questions, toolUseId }) {
           });
         }, 8000);
       })
-      .catch(() => revert("bridge unreachable"));
+      .catch(() => revert(NO_RESPONSE));
   };
   return html`
     <div class="qwrap">
@@ -3568,7 +3646,7 @@ function Composer({ disabled, status }) {
         if (interruptRestore.value?.sessionId === id) interruptRestore.value = null;
         clearStatusOverlay(id); // the queue auto-submits — the session keeps running
       })
-      .catch(() => restore("bridge unreachable"));
+      .catch(() => restore(NO_RESPONSE));
   }
   function closeSlash() {
     if (!slash.current.open) return;
@@ -3810,7 +3888,7 @@ function Composer({ disabled, status }) {
         status = r.status;
         res = await r.json().catch(() => ({ ok: false, reason: String(r.status) }));
       } catch (err) {
-        res = { ok: false, reason: err.name === "TimeoutError" ? "transcribe-failed" : "bridge unreachable" };
+        res = { ok: false, reason: err.name === "TimeoutError" ? "transcribe-failed" : NO_RESPONSE };
       }
       if (res.ok || (status >= 400 && status < 500) || attempt === DICTATION_ATTEMPTS) break;
       dtrace("retry", { attempt, status, reason: res.reason });
@@ -6052,9 +6130,9 @@ function App() {
       : showHistory.value
         ? html`<${History} />`
         : html`<${List} />`;
-  // Bottom connectivity banner: a failed fetch ("bridge unreachable") is the persistent
+  // Bottom connectivity banner: a failed fetch (NO_RESPONSE) is the persistent
   // state (stays until a refresh succeeds); a dropped SSE socket is the transient one.
-  const banner = error.value === "bridge unreachable" ? "bridge unreachable" : !connected.value ? "reconnecting…" : null;
+  const banner = error.value === NO_RESPONSE ? NO_RESPONSE : !connected.value ? "reconnecting…" : null;
   return html`${screen}${banner && html`<div class="offline">${banner}</div>`}<${ActionSheet} /><${SessionSheet} /><${ConfigSheet} /><${AgentList} /><${SubagentView} /><${DiffView} /><${FilesView} /><${NoticeToast} /><${CopiedToast} />`;
 }
 
@@ -6257,6 +6335,7 @@ function sendGoodbye() {
   if (es) {
     es.close();
     es = null;
+    streamDownAt ||= Date.now();
   }
   try {
     navigator.sendBeacon("/push/goodbye", DEVICE_ID);
