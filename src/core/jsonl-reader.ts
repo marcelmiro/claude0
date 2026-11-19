@@ -18,18 +18,27 @@ export async function* jsonlLines(path: string, start = 0, end?: number): AsyncG
   const file = Bun.file(path);
   const reader = (start || end !== undefined ? file.slice(start, end) : file).stream().getReader();
   const decoder = new TextDecoder();
-  let carry = "";
+  // The unfinished line's pieces, joined once at its newline: appending each chunk to one
+  // carry string and re-splitting it re-copies the whole line per chunk, and a pasted image
+  // makes a line tens of MB (a 127MB transcript peaked at ~880MB RSS that way).
+  let pieces: string[] = [];
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      carry += decoder.decode(value, { stream: true });
-      const parts = carry.split("\n");
-      carry = parts.pop() ?? "";
-      yield* parts;
+      const text = decoder.decode(value, { stream: true });
+      let from = 0;
+      for (let nl = text.indexOf("\n"); nl !== -1; nl = text.indexOf("\n", from)) {
+        pieces.push(text.slice(from, nl));
+        yield pieces.join("");
+        pieces = [];
+        from = nl + 1;
+      }
+      if (from < text.length) pieces.push(text.slice(from));
     }
-    carry += decoder.decode();
-    if (carry) yield carry;
+    pieces.push(decoder.decode());
+    const last = pieces.join("");
+    if (last) yield last;
   } finally {
     reader.cancel().catch(() => {});
   }

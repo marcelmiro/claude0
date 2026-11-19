@@ -471,7 +471,7 @@ async function refreshTranscript() {
   const id = selectedId.value;
   if (!id) return;
   const seq = ++txReqSeq;
-  // Offer the held file revision so an unchanged transcript comes back as a tiny
+  // Offer the held transcript revision so an unchanged transcript comes back as a tiny
   // volatile-fields-only response instead of the full turn list.
   const heldRev = transcript.value && transcript.value.rev;
   const q = heldRev ? `?rev=${encodeURIComponent(heldRev)}` : "";

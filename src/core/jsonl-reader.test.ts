@@ -27,6 +27,18 @@ describe("jsonlLines", () => {
     expect(got[lines.length - 1]).toBe(lines[lines.length - 1]);
   });
 
+  test("a line spanning many chunks comes back whole, with its neighbours and blank lines intact", async () => {
+    // A pasted image makes one transcript line tens of MB: it arrives in hundreds of chunks.
+    const big = JSON.stringify({ image: "⚡a".repeat(400_000) });
+    const path = join(tmpdir(), `jsonl-big-${Date.now()}.jsonl`);
+    await Bun.write(path, `{"a":1}\n${big}\n\n{"b":2}\n`);
+    const got = await collect(path);
+    expect(got.length).toBe(4);
+    expect(got[0]).toBe('{"a":1}');
+    expect(got[1] === big).toBe(true);
+    expect(got.slice(2)).toEqual(["", '{"b":2}']);
+  });
+
   test("yields a final line with no trailing newline", async () => {
     const path = join(tmpdir(), `jsonl-tail-${Date.now()}.jsonl`);
     await Bun.write(path, '{"a":1}\n{"b":2}');

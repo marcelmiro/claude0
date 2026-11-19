@@ -950,10 +950,10 @@ async function statSurvivors(
 }
 
 /**
- * The transcript's current disk revision (matching the `rev` a full response carries),
- * or null when no transcript exists. The `/transcript?rev=` fast path compares this
- * against the client's held rev — one memoized path lookup, one stat per file, and a read
- * of the native session files for `liveSince`.
+ * The transcript's current revision — its files' stats plus the live process's start
+ * (matching the `rev` a full response carries), or null when no transcript exists. The
+ * `/transcript?rev=` fast path compares this against the client's held rev — one memoized
+ * path lookup, one stat per file, and a read of the native session files for `liveSince`.
  */
 export async function transcriptRevAt(
   sessionId: string,
@@ -1004,59 +1004,59 @@ function isUserQueueEntry(text: string): boolean {
  * A genuinely queued message has landed nowhere yet, so it always survives this check.
  */
 export function parseQueuedPending(jsonl: string | string[]): string[] {
-  const lines = typeof jsonl === "string" ? jsonl.split("\n") : jsonl;
-  const queue: { line: number; text: string }[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (!line.includes('"queue-operation"')) continue;
-    let rec: { type?: string; operation?: string; content?: unknown };
-    try {
-      rec = JSON.parse(line);
-    } catch {
-      continue; // torn/partial line
-    }
-    if (rec.type !== "queue-operation") continue;
-    switch (rec.operation) {
-      case "enqueue":
-        if (typeof rec.content === "string") queue.push({ line: i, text: rec.content });
-        break;
-      case "dequeue":
-        queue.shift();
-        break;
-      case "remove": {
-        const i2 = queue.findIndex((e) => e.text === rec.content);
-        if (i2 >= 0) queue.splice(i2, 1);
-        break;
-      }
-      case "popAll":
-        queue.length = 0;
-        break;
-    }
-  }
-  return queue
-    .filter(({ text }) => isUserQueueEntry(text))
-    .filter(({ line, text }) => !deliveredAfter(lines, line, text))
-    .map(({ text }) => text);
+  const replay = queueReplay();
+  for (const line of typeof jsonl === "string" ? jsonl.split("\n") : jsonl) replay.feed(line);
+  return replay.pending();
 }
 
 /**
- * Did the enqueued text land as a real record after its enqueue line? Fast substring
- * check with the JSON-escaped text first; only matching lines are parsed, and only
- * conversational carriers count — a later queue-operation on identical re-sent text
- * (or the torn tail of one) is not delivery.
+ * `parseQueuedPending`'s replay, fed one line at a time so a streamed read holds only the
+ * queue, never the file. Each line is first checked as delivery evidence for the entries
+ * already queued (a later conversational record carrying the text: only `user` and
+ * `attachment` count, never a queue-operation on re-sent text or a torn line), then applied
+ * as a queue op.
  */
-function deliveredAfter(lines: string[], afterLine: number, text: string): boolean {
-  const needle = JSON.stringify(text).slice(1, -1);
-  for (let i = afterLine + 1; i < lines.length; i++) {
-    if (!lines[i].includes(needle)) continue;
-    try {
-      const rec = JSON.parse(lines[i]) as { type?: string };
-      if (rec.type === "user" || rec.type === "attachment") return true;
-    } catch {
-      // torn/partial line
-    }
-  }
-  return false;
+function queueReplay(): { feed(line: string): void; pending(): string[] } {
+  const queue: { text: string; needle: string; delivered: boolean }[] = [];
+  return {
+    feed(line) {
+      for (const e of queue) {
+        if (e.delivered || !line.includes(e.needle)) continue;
+        try {
+          const rec = JSON.parse(line) as { type?: string };
+          if (rec.type === "user" || rec.type === "attachment") e.delivered = true;
+        } catch {
+          // torn/partial line
+        }
+      }
+      if (!line.includes('"queue-operation"')) return;
+      let rec: { type?: string; operation?: string; content?: unknown };
+      try {
+        rec = JSON.parse(line);
+      } catch {
+        return; // torn/partial line
+      }
+      if (rec.type !== "queue-operation") return;
+      switch (rec.operation) {
+        case "enqueue":
+          if (typeof rec.content === "string")
+            queue.push({ text: rec.content, needle: JSON.stringify(rec.content).slice(1, -1), delivered: false });
+          break;
+        case "dequeue":
+          queue.shift();
+          break;
+        case "remove": {
+          const i = queue.findIndex((e) => e.text === rec.content);
+          if (i >= 0) queue.splice(i, 1);
+          break;
+        }
+        case "popAll":
+          queue.length = 0;
+          break;
+      }
+    },
+    pending: () => queue.filter((e) => !e.delivered && isUserQueueEntry(e.text)).map((e) => e.text),
+  };
 }
 
 // Per-session cache of the parsed active branch, keyed by the joined file paths and
@@ -1399,9 +1399,9 @@ export async function queuedAtEscape(mark: { path: string; size: number }): Prom
  */
 export async function queuedAtMark(mark: { path: string; size: number }): Promise<boolean | undefined> {
   try {
-    const lines: string[] = [];
-    for await (const line of jsonlLines(mark.path, 0, mark.size)) lines.push(line);
-    return parseQueuedPending(lines).length > 0;
+    const replay = queueReplay();
+    for await (const line of jsonlLines(mark.path, 0, mark.size)) replay.feed(line);
+    return replay.pending().length > 0;
   } catch {
     return undefined;
   }
