@@ -143,6 +143,22 @@ export async function eventSourcedStatus(sessionId: string): Promise<SessionStat
 }
 
 /**
+ * Whether a compaction (a manual /compact or an auto-compaction) is in flight: its
+ * PreCompact is the newest main-thread edge. Claude Code writes nothing to the transcript
+ * until a compaction ends (manual ones take ~70s), so this is the only live signal.
+ * Callers AND it with a running native status — a failed or cancelled compaction may fire
+ * no PostCompact, and the session goes idle instead.
+ */
+export function compactionInFlight(sessionId: string): boolean {
+  for (const e of eventsNewestFirst(sessionId)) {
+    if (e.agent_id) continue; // a background agent's edges say nothing about the main thread
+    if (e.hook_event_name === "PreCompact") return true;
+    if (e.hook_event_name === "PostCompact" || edgeStatus(e) !== null) return false;
+  }
+  return false;
+}
+
+/**
  * Log the close of an AskUserQuestion the question hook denied ("Chat about this"): Claude
  * fires no PostToolUse for a hook-denied tool, so `pendingToolCall` would keep reporting
  * it as held until the turn's Stop. Appends only to an existing log (either half: a

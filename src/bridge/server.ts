@@ -81,7 +81,7 @@ import {
   takeRecentPushes,
 } from "../core/web-push";
 import { watchEvents } from "../core/watch";
-import { EVENTS_DIR, pendingToolCall } from "../core/hook-events";
+import { EVENTS_DIR, compactionInFlight, pendingToolCall } from "../core/hook-events";
 import { capturePane, listPanes } from "../core/tmux";
 import { isPermissionPrompt, sessionActivityAt, type SessionStatus } from "../core/status";
 import {
@@ -1290,6 +1290,12 @@ function resolveDialog(
  * belongs to the JOB session — answer with its transcript + hook state.
  * Pane-scoped fields (capture, statusline) stay on the listed id, whose pane it is.
  */
+// `compacting: true` while a compaction runs — the transcript shows nothing of it until it
+// ends. Shipped only while true: an omitted volatile field means cleared.
+async function compactingField(txId: string): Promise<{ compacting?: true }> {
+  return compactionInFlight(txId) && (await nativeStatus(txId)) === "running" ? { compacting: true } : {};
+}
+
 async function composeTranscriptPayload(id: string): Promise<Record<string, unknown>> {
   const txId = (await parkedJobSessions()).get(id) ?? id;
   // Transcript read and pane resolution share no state — overlap them.
@@ -1304,7 +1310,7 @@ async function composeTranscriptPayload(id: string): Promise<Record<string, unkn
   const statusline = pane ? await readPaneStatusline(pane, capture) : {};
   if (tx.pendingScripts) tx.pendingScripts = withScreenTotals(tx.pendingScripts, capture);
   const draft = pane ? await macDraft(txId, pane) : null;
-  return { ...tx, approval, dialog, ...statusline, macDraft: draft };
+  return { ...tx, approval, dialog, ...statusline, macDraft: draft, ...(await compactingField(txId)) };
 }
 
 /**
@@ -1496,6 +1502,7 @@ async function route(req: Request): Promise<Response> {
           dialog: pane ? resolveDialog(await nativeStatus(id), approval, pt, capture) : null,
           ...statusline,
           macDraft: pane ? await macDraft(txId, pane) : null,
+          ...(await compactingField(txId)),
         });
       }
     }

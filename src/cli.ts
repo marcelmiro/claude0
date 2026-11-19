@@ -753,6 +753,8 @@ const HOOK_REGISTRATIONS: { event: string; script: string; matcher?: string; tim
   { event: "Notification", script: "event.sh" },
   { event: "Stop", script: "event.sh" },
   { event: "SubagentStop", script: "event.sh" },
+  { event: "PreCompact", script: "event.sh" },
+  { event: "PostCompact", script: "event.sh" },
   // Claude Code's own timeout — the SIGKILL each hook poll loop races. Deliberately the
   // poll window PLUS a grace: Claude counts from spawn and a loop can't start its clock
   // until the process is up, so registering the bare window would make the kill land first

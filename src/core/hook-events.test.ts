@@ -21,6 +21,7 @@ import {
   EVENTS_DIR,
   hasEventLog,
   logQuestionClosed,
+  compactionInFlight,
 } from "./hook-events";
 import { fixtureJson } from "../../test/helpers/fixture";
 import type { HookEvent } from "../types";
@@ -335,4 +336,44 @@ test("pendingToolCall parses ALL questions of a multi-question AskUserQuestion",
   expect(call!.questions![1]!.multiSelect).toBe(true);
   expect(call!.questions![1]!.options.map((o) => o.label)).toEqual(["Red", "Green", "Blue"]);
   expect(call!.questions![1]!.toolUseId).toBe("tu_multi");
+});
+
+// --- compactionInFlight (PreCompact is the newest main-thread edge) ---------------
+
+test("compactionInFlight: a manual /compact from idle is in flight until PostCompact", () => {
+  const id = "sess-compact";
+  const before = [ev({ hook_event_name: "UserPromptSubmit" }, "x"), ev({ hook_event_name: "Stop" }, "x")];
+  writeLog(id, [...before, ev({ hook_event_name: "PreCompact" }, "x")]);
+  expect(compactionInFlight(id)).toBe(true);
+  writeLog(id, [...before, ev({ hook_event_name: "PreCompact" }, "x"), ev({ hook_event_name: "PostCompact" }, "x")]);
+  expect(compactionInFlight(id)).toBe(false);
+});
+
+test("compactionInFlight: an auto-compaction mid-turn counts; the turn's next edge ends it", () => {
+  const id = "sess-autocompact";
+  const turn = [ev({ hook_event_name: "UserPromptSubmit" }, "x"), ev({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_use_id: "t1" }, "x")];
+  writeLog(id, [...turn, ev({ hook_event_name: "PreCompact" }, "x")]);
+  expect(compactionInFlight(id)).toBe(true);
+  // a PostCompact lost (failed/killed compaction) — the next main-thread edge still ends it
+  writeLog(id, [...turn, ev({ hook_event_name: "PreCompact" }, "x"), ev({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_use_id: "t2" }, "x")]);
+  expect(compactionInFlight(id)).toBe(false);
+});
+
+test("compactionInFlight: a background agent's edges during a compaction don't end it, and its own PreCompact doesn't start one", () => {
+  const id = "sess-compact-agents";
+  writeLog(id, [
+    ev({ hook_event_name: "Stop" }, "x"),
+    ev({ hook_event_name: "PreCompact" }, "x"),
+    ev({ hook_event_name: "SubagentStop", agent_id: "a1" }, "x"),
+    ev({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_use_id: "t", agent_id: "a1" }, "x"),
+  ]);
+  expect(compactionInFlight(id)).toBe(true);
+  writeLog(id, [ev({ hook_event_name: "Stop" }, "x"), ev({ hook_event_name: "PreCompact", agent_id: "a1" }, "x")]);
+  expect(compactionInFlight(id)).toBe(false);
+});
+
+test("compactionInFlight: no log, or no compaction in it → false", () => {
+  expect(compactionInFlight("sess-none")).toBe(false);
+  writeLog("sess-plain", [ev({ hook_event_name: "Stop" }, "x")]);
+  expect(compactionInFlight("sess-plain")).toBe(false);
 });

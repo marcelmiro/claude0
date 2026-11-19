@@ -9,7 +9,7 @@ browser: [portkey-design-loop.md](portkey-design-loop.md). Home is the inbox:
 | Behavior | Where (`app.js`) |
 |---|---|
 | A run of 3+ tool-only records is one burst: expanded if it's work since the last prompt (`lastPromptAt`), else a one-line tally that expands on tap | `ToolBurst`, `isToolOnlyTurn` |
-| One working indicator: the live tool chip while a tool runs, else the "working…" line with elapsed time | `ToolChip`, `Working` |
+| One working indicator: the live tool chip while a tool runs, else the "working…" line with elapsed time — "compacting…" (no elapsed) while a compaction runs, which writes nothing to the transcript until it ends: the PreCompact hook edge, AND-ed with a running native status | `ToolChip`, `Working`, `compactionInFlight` (`core/hook-events.ts`) |
 | Slash-command turns are a normal user bubble with the `/name` in mono; long-press is copy-only. Queued and sending bubbles of a command render the same way. A queued command's bare-text record (written at dequeue, before its runner record) parses as a command turn too (`core/transcript.ts`) | `Turn`, `commandBody` |
 | An optimistic send bubble is faded and grows a "sending…" tag after ~5s (a delivered `!cmd` or `/command` shows "running · <elapsed>" instead); a server-confirmed queue entry is full-strength text in a dashed peach outline with a `◷ queued` tag — they never share a look | `SendingTag`, `.bubble.queued` |
 

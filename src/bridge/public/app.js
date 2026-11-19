@@ -441,6 +441,7 @@ const VOLATILE_FIELDS = [
   "mode",
   "model",
   "effort",
+  "compacting",
 ];
 
 // Responses can arrive out of order: refreshTranscript runs concurrently (SSE bursts,
@@ -3168,14 +3169,15 @@ function RunningTool({ tool }) {
 // with a pulsing dot IS the working indicator — two at once said the same thing twice);
 // this covers the thinking/writing stretches between tool calls. Elapsed counts from
 // lastPromptAt — the prompt that started the turn — so a glance answers "quick reply or
-// long haul?".
-function Working({ since }) {
+// long haul?". A compaction (`compacting`, from the PreCompact hook) reads "compacting" with
+// no elapsed: the hook carries no start time, and lastPromptAt predates the compaction.
+function Working({ since, label = "working" }) {
   const start = since ? Date.parse(since) : NaN;
   useTick(!isNaN(start));
   const elapsed = isNaN(start) ? "" : fmtElapsed(Math.max(0, Math.floor((Date.now() - start) / 1000)));
   // Dots go last so their animation never pushes the elapsed time sideways.
   return html`<div class="typing">
-    working${elapsed && html`<span class="elapsed"> · ${elapsed}</span>`}<span class="dots"></span>
+    ${label}${elapsed && html`<span class="elapsed"> · ${elapsed}</span>`}<span class="dots"></span>
   </div>`;
 }
 
@@ -4618,7 +4620,7 @@ function Detail() {
           )}
         ${t && t.pendingTool && !blocked && !liveInThread && html`<${RunningTool} tool=${t.pendingTool} />`}
         ${t && status === "running" && !blocked && !t.pendingTool &&
-        html`<${Working} since=${t.lastPromptAt} />`}
+        (t.compacting ? html`<${Working} label="compacting" />` : html`<${Working} since=${t.lastPromptAt} />`)}
         ${!archived && html`<${ChangesCard} />`}
       </div>
       <div class="dock">

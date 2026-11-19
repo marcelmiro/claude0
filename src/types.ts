@@ -241,7 +241,9 @@ export interface HookEvent {
     | "PostToolUse"
     | "Notification"
     | "Stop"
-    | "SubagentStop";
+    | "SubagentStop"
+    | "PreCompact"
+    | "PostCompact";
   transcript_path: string; // absolute path to the JSONL transcript (free on every event)
   cwd: string;
   permission_mode?: string;
