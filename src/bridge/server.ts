@@ -32,6 +32,8 @@ import {
   pendingToolFields,
   transcriptRevAt,
   sendMessage,
+  userEnqueueAfter,
+  transcriptMark,
   answerSessionQuestion,
   clarifySessionQuestion,
   createSession,
@@ -283,6 +285,23 @@ function staticResponse(rel: string): Response {
 
 function sendResult(r: SendResult): Response {
   return json(r, r.ok ? 200 : 409);
+}
+
+// Session id → its /message send still typing into the pane. The phone fires Stop without
+// waiting for its send to return, and an Escape landing mid-typing splits the message.
+const typing = new Map<string, Promise<unknown>>();
+
+/** Send; when Claude was busy and `confirmQueued`, also answer whether it queued the message
+ *  (an enqueue past the pre-send mark, `userEnqueueAfter`). Image sends skip it: the phone hands back only text sends on Stop. */
+async function sendTracked(id: string, send: () => Promise<SendResult>, confirmQueued = true): Promise<SendResult> {
+  // Registered before the status read, so a Stop arriving at once still waits for the typing.
+  const typed = (async () => {
+    const mark = confirmQueued && (await nativeStatus(id)) === "running" ? await transcriptMark(id) : null;
+    return { r: await send(), mark };
+  })();
+  typing.set(id, typed);
+  const { r, mark } = await typed.finally(() => typing.get(id) === typed && typing.delete(id));
+  return r.ok && mark ? { ...r, queued: await userEnqueueAfter(mark, 600) } : r;
 }
 
 // ---------------------------------------------------------------------------
@@ -1446,7 +1465,7 @@ async function route(req: Request): Promise<Response> {
     // Same shape check as /stream/open (and enforced again inside the resolver): a
     // metacharacter id must 400, not glob its way into other sessions' transcripts.
     if (!isValidSessionId(id)) return json({ ok: false, reason: "bad-args" }, 400);
-    // Fast path: the client holds this exact file revision (`?rev=`), so skip rebuilding
+    // Fast path: the client holds this exact transcript revision (`?rev=`), so skip rebuilding
     // and re-shipping the turns — the payload that scales with thread length. Everything
     // that can change WITHOUT the file changing still ships fresh: the pending
     // tool/question (hook events log), approval + statusline + Mac draft (pane scrape), the
@@ -1461,7 +1480,7 @@ async function route(req: Request): Promise<Response> {
         const [pane, subagents, pendingScripts] = await Promise.all([
           resolveSessionPane(id),
           listSubagents(at.paths),
-          pendingScriptsFor(at.paths),
+          pendingScriptsFor(at.paths, at.liveSince),
         ]);
         const capture = pane ? await capturePane(pane) : "";
         const pt = pendingToolCall(txId);
@@ -1486,7 +1505,7 @@ async function route(req: Request): Promise<Response> {
   // Transcript subscription (versioned state push): the device tells the bridge which
   // ONE session it has open; the bridge pushes that session's transcript over the
   // stream — a snapshot now (a zero-turn append when `rev` says the device already
-  // holds the current file revision), then append/snapshot deltas as it changes
+  // holds the current transcript revision), then append/snapshot deltas as it changes
   // (JSONL watcher + hook events). `sessionId: null` unsubscribes.
   if (method === "POST" && path === "/stream/open") {
     const body = (await req.json().catch(() => ({}))) as { sessionId?: unknown; rev?: unknown };
@@ -1722,15 +1741,16 @@ async function route(req: Request): Promise<Response> {
       const saved = await saveUploadedImages(files);
       if ("error" in saved) return json({ ok: false, reason: saved.error }, 400);
       pruneOldUploads();
-      const r = await sendMessage(id, text, saved.paths);
+      const r = await sendTracked(id, () => sendMessage(id, text, saved.paths), false);
       // Image-only (empty text) can't text-match; fall back to the turn's prompt_id anchor.
       if (r.ok) markPortkeySource(id, { deviceId: deviceOf(req), text: text.trim() ? text : undefined });
       return sendResult(r);
     }
     const body = (await req.json().catch(() => ({}))) as { text?: unknown };
-    if (typeof body.text !== "string") return json({ ok: false, reason: "bad-text" }, 400);
-    const r = await sendMessage(id, body.text);
-    if (r.ok) markPortkeySource(id, { deviceId: deviceOf(req), text: body.text });
+    const text = body.text;
+    if (typeof text !== "string") return json({ ok: false, reason: "bad-text" }, 400);
+    const r = await sendTracked(id, () => sendMessage(id, text));
+    if (r.ok) markPortkeySource(id, { deviceId: deviceOf(req), text });
     return sendResult(r);
   }
 
@@ -1955,6 +1975,7 @@ async function route(req: Request): Promise<Response> {
   const interrupt = path.match(/^\/sessions\/([^/]+)\/interrupt$/);
   if (method === "POST" && interrupt) {
     const id = decodeURIComponent(interrupt[1]!);
+    await typing.get(id)?.catch(() => {});
     const result = await interruptSession(id);
     if (result.ok) reconcileAfterInterrupt(id);
     return sendResult(result);

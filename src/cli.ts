@@ -19,7 +19,7 @@ import { imagePasteManifest, imagePasteKey, terminalBundleId, readServiceTemplat
 import { syncWindowPrefix, stripAllPrefixes, abbreviateRepo, ATTENTION_PREFIX } from "./core/notifications";
 import { findClaudeProcesses } from "./core/process";
 import { detectStatus, questionPickerVisible, type SessionStatus } from "./core/status";
-import { eventSourcedStatus } from "./core/hook-events";
+import { eventSourcedStatus, logQuestionClosed } from "./core/hook-events";
 import { nativeStatus, resolveStatus } from "./core/session-state";
 import { loadNameCache, getSessionName, slugify } from "./core/names";
 import { PATHS, DEFAULT_CONFIG, loadConfig, saveConfig, ensureUserConfig, tmuxKeys, resolveRole } from "./core/config";
@@ -1797,6 +1797,7 @@ export async function questionHook(): Promise<void> {
             "offered options. Do NOT re-ask or restate the question yet. Wait for the user's next " +
             "message and take it into account before proceeding.\n\nQuestions asked:\n" +
             asked;
+          logQuestionClosed(input);
           process.stdout.write(
             JSON.stringify({
               hookSpecificOutput: {

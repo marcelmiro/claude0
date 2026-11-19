@@ -372,14 +372,17 @@ export function parseTranscript(raw: string | string[]): TranscriptTurn[] {
  * `parentUuid` to the root and reverse to oldest-first. Sidechain turns fall out naturally
  * (they branch off the main line and are never ancestors of the main leaf); we also skip
  * any sidechain record defensively. A broken parent link (missing uuid) just stops the
- * walk, yielding the deepest intact suffix rather than crashing.
+ * walk, yielding the deepest intact suffix rather than crashing. With `liveSince` (the
+ * live process's start, epoch ms), prompts an interrupt auto-submitted off-branch are
+ * spliced back in (`withInterruptSubmissions`).
  */
-export function parseActiveBranch(raw: string | string[]): TranscriptTurn[] {
+export function parseActiveBranch(raw: string | string[], liveSince: number | null = null): TranscriptTurn[] {
   const byId = new Map<string, RawRecord>();
   // File-scan position per uuid, plus the mainline (leaf-eligible) uuids in file order —
   // the recovery anchors for a compact_boundary whose logical parent link dangles.
   const scanIndex = new Map<string, number>();
   const mainline: { uuid: string; idx: number }[] = [];
+  const children = new Map<string, RawRecord[]>(); // parentUuid → child records, file order
   let sawConversational = false;
   let idx = 0;
   for (const line of typeof raw === "string" ? raw.split("\n") : raw) {
@@ -394,6 +397,11 @@ export function parseActiveBranch(raw: string | string[]): TranscriptTurn[] {
     if (typeof record.uuid === "string") {
       byId.set(record.uuid, record);
       scanIndex.set(record.uuid, idx);
+      if (typeof record.parentUuid === "string" && !record.isSidechain) {
+        const siblings = children.get(record.parentUuid);
+        if (siblings) siblings.push(record);
+        else children.set(record.parentUuid, [record]);
+      }
     }
     const conversational = record.type === "user" || record.type === "assistant";
     if (conversational) sawConversational = true;
@@ -450,11 +458,62 @@ export function parseActiveBranch(raw: string | string[]): TranscriptTurn[] {
   chain.reverse(); // walked leaf→root; emit oldest-first
 
   const turns: FoldableTurn[] = [];
-  for (const record of chain) {
+  for (const record of withInterruptSubmissions(chain, children, liveSince)) {
     const turn = recordToTurn(record);
     if (turn) turns.push(turn);
   }
   return foldBashTurns(turns);
+}
+
+/**
+ * Escape on a running tool auto-submits the queued messages, but Claude Code (2.1.327)
+ * writes them as a chain hanging off the interrupted tool_use — a sibling of the rejected
+ * tool_result — so the parent walk never meets them, though the model answers them and the
+ * terminal and /rewind list them. Splice them in after the interrupt marker. Gated on that
+ * exact shape (marker right after the tool_result, prompts written within 2s of it): a
+ * rewound branch's abandoned prompt is also an off-branch child of a mainline record.
+ * Only while the process that wrote them still runs (`liveSince`: its start, epoch ms) —
+ * a resume rebuilds from the parent chain and drops them from Claude's own conversation.
+ */
+function withInterruptSubmissions(
+  chain: RawRecord[],
+  children: Map<string, RawRecord[]>,
+  liveSince: number | null,
+): RawRecord[] {
+  const onChain = new Set(chain.map((r) => r.uuid));
+  const out: RawRecord[] = [];
+  for (let i = 0; i < chain.length; i++) {
+    const marker = chain[i]!;
+    out.push(marker);
+    const toolResult = chain[i - 1];
+    if (!isInterruptMarker(marker) || !toolResult || !isToolResult(toolResult)) continue;
+    if (typeof toolResult.parentUuid !== "string") continue;
+    const markerAt = Date.parse(marker.timestamp ?? "");
+    if (liveSince === null || !(markerAt >= liveSince)) continue;
+    for (const root of children.get(toolResult.parentUuid) ?? []) {
+      for (let r: RawRecord | undefined = root; r && !onChain.has(r.uuid); r = children.get(r.uuid ?? "")?.[0]) {
+        if (r.type === "attachment") continue;
+        const prompt = r.type === "user" && !r.isMeta && typeof r.message?.content === "string";
+        if (!prompt || !(Math.abs(markerAt - Date.parse(r.timestamp ?? "")) < 2000)) break;
+        out.push(r);
+      }
+    }
+  }
+  return out;
+}
+
+function isToolResult(record: RawRecord): boolean {
+  const content = record.message?.content;
+  return record.type === "user" && Array.isArray(content) && content.some((b) => b?.type === "tool_result");
+}
+
+function isInterruptMarker(record: RawRecord): boolean {
+  const content = record.message?.content;
+  return (
+    record.type === "user" &&
+    Array.isArray(content) &&
+    content.some((b) => b?.type === "text" && typeof b.text === "string" && b.text.startsWith("[Request interrupted by user"))
+  );
 }
 
 /** The text of the last assistant turn that has any text content, else undefined. */

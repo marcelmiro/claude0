@@ -44,7 +44,7 @@ import { getLatestUserPrompt } from "./sessions";
 import { subagentStatus } from "./agent-status";
 import { parseBackgroundTasks, liveScripts, agentScriptsAt, withWorkflowProgress, endedWorkflows, type BackgroundTask } from "./background-tasks";
 import { decideQuestion, declineQuestion, buildAnswersMap } from "./approval";
-import { nativeStatus, parkedJobSessions } from "./session-state";
+import { liveProcessStartedAt, nativeStatus, parkedJobSessions } from "./session-state";
 import { jsonlLines, type PendingQuestion, type PendingToolCall } from "./jsonl-reader";
 import type { QuestionAnswer, RestoreState, ToolResultSummary, TranscriptBlock, TranscriptTurn } from "../types";
 
@@ -87,8 +87,8 @@ export interface SessionTranscript {
    */
   lastPromptAt?: string;
   /**
-   * Opaque disk revision of the transcript file (`size:mtimeMs`) — bumps on ANY JSONL write
-   * (append OR rewind's new branch). The phone snapshots it at rewind time and clears its
+   * Opaque revision of the transcript (`combinedRev`) — bumps on ANY JSONL write (append OR
+   * rewind's new branch) and when the live process changes (a resume). The phone snapshots it at rewind time and clears its
    * optimistic (truncated + prefilled) view once `rev` changes, i.e. once the resend lands.
    */
   rev?: string;
@@ -219,6 +219,9 @@ export type SendResult = {
   reason?: "no-pane" | "no-question" | "stale-question" | "not-presented" | "not-held" | "no-prompt" | "no-session" | "rewind-unavailable" | "rewind-mismatch" | "rewind-mode" | "bad-image" | "bad-selection" | "no-confirm" | "no-repo" | "no-transcript" | "resume-failed" | "not-found" | "shell-draft" | "shell-clear-failed" | "draft-stash-failed" | "clear-failed" | "notification-clear-failed" | "agent-list-focused" | "draft-present" | "draft-clear-failed" | "no-input-box" | "no-dialog" | "stale-dialog" | "stash-occupied";
   /** Fresh session id, set by createSession to the dictated id. */
   sessionId?: string;
+  /** `/message`: sent while Claude was busy and confirmed queued (`userEnqueueAfter`).
+   *  `/interrupt`: Claude's queue held messages at the Escape (`queuedAtEscape`). */
+  queued?: boolean;
 };
 
 /**
@@ -915,18 +918,20 @@ export function pendingToolFields(
 /**
  * One revision string over EVERY file of a session's transcript (a cwd move re-homes the
  * JSONL, so one session can span several — see `resolveTranscriptPaths`). Only the live
- * (newest) file ever grows, so `count:totalSize:maxMtime` moves on any append, rewind, or
- * file flip; the count term covers the flip instant itself, when a brand-new file could
- * otherwise leave size+mtime looking unchanged.
+ * (newest) file ever grows, so `count:totalSize:maxMtime:liveSince` moves on any append,
+ * rewind, or file flip; the count term covers the flip instant itself, when a brand-new file
+ * could otherwise leave size+mtime looking unchanged. `liveSince` (the live process's start,
+ * see `parseActiveBranch`) changes the parsed turns without touching the files, so a resume
+ * still reads as a new revision.
  */
-function combinedRev(stats: { size: number; mtimeMs: number }[]): string {
+function combinedRev(stats: { size: number; mtimeMs: number }[], liveSince: number | null): string {
   let size = 0;
   let mtime = 0;
   for (const s of stats) {
     size += s.size;
     if (s.mtimeMs > mtime) mtime = s.mtimeMs;
   }
-  return `${stats.length}:${size}:${mtime}`;
+  return `${stats.length}:${size}:${mtime}:${liveSince}`;
 }
 
 /**
@@ -947,14 +952,16 @@ async function statSurvivors(
 /**
  * The transcript's current disk revision (matching the `rev` a full response carries),
  * or null when no transcript exists. The `/transcript?rev=` fast path compares this
- * against the client's held rev — one memoized path lookup + one stat per file.
+ * against the client's held rev — one memoized path lookup, one stat per file, and a read
+ * of the native session files for `liveSince`.
  */
 export async function transcriptRevAt(
   sessionId: string,
-): Promise<{ paths: string[]; rev: string } | null> {
+): Promise<{ paths: string[]; rev: string; liveSince: number | null } | null> {
   const files = await statSurvivors(await resolveTranscriptPaths(sessionId));
   if (files.length === 0) return null;
-  return { paths: files.map((f) => f.path), rev: combinedRev(files.map((f) => f.stat)) };
+  const liveSince = await liveProcessStartedAt(sessionId);
+  return { paths: files.map((f) => f.path), rev: combinedRev(files.map((f) => f.stat), liveSince), liveSince };
 }
 
 /**
@@ -963,8 +970,17 @@ export async function transcriptRevAt(
  * runner dying, an agent launching a script and a workflow's progress all change it
  * while the files don't.
  */
-export async function pendingScriptsFor(paths: string[]): Promise<BackgroundTask[]> {
-  return (await readActiveBranchCached(paths)).pendingScripts;
+export async function pendingScriptsFor(paths: string[], liveSince: number | null): Promise<BackgroundTask[]> {
+  return (await readActiveBranchCached(paths, liveSince)).pendingScripts;
+}
+
+/**
+ * Whether a queue entry is a message the user queued. Task notifications and Teams
+ * deliveries ride the same queue but are harness plumbing — a delivery becomes a teammate
+ * turn, not the user's message.
+ */
+function isUserQueueEntry(text: string): boolean {
+  return !text.trimStart().startsWith("<task-notification>") && !isTeammateDelivery(text);
 }
 
 /**
@@ -1018,10 +1034,7 @@ export function parseQueuedPending(jsonl: string | string[]): string[] {
     }
   }
   return queue
-    .filter(({ text }) => !text.trimStart().startsWith("<task-notification>"))
-    // Teams deliveries are enqueued by the harness, not the user — never render them
-    // as the user's queued message (delivery makes them a teammate turn instead).
-    .filter(({ text }) => !isTeammateDelivery(text))
+    .filter(({ text }) => isUserQueueEntry(text))
     .filter(({ line, text }) => !deliveredAfter(lines, line, text))
     .map(({ text }) => text);
 }
@@ -1047,9 +1060,10 @@ function deliveredAfter(lines: string[], afterLine: number, text: string): boole
 }
 
 // Per-session cache of the parsed active branch, keyed by the joined file paths and
-// validated by every file's size+mtime. Any change — append OR rewind (which still
-// appends a new branch), or a cwd move opening a new file — grows a file, bumps an
-// mtime, or changes the path set, so an unchanged stat vector means unchanged content:
+// validated by every file's size+mtime plus `liveSince` (it gates the interrupt splice).
+// Any change — append OR rewind (which still appends a new branch), or a cwd move opening
+// a new file — grows a file, bumps an mtime, or changes the path set, so an unchanged key
+// means an unchanged parse:
 // re-use the parse instead of re-reading and re-parsing multi-MB logs on every refresh.
 const branchCache = new Map<
   string,
@@ -1107,14 +1121,15 @@ function emptyBranch(): BranchRead {
  * file was ever appended to. Frozen older files are re-streamed when the live file
  * changes — bounded by what a single large live file already costs.
  */
-async function readActiveBranchCached(allPaths: string[]): Promise<BranchRead> {
+async function readActiveBranchCached(allPaths: string[], liveSince: number | null): Promise<BranchRead> {
   try {
     // An older (frozen) file can vanish between the glob and the stat — retention
     // cleanup, a deleted project dir. Read the survivors rather than blanking the
     // whole session; the 3s resolve TTL heals the path list right after.
     const files = await statSurvivors(allPaths);
     if (files.length === 0) return emptyBranch();
-    const statKey = files.map((f) => `${f.path}:${f.stat.size}:${f.stat.mtimeMs}`).join(";");
+    // liveSince changes the parse (see parseActiveBranch); it moves when the live process does.
+    const statKey = files.map((f) => `${f.path}:${f.stat.size}:${f.stat.mtimeMs}`).join(";") + `|${liveSince}`;
     const cacheKey = files.map((f) => f.path).join(";");
     const hit = branchCache.get(cacheKey);
     // pendingScripts is derived per READ, not cached: the runner-liveness probe must
@@ -1142,8 +1157,8 @@ async function readActiveBranchCached(allPaths: string[]): Promise<BranchRead> {
     for (const f of files) for await (const line of jsonlLines(f.path)) lines.push(line);
     const entry = {
       statKey,
-      rev: combinedRev(files.map((f) => f.stat)),
-      turns: parseActiveBranch(lines),
+      rev: combinedRev(files.map((f) => f.stat), liveSince),
+      turns: parseActiveBranch(lines, liveSince),
       // Piggybacked on the same read: background tasks, the queued-message replay, and
       // context usage change only when the files do (all are transcript records), so
       // one cache covers all of them.
@@ -1178,12 +1193,12 @@ export async function getTranscript(sessionId: string): Promise<SessionTranscrip
   // tree, and a rewind/edit can SHRINK the logical conversation, so an append-only
   // byte-delta would leak abandoned-branch turns. We read every file the session spans
   // and rebuild the leaf→root path each time, always returning a full replacement (no
-  // cursor). The full re-parse is gated behind a per-file size+mtime cache (any change
-  // grows the live file), so an idle session re-uses the prior parse instead of
-  // re-reading multi-MB logs every refresh. Subagent listing and the last-prompt
-  // boundary only need the paths — overlap them with the branch read.
+  // cursor). The full re-parse is gated behind a per-file size+mtime cache plus the live
+  // process's start (a resume changes it without writing), so an idle session re-uses
+  // the prior parse instead of re-reading multi-MB logs every refresh. Subagent listing
+  // and the last-prompt boundary only need the paths — overlap them with the branch read.
   const [branch, subagents, lastPromptAt] = await Promise.all([
-    readActiveBranchCached(paths),
+    readActiveBranchCached(paths, await liveProcessStartedAt(sessionId)),
     listSubagents(paths),
     lastPromptAtAcross(paths),
   ]);
@@ -1360,8 +1375,78 @@ export async function archiveSession(sessionId: string): Promise<SendResult> {
 export async function interruptSession(sessionId: string): Promise<SendResult> {
   const paneId = await resolveSessionPane(sessionId);
   if (!paneId) return { ok: false, reason: "no-pane" };
+  const mark = await transcriptMark(sessionId); // last, so a dequeue just before the Escape counts
   await sendKey(paneId, "Escape");
-  return { ok: true };
+  return { ok: true, queued: mark ? await queuedAtEscape(mark) : undefined };
+}
+
+/**
+ * Whether Claude's queue held messages at an Escape sent just after `mark`: queued at the
+ * mark, or — when Claude hadn't flushed the enqueue yet — the user's enqueue the Escape's
+ * auto-submit writes past it. A revert writes none.
+ */
+export async function queuedAtEscape(mark: { path: string; size: number }): Promise<boolean | undefined> {
+  const atMark = await queuedAtMark(mark);
+  if (atMark !== false) return atMark;
+  return userEnqueueAfter(mark, 400);
+}
+
+/**
+ * Whether Claude's input queue held messages at `mark`, taken just before an Escape: a
+ * non-empty queue auto-submits instead of reverting (docs/pane-input.md § Interrupts). Read
+ * after the Escape so it never delays it; the bound keeps out the drain the Escape causes.
+ * Undefined when unreadable — "not queued" would make the phone arm a hand-back.
+ */
+export async function queuedAtMark(mark: { path: string; size: number }): Promise<boolean | undefined> {
+  try {
+    const lines: string[] = [];
+    for await (const line of jsonlLines(mark.path, 0, mark.size)) lines.push(line);
+    return parseQueuedPending(lines).length > 0;
+  } catch {
+    return undefined;
+  }
+}
+
+/** End of the session's live transcript file — the mark `userEnqueueAfter` and `queuedAtMark` read from. */
+export async function transcriptMark(sessionId: string): Promise<{ path: string; size: number } | null> {
+  const txId = (await parkedJobSessions()).get(sessionId) ?? sessionId;
+  const path = (await resolveTranscriptPaths(txId)).at(-1);
+  return path ? { path, size: Bun.file(path).size } : null;
+}
+
+/**
+ * Whether an enqueue of a user message is appended past `mark` within `timeoutMs`. A send
+ * to a busy session was queued iff one lands past the pre-send mark — look for the record,
+ * not the queue's state, since an Escape right after the send drains it at once. Claude
+ * flushes the line a beat late, sometimes only with the auto-submit an Escape triggers, so
+ * poll; a send that started a turn instead times out as false. Harness entries (a Monitor's
+ * notifications) don't count: they arrive any time.
+ */
+export async function userEnqueueAfter(mark: { path: string; size: number }, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  let offset = mark.size; // past the complete lines already scanned — each poll reads only new bytes
+  for (;;) {
+    try {
+      const bytes = new Uint8Array(await Bun.file(mark.path).slice(offset).arrayBuffer());
+      const end = bytes.lastIndexOf(10) + 1; // a torn last line waits for the next poll
+      for (const line of new TextDecoder().decode(bytes.subarray(0, end)).split("\n")) {
+        if (!line.includes('"queue-operation"')) continue;
+        let rec: { type?: unknown; operation?: unknown; content?: unknown };
+        try {
+          rec = JSON.parse(line);
+        } catch {
+          continue; // a mark taken mid-line leaves a partial first line
+        }
+        const enqueue = rec.type === "queue-operation" && rec.operation === "enqueue";
+        if (enqueue && typeof rec.content === "string" && isUserQueueEntry(rec.content)) return true;
+      }
+      offset += end;
+    } catch {
+      // unreadable file — retry until the deadline
+    }
+    if (Date.now() >= deadline) return false;
+    await Bun.sleep(50);
+  }
 }
 
 /**

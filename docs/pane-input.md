@@ -81,6 +81,35 @@ whether the input box was occupied:
 
 - Escape with queued mid-turn messages interrupts the turn and the queue **auto-submits**
   as the next prompt. A second Escape changes nothing. Interrupted partial text persists
-  with `isAbortedMidStream: true`.
+  with `isAbortedMidStream: true`. The auto-submitted records (2.1.327, one per queued
+  message, linked through attachments) chain after the interrupt marker when Escape lands
+  mid-stream — so until the reply starts the last one is the revert's bare-leaf shape.
+  When Escape lands mid-tool, a write-order race (3 of 4 lab runs) hangs them off the
+  interrupted tool_use instead, beside the rejected tool result and off the active branch.
+  The live process still holds them (terminal and `/rewind` list them), but a resume
+  rebuilds from the parent chain and drops them. So `parseActiveBranch`
+  (`withInterruptSubmissions`) splices them in after the marker only while the session's
+  live process started before the interrupt (`liveProcessStartedAt`, `core/session-state.ts`).
+  That start time is part of the transcript `rev`, so the next read after a resume re-ships
+  the thread. A resume writes no transcript line and logs no hook event, so an open phone
+  only refetches on its next poll or push.
+- Portkey's Stop arms no revert-restore and no "ready" overlay while `queuedPending` is
+  non-empty (`onStop`, `app.js`). The queue auto-submits, so nothing comes back. The
+  phone's copy of the queue lags a just-sent message, and Claude flushes the queue entry a
+  beat after taking it. So a text `/message` sent while Claude is busy answers `queued` only once
+  that entry is in the transcript (`userEnqueueAfter`), and the client disarms on that answer.
+  `/interrupt` waits for a send still typing into the pane (`sendTracked`, `server.ts`), so
+  an Escape never splits one. It also answers `queued`: whether Claude's queue held
+  messages at the Escape (`queuedAtEscape`: the queue up to a byte mark taken just before
+  it, or the user's enqueue written right after it — Claude sometimes flushes the enqueue only
+  with the Escape's auto-submit, after the send's own check gave up).
+  The phone's copy lags a turn-end dequeue too — Claude takes a queued message as the next
+  prompt, and an Escape before it streams reverts it — so the client re-decides on that.
+- `/rewind` lists every sent prompt, including several submitted together with no reply
+  in between and back-to-back `!cmd` turns. It never lists a prompt followed only by an
+  interrupt marker before the next prompt (`promptCheckpointIndices`, `app.js`).
 - On a revert the client prefills the composer, hides the bare leaf (`hiddenInterrupts`,
   `app.js`), and calls `POST /sessions/:id/clear-input` (`clearPaneInput` → `killInput`).
+  A Stop right after Send can beat the prompt into the JSONL, so "the text is absent"
+  resolves the restore only once the text was seen or a 3s grace passed. Otherwise it
+  would skip the hide and the clear.

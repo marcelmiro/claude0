@@ -179,7 +179,7 @@ const isPromptTurn = (turn) =>
 
 // Ordered turn indices that are actual /rewind CHECKPOINTS. A typed prompt only becomes a
 // checkpoint once it starts producing output — i.e. an assistant turn follows it before the
-// next prompt. A prompt interrupted before its first token (double-tap Stop right after
+// next prompt — or when the next turn is itself a prompt. A prompt interrupted before its first token (double-tap Stop right after
 // sending) creates NO checkpoint and is absent from Claude's picker, so counting it would
 // shift every earlier prompt's upCount by one → the picker cursor lands wrong → the server
 // aborts with rewind-mismatch. Verified against claude 2.1.x's picker. Non-prompt user turns
@@ -190,7 +190,13 @@ function promptCheckpointIndices(turns) {
     if (!isPromptTurn(turns[i])) continue;
     let started = false;
     for (let j = i + 1; j < turns.length; j++) {
-      if (isPromptTurn(turns[j])) break; // reached the next prompt with no output in between
+      // A prompt directly followed by another was sent with it (several queued messages
+      // auto-submitted together, a `!cmd` before a prompt) and is listed; one with only
+      // an interrupt marker before the next prompt is not.
+      if (isPromptTurn(turns[j])) {
+        started = j === i + 1;
+        break;
+      }
       if (turns[j].role === "assistant") {
         started = true;
         break;
@@ -224,8 +230,8 @@ const composerPrefill = signal(null);
 // After a Stop fires we watch the refetched transcript: if the last-sent text is no longer
 // a user turn (and not queued), it returns to the composer, mirroring the TUI. If it's
 // still in the thread (a mid-turn interrupt), the intent expires silently.
-const lastSentText = new Map(); // sid → text; read only inside event handlers, not reactive
-const interruptRestore = signal(null); // {sessionId, text, until} | null
+const lastSentText = new Map(); // sid → {text, queued}; read only inside event handlers, not reactive
+const interruptRestore = signal(null); // {sessionId, text, settleAt, until, seen?} | null
 // Interrupted prompts hidden from the thread once their text was restored to the composer:
 // [{sessionId, index, text, at}]. Claude Code never deletes the turn from the JSONL — the
 // revert only materializes as branch abandonment at the NEXT send, and sometimes not even
@@ -561,9 +567,14 @@ function applyTranscript(id, data) {
       last &&
       isPromptTurn(last) &&
       (last.content || []).some((b) => b.type === "text" && (b.text || "").trim() === txt);
-    const gone =
-      !userTurnTexts(transcript.value).has(txt) &&
-      !(transcript.value.queuedPending || []).some((q) => q.trim() === txt);
+    const present =
+      userTurnTexts(transcript.value).has(txt) ||
+      (transcript.value.queuedPending || []).some((q) => q.trim() === txt);
+    if (present) ir.seen = true;
+    // A Stop tapped right after Send can beat the prompt into the JSONL; "absent" then
+    // means not-yet-written, and resolving it as gone skips the hide and the pane clear
+    // the bare leaf gets moments later. Absent counts once it was seen, or after the grace.
+    const gone = !present && (ir.seen || Date.now() > ir.settleAt);
     if (reverted || gone) {
       if (reverted) {
         hiddenInterrupts.value = [
@@ -926,8 +937,9 @@ const REASON_TEXT = {
 const reasonText = (data, status) => REASON_TEXT[data.reason] || data.reason || status;
 
 // Send an action and report ok/failure to the caller — the bridge gates
-// answer/decision/message server-side and returns {ok,reason}. Failures flash; success
-// is silent (the caller updates the UI optimistically).
+// answer/decision/message server-side and returns {ok,reason}. Failures flash and return
+// false; success is silent and returns the response body (the caller updates the UI
+// optimistically).
 async function action(path, body, { pushed = false } = {}) {
   try {
     const r = await fetch(path, {
@@ -944,7 +956,7 @@ async function action(path, body, { pushed = false } = {}) {
       // `pushed`: the change lands as a transcript append the live stream pushes.
       if (!(pushed && streamLive())) refreshTranscriptSoon();
       refreshSessionsSoon();
-      return true;
+      return data;
     }
     flashError(`✗ ${reasonText(data, r.status)}`);
     return false;
@@ -954,8 +966,8 @@ async function action(path, body, { pushed = false } = {}) {
   }
 }
 
-// Like action(), but returns the parsed response so callers can read extra fields (the
-// /config confirmation `line`). Refreshes on success; flashes + returns null on failure.
+// Like action(), but always refreshes on success (no `pushed` gate) and returns null on
+// failure — for callers reading extra fields (the /config confirmation `line`).
 async function actionJson(path, body) {
   try {
     const r = await fetch(path, {
@@ -3443,8 +3455,9 @@ function Composer({ disabled, status }) {
       rerender();
     }
   }
-  // Double-tap Stop: first tap arms (relabels), a second within 3s interrupts. Firing sets
-  // an optimistic "ready" STATUS OVERLAY so the button becomes Send this frame — the
+  // Double-tap Stop: first tap arms (relabels), a second within 3s interrupts. Unless
+  // Claude's queue will auto-submit (below), firing sets an optimistic "ready" STATUS
+  // OVERLAY so the button becomes Send this frame — the
   // overlay is applied over every incoming payload, so a snapshot computed pre-interrupt
   // can't flicker Stop back; it retires when the server shows non-running, or expires.
   // A bare POST (not action(), which would immediately refetch) sends the interrupt; the
@@ -3460,18 +3473,37 @@ function Composer({ disabled, status }) {
     clearTimeout(disarmTimer.current);
     stopArmed.current = false;
     const id = selectedId.value;
-    setStatusOverlay(id, "ready");
+    // With messages in Claude's input queue, Escape never reverts: the queue auto-submits
+    // as the next prompt and the session keeps running (docs/pane-input.md § Interrupts).
+    // Its record looks like a revert (or is off-branch entirely), so arm nothing. Our copy of
+    // the queue lags a just-sent message, so its send's `queued` answer counts too until the
+    // message lands — here if it already came back, else it disarms in `send()`.
+    // The bridge's answer reads Claude's queue as it stood at the Escape, which our copy
+    // lags in both directions (a dequeue at turn end too), so it corrects this guess below.
+    const sentQueued = () => {
+      const last = lastSentText.get(id);
+      return !!last?.queued && pendingSends.value.includes(last.text);
+    };
+    const sentAtTap = sentQueued();
+    const queued = transcript.value?.queuedPending?.length > 0 || sentAtTap;
     // Arm restore-on-interrupt: if the refetched transcript shows the last-sent message
     // fell off the active branch, it comes back into the composer (see interruptRestore).
-    const lastText = lastSentText.get(id);
-    if (lastText) {
-      interruptRestore.value = { sessionId: id, text: lastText, until: Date.now() + 8000 };
-      // Focus NOW, inside the tap gesture — iOS only raises the keyboard for a focus that
-      // is gesture-driven, and the restore resolves ~2s too late to qualify. The prefill
-      // then lands in an already-focused box. If the restore never fires (mid-turn stop),
-      // the raised keyboard is still where an interrupting user is headed next.
-      if (ref.current) ref.current.focus();
-    }
+    const arm = () => {
+      setStatusOverlay(id, "ready");
+      const lastText = lastSentText.get(id)?.text;
+      if (!lastText) return;
+      interruptRestore.value = { sessionId: id, text: lastText, settleAt: Date.now() + 3000, until: Date.now() + 8000 };
+      // Re-check at the grace mark: a prompt that never reached the JSONL changes no file,
+      // so no push would arrive to resolve the restore before it expires.
+      setTimeout(() => interruptRestore.value?.sessionId === id && refreshTranscript(), 3100);
+    };
+    if (!queued) arm();
+    // Focus NOW, inside the tap gesture — iOS only raises the keyboard for a focus that
+    // is gesture-driven, and the restore resolves ~2s too late to qualify (it may also be
+    // armed late, on the bridge's answer). The prefill then lands in an already-focused
+    // box. If the restore never fires, the raised keyboard is still where an interrupting
+    // user is headed next.
+    if (lastSentText.get(id)?.text && ref.current) ref.current.focus();
     const restore = (reason) => {
       flashError(`✗ ${reason}`);
       clearStatusOverlay(id); // failed → the true "running" resurfaces (Stop returns)
@@ -3484,7 +3516,15 @@ function Composer({ disabled, status }) {
     })
       .then((r) => r.json().catch(() => ({})))
       .then((d) => {
-        if (d && d.ok === false) restore(d.reason || "interrupt failed");
+        if (d && d.ok === false) return restore(d.reason || "interrupt failed");
+        if (typeof d?.queued !== "boolean") return; // no read of Claude's queue — keep the guess
+        // A send confirmed queued before the tap was already in the file at the bridge's
+        // read, so its "not queued" means Claude took it. One confirmed after may postdate it.
+        const nowQueued = d.queued || (!sentAtTap && sentQueued());
+        if (nowQueued === queued) return;
+        if (!nowQueued) return arm();
+        if (interruptRestore.value?.sessionId === id) interruptRestore.value = null;
+        clearStatusOverlay(id); // the queue auto-submits — the session keeps running
       })
       .catch(() => restore("bridge unreachable"));
   }
@@ -3768,8 +3808,16 @@ function Composer({ disabled, status }) {
     setStatusOverlay(sid, "running");
     if (items.length === 0) {
       pendingSends.value = [...pendingSends.value, text];
-      lastSentText.set(sid, text); // restore-on-interrupt candidate
+      lastSentText.set(sid, { text, queued: false }); // restore-on-interrupt candidate
       const ok = await action(`/sessions/${encodeURIComponent(sid)}/message`, { text }, { pushed: true });
+      // Claude queued it, so a Stop tapped meanwhile auto-submitted it: nothing comes back,
+      // and the session is still running.
+      const ir = interruptRestore.value;
+      if (ok?.queued && lastSentText.get(sid)?.text === text) lastSentText.set(sid, { text, queued: true });
+      if (ok?.queued && ir?.sessionId === sid && ir.text === text) {
+        interruptRestore.value = null;
+        clearStatusOverlay(sid);
+      }
       if (ok && text.trim().startsWith("!")) deliveredBangs.value = [...deliveredBangs.value, { text, at: Date.now() }];
       if (ok) logDictations(sid, text, dictated);
       if (!ok) {

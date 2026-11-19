@@ -34,6 +34,7 @@ dialog still on the pane comes back.
 | Concern | Where |
 |---|---|
 | Subagent tool events are kept out of the event log, except AskUserQuestion | event logger in `src/cli.ts`, `pendingToolCall` (`core/hook-events.ts`) |
+| A question denied from the hook ("Chat about this") gets no PostToolUse from Claude, so the question hook logs one; otherwise it would read as held until the turn's Stop. An Escape at the picker logs neither, so the next turn's `UserPromptSubmit` ends the walk too. A later tool is no sign it was answered: AskUserQuestion is concurrency-safe (2.1.327), so a Read can run beside a held question | `logQuestionClosed`, `pendingToolCall` (`core/hook-events.ts`) |
 | The question hold is its own matcher-scoped hook with a 4h window, so a hung approval stays killable at ~10 min | `src/cli.ts` (question intercept script, hook registration), `QUESTION_HOLD_MS` |
 | Hold release when the user is back at the pane, and why its failure polarity is the opposite of the intercept gate's | `atDeskFocus` (`core/tmux.ts`) |
 | Un-held clarify: the picker's own "Chat about this" digit, pre-flighted, falling back to Escape | `clarifyQuestion`, `chatRowKey` (`core/tmux.ts`) |

@@ -11,7 +11,7 @@
 
 import "../../test/helpers/home";
 import { test, expect, beforeEach } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import {
   readEvents,
   eventsNewestFirst,
@@ -19,6 +19,8 @@ import {
   pendingToolCall,
   eventLogPath,
   EVENTS_DIR,
+  hasEventLog,
+  logQuestionClosed,
 } from "./hook-events";
 import { fixtureJson } from "../../test/helpers/fixture";
 import type { HookEvent } from "../types";
@@ -229,6 +231,49 @@ test("pendingToolCall: a subagent's open tool doesn't shadow the main thread's h
   writeLog(id, [
     ev({ hook_event_name: "PreToolUse", tool_name: "AskUserQuestion", tool_use_id: "tu_ask", tool_input: { questions: [{ question: "Q?", header: "H", multiSelect: false, options: [{ label: "A" }, { label: "B" }] }] } }, "x"),
     ev({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_use_id: "tu_sub", agent_id: "a1", tool_input: { command: "ls" } }, "x"),
+  ]);
+  expect(pendingToolCall(id)?.toolUseId).toBe("tu_ask");
+});
+
+test("pendingToolCall: a question denied from the hook is closed by the close it logs", () => {
+  // A hook deny ("Chat about this") fires no PostToolUse, so the question hook logs one.
+  const id = "sess-denied-ask";
+  const ask = ev({ hook_event_name: "PreToolUse", tool_name: "AskUserQuestion", tool_use_id: "tu_ask", tool_input: { questions: [{ question: "Q?", header: "H", multiSelect: false, options: [{ label: "A" }, { label: "B" }] }] } }, "x");
+  writeLog(id, [ask]);
+  expect(pendingToolCall(id)?.toolUseId).toBe("tu_ask");
+  logQuestionClosed({ ...ask, session_id: id });
+  expect(pendingToolCall(id)).toBeNull();
+  // No log, no opt-in: the close never creates one (event-sourced status is opt-in by presence).
+  logQuestionClosed({ ...ask, session_id: "sess-no-log" });
+  expect(hasEventLog("sess-no-log")).toBe(false);
+  // Just rotated: the open question sits in `.old` and there is no current file yet.
+  const rotated = "sess-rotated";
+  writeLog(rotated, [ask]);
+  renameSync(eventLogPath(rotated), `${eventLogPath(rotated)}.old`);
+  logQuestionClosed({ ...ask, session_id: rotated });
+  expect(pendingToolCall(rotated)).toBeNull();
+});
+
+test("pendingToolCall: a question dismissed with Escape is over once the next turn starts", () => {
+  // Escape at the picker logs no PostToolUse and no Stop; the next prompt's
+  // UserPromptSubmit is the first sign the question's turn ended.
+  const id = "sess-escaped-ask";
+  writeLog(id, [
+    ev({ hook_event_name: "PreToolUse", tool_name: "AskUserQuestion", tool_use_id: "tu_ask", tool_input: { questions: [{ question: "Q?", header: "H", multiSelect: false, options: [{ label: "A" }, { label: "B" }] }] } }, "x"),
+    ev({ hook_event_name: "UserPromptSubmit", prompt: "never mind, do X", prompt_id: "p2" }, "x"),
+    ev({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_use_id: "tu_1", tool_input: { command: "ls" } }, "x"),
+    ev({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_use_id: "tu_1" }, "x"),
+  ]);
+  expect(pendingToolCall(id)).toBeNull();
+});
+
+test("pendingToolCall: a held question batched with a tool that finished stays pending", () => {
+  // AskUserQuestion is concurrency-safe (Claude Code 2.1.327), so it can run beside a Read.
+  const id = "sess-batched-ask";
+  writeLog(id, [
+    ev({ hook_event_name: "PreToolUse", tool_name: "AskUserQuestion", tool_use_id: "tu_ask", tool_input: { questions: [{ question: "Q?", header: "H", multiSelect: false, options: [{ label: "A" }, { label: "B" }] }] } }, "x"),
+    ev({ hook_event_name: "PreToolUse", tool_name: "Read", tool_use_id: "tu_read", tool_input: { file_path: "/a" } }, "x"),
+    ev({ hook_event_name: "PostToolUse", tool_name: "Read", tool_use_id: "tu_read" }, "x"),
   ]);
   expect(pendingToolCall(id)?.toolUseId).toBe("tu_ask");
 });

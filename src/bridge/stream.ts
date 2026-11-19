@@ -32,7 +32,7 @@ type Conn = { deviceId?: string; seq: number };
 
 /**
  * Per-device transcript subscription + what was last pushed to it. `heldRev` is the
- * file revision the device declared it already holds when subscribing: the first push
+ * transcript revision the device declared it already holds when subscribing: the first push
  * skips the turns when it still matches, consumed by that push.
  */
 type Sub = { sessionId: string; lastKeys: string[] | null; heldRev: string | null };
