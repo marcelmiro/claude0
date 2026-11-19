@@ -75,6 +75,7 @@ describe("renderTranscript grammar", () => {
       { role: "user", content: [], command: "/pr-triage 12" },
       { role: "user", content: [], bash: { command: "ls", stdout: "a\nb\nc\nd\ne", stderr: "" } },
       text("user", "[Request interrupted by user]"),
+      text("user", "[File: /u/uploads/1b2c/report.pdf]"),
       { role: "user", content: [{ type: "text", text: "summary" }], compactSummary: true },
       {
         role: "assistant",
@@ -91,6 +92,8 @@ describe("renderTranscript grammar", () => {
       "    … +2 lines",
       "",
       "⊘ Request interrupted by user",
+      "",
+      "❯ [File: /u/uploads/1b2c/report.pdf]",
       "",
       "────────────── compacted ──────────────",
       "",

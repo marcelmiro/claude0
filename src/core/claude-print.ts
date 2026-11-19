@@ -6,12 +6,14 @@ const CLAUDE_PATH = resolveClaudePath();
 /**
  * One `claude -p` call with a system prompt: the text it printed, or why there isn't any.
  * Runs from a neutral cwd so no workspace CLAUDE.md leaks in, with the cli entrypoint so it
- * bills like the naming calls (`generateOneName` in names.ts).
+ * bills like the naming calls (`generateOneName` in names.ts). Text in, text out: no tools,
+ * MCP servers or skills, whose definitions otherwise make up ~22K of a cleanup's ~32K input
+ * tokens.
  */
 export async function claudePrint(opts: { system: string; input: string; model?: string; timeoutMs?: number }): Promise<{ text: string } | { error: string }> {
   const { system, input, model = "haiku", timeoutMs = 30_000 } = opts;
   try {
-    const proc = Bun.spawn([CLAUDE_PATH, "-p", "--model", model, "--no-session-persistence", "--system-prompt", system], {
+    const proc = Bun.spawn([CLAUDE_PATH, "-p", "--model", model, "--no-session-persistence", "--tools", "", "--strict-mcp-config", "--disable-slash-commands", "--system-prompt", system], {
       stdin: new Response(input),
       stdout: "pipe",
       stderr: "pipe",

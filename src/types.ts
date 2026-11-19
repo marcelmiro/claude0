@@ -208,6 +208,8 @@ export interface Config {
     windowPrefix: boolean;
     /** Repo-name → short display name on tmux windows/sidebar (e.g. {"claude0":"c0"}) */
     repoAbbreviations?: Record<string, string>;
+    /** Skills pinned in portkey's composer-button menu, first = nearest the thumb; absent ⇒ DEFAULT_CONFIG's */
+    composerSkills?: string[];
   };
   notifications: {
     native: boolean;

@@ -39,6 +39,7 @@ export const DEFAULT_CONFIG = {
     statusMonitor: true,
     windowPrefix: true,
     repoAbbreviations: {},
+    composerSkills: ["/compact"],
   },
   notifications: {
     native: true,
@@ -141,7 +142,12 @@ export function validateConfig(value: unknown): Config {
   }
 
   if (!isObject(value.ui)) throw new Error("ui must be an object");
-  onlyKeys(value.ui, ["statusMonitor", "windowPrefix", "repoAbbreviations"], "ui");
+  onlyKeys(value.ui, ["statusMonitor", "windowPrefix", "repoAbbreviations", "composerSkills"], "ui");
+  const composerSkills = value.ui.composerSkills;
+  const isSlashCommand = (s: unknown): s is string => typeof s === "string" && /^\/\S+$/.test(s);
+  if (composerSkills !== undefined && !(Array.isArray(composerSkills) && composerSkills.every(isSlashCommand))) {
+    throw new Error('ui.composerSkills must be an array of slash commands like "/compact"');
+  }
   const repoAbbreviations = value.ui.repoAbbreviations;
   if (repoAbbreviations !== undefined) {
     if (!isObject(repoAbbreviations)) throw new Error("ui.repoAbbreviations must be an object");
@@ -214,6 +220,7 @@ export function validateConfig(value: unknown): Config {
       statusMonitor: booleanAt(value.ui.statusMonitor, "ui.statusMonitor"),
       windowPrefix: booleanAt(value.ui.windowPrefix, "ui.windowPrefix"),
       ...(repoAbbreviations === undefined ? {} : { repoAbbreviations: repoAbbreviations as Record<string, string> }),
+      ...(composerSkills === undefined ? {} : { composerSkills }),
     },
     notifications: {
       native: booleanAt(value.notifications.native, "notifications.native"),

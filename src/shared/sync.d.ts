@@ -11,8 +11,6 @@ export function overlayResolved(
 
 export function displaySection(section: string, status: string, pendingScripts: number | undefined): string;
 
-export function stripImagePrefix(text: string): string;
-
 export function newestTurnAt(turns: { at?: string }[] | undefined): number;
 
 export function landedSends(

@@ -107,7 +107,7 @@ export async function transcribe(audio: Blob, ctx: DictationContext, key: string
 const CLEANUP_SYSTEM = `You turn a developer's dictated message (speech-to-text output) into the message they would have typed to an AI coding agent. You make a small number of targeted edits; everything else stays exactly as transcribed.
 
 Edit ONLY these things:
-1. Mis-heard names and terms: fix them using the vocabulary, the known mis-hearings and the recent conversation ("myatron" → "Maestro", "TNC table" → "DNC table", "Claude Zero" → "claude0", "PR triage" → "pr-triage", "context table" → "contacts table" when the conversation is about contacts, "Claude-3" → "claude -p" when it is about the CLI). Spell a term exactly as listed. Known mis-hearings are ones the speaker corrected by hand before ("heard → meant"): write the meant term for the heard form or a similar-sounding one.
+1. Mis-heard names and terms: fix them using the vocabulary, the known mis-hearings and the recent conversation ("myatron" → "Maestro", "TNC table" → "DNC table", "Claude Zero" → "claude0", "PR triage" → "pr-triage", "context table" → "contacts table" when the conversation is about contacts, "Claude-3" → "claude -p" when it is about the CLI). Spell a term exactly as listed, without an apostrophe speech-to-text added to its plural ("the talk track's existing" → "the talk tracks existing"). Known mis-hearings are ones the speaker corrected by hand before ("heard → meant"): write the meant term for the heard form or a similar-sounding one.
 2. Spoken symbols and technical forms, written as typed: "Claude dash p" → "claude -p", "UI UX" → "UI/UX", "server dot ts" → "server.ts", "slash pr-triage" → "/pr-triage", "if and only if" → "iff".
 3. Fillers and false starts: delete um, uh, you know, "like" used as filler, and an opening "so"/"okay so". When the speaker restarts or repeats a phrase to correct it, keep only the final version ("for the button, for the microphone button" → "for the microphone button").
 4. Spoken enumerations ("number one is…, two is…, and three is…", "first…, second…"): write a numbered list, one item per line, without the spoken markers.
@@ -189,6 +189,8 @@ export interface Correction { heard: string; meant: string; count: number; at: n
 const tokens = (s: string) => s.split(/\s+/).filter(Boolean);
 const bare = (s: string) => s.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
 const folded = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+// "works"/"worked", "passes"/"passed": the same word in another tense or number.
+const stem = (s: string) => folded(s).replace(/(ing|ed|es|s|d)$/, "");
 
 /** Dice overlap of character bigrams — how alike two strings look/sound, 0..1. */
 function similarity(a: string, b: string): number {
@@ -221,7 +223,8 @@ export function corrections(inserted: string, sent: string): { heard: string; me
   const flush = () => {
     const heard = bare(del.join(" ")), meant = bare(ins.join(" "));
     const h = folded(heard), m = folded(meant);
-    if (del.length && ins.length && del.length <= 3 && ins.length <= 3 && h !== m && m.length >= 3 && similarity(h, m) >= 0.25) out.push({ heard, meant });
+    const inflection = del.length === ins.length && del.every((w, k) => stem(w) === stem(ins[k]!));
+    if (del.length && ins.length && del.length <= 3 && ins.length <= 3 && h !== m && m.length >= 3 && !inflection && similarity(h, m) >= 0.25) out.push({ heard, meant });
     del = []; ins = [];
   };
   let i = 0, j = 0;

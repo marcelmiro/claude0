@@ -43,11 +43,58 @@ already at the top after tapping +, then **All** repos A–Z (`NewSession`).
 - The sidebar's `n` mode is a separate surface: it keeps `discoverRepos` order (repos with a
   live session, then A–Z) and has no Recent section.
 
+## Composer button
+
+One button left of the textarea (`ComposerButton`) replaces the old attach `＋` and mic.
+
+- **Tap** dictates (below). Without an OpenAI key on the host (`GET /dictation`) the face is
+  `＋` and a tap opens the menu with its rows tappable instead.
+- **Hold (260ms) or swipe up** opens the menu above the button. Slide onto a row and lift to
+  fire it; lifting anywhere else cancels, so a hold released in place does nothing. Off the
+  menu the rows fade (`muted`) to say a lift will cancel. Top to bottom: **Clear**,
+  **Attach**, **All skills**, then the pinned skills with the first pin nearest the thumb.
+- **Pins** are config `ui.composerSkills` (default `["/compact"]`, served by `GET /composer`).
+  A skill goes to the front of the draft and replaces any leading `/command`; the rest of the
+  draft becomes its arguments (`withSkill`, `shared/message-text.js`). It never sends. **All
+  skills** opens the repo-scoped slash menu, and a pick there goes to the front the same way.
+- **Clear** empties text, attachments and bash mode; the "Cleared" notice's Undo puts all
+  three back for 5s. With nothing to clear the row stays, dimmed and inert, so the menu keeps
+  its shape.
+- **Bash mode.** Any action leaves it and keeps the typed command as plain text: a skill,
+  dictation or attachment has no meaning in a shell command.
+- **Attachments.** Images are downscaled to JPEG and pasted as image paths, as before. Any
+  other file goes up as a multipart `file`, is saved as `uploads/<uuid>/<name>` (`saveUploadedFile`,
+  `safeUploadName`) and rides in the message as a `[File: <path>]` ref (`withFileRefs`).
+  History renders the refs as 📎 marks. A bare path would do for Claude, but a message that
+  starts with one is read by Claude Code as a slash command. Files go up at full size, so a
+  send with files gets a 5-minute timeout instead of 30s: the bridge types the message once
+  the upload lands, and a client that gave up first would restore the draft for a duplicate
+  resend. A file over 30MB is refused when attached (`MAX_FILE_BYTES`), under the bridge's
+  32MB `maxRequestBodySize`, which otherwise answers a bare 413.
+- **Swipe-back** ignores touches that start on the button: it sits in the left edge zone,
+  and its menu drag runs up and to the right.
+
+iOS facts this is built on, each measured on an iPhone (Safari 27) and an iPad:
+
+- **Only a tap opens a file picker.** WebKit's file input needs a fresh user activation
+  (`FileInputType::handleDOMActivateEvent`), and on iOS a swipe, a still hold or a hold-and-drag
+  grants none — tested with every earlier touch more than 5s (the activation window) back.
+  So lifting on Attach doesn't open the picker; it shows a large **Attach** button where the
+  finger lifted, and that one tap opens it.
+- **The picker always starts with iOS's menu** (Photo Library / Take Photo / Choose File) for
+  any `accept` that allows images, and no attribute or API reaches the Photos picker directly
+  (WebKit `WKFileUploadPanel`). With no `accept`, Choose File allows any type.
+- **Haptics come only from a real switch moved by the finger.** Safari has no Vibration API,
+  and a scripted click on an `<input type="checkbox" switch>` never ticks (the toggle path
+  handles trusted clicks only). An invisible switch, rotated so a swipe up slides its thumb,
+  sits over the button (`.cbswitch`): the swipe that opens the menu ticks. A hold-to-open and
+  moving between rows can't tick.
+
 ## Dictation
 
 Why it records in the app instead of using the iOS keyboard or Web Speech:
-[ADR 37](adr/0037-dictation-records-in-the-app-and-transcribes-on-the-host.md). The composer
-shows a mic only when the host has `~/.config/claude0/openai-key` (`GET /dictation`).
+[ADR 37](adr/0037-dictation-records-in-the-app-and-transcribes-on-the-host.md). A tap on the
+composer button dictates when the host has `~/.config/claude0/openai-key` (`GET /dictation`).
 
 Order of one dictation:
 
@@ -67,6 +114,10 @@ Order of one dictation:
    flowing" gate: in the iOS PWA it read pure silence for 8s while MediaRecorder captured
    every word. In the test, counting aloud, 1–18 were all transcribed, and the gate only
    opened on its timeout at "fifteen".
+   While red, the face counts seconds and a halo behind it grows with the voice level
+   (`startMeter`). The meter is display only, for the same reason. Its AudioContext is
+   resumed inside the tap, since iOS runs one only from a gesture, and each take logs its
+   peak (`dictation-trace: meter`): 0 means the meter heard nothing.
 3. **Transcribe.** `POST /sessions/:id/dictate` (multipart `audio`) sends the recording to
    OpenAI `gpt-transcribe` with a vocabulary hint, and returns the raw text in about 1s. A
    network failure or a 5xx is retried with the same recording, up to 3 attempts, so a blip
@@ -74,16 +125,21 @@ Order of one dictation:
    recorder is timesliced (`start(1000)`), and the container is sniffed from the bytes
    (`audioExt`). An un-sliced Safari WebM recording once arrived as just its 5-byte tail,
    with an empty MIME type.
-4. **Insert.** The raw text goes in at the caret, spaced from its neighbours
-   (`insertDictation`). A take belongs to the session it was started in. If you switched
+4. **Insert.** The raw text is appended to the end of the box, never at the caret: a caret
+   left mid-message put dictations in the middle of the draft (`insertDictation`). A take belongs to the session it was started in. If you switched
    sessions, left the thread or backgrounded the app meanwhile, the take is finished and
-   appended to that session's saved draft instead. The mic stays visible mid-take, even
-   in bash mode, so a take can always be stopped.
+   appended to that session's saved draft instead. Starting a take leaves bash mode, and a
+   take can always be stopped, even with the composer disabled.
 5. **Clean.** `POST /dictation/:id/clean` runs `claude -p` (haiku) with the session's terms,
    its recent prose, the personal vocabulary and the learned mis-hearings (`cleanDictation`
-   in `core/dictation.ts`). It takes about 3.5–4.5s, and the time is mostly the model, not
-   CLI start-up: pre-starting the process while you talk saved only ~0.3s median, so it
-   isn't done.
+   in `core/dictation.ts`). It took a median 3.9s and up to 10.7s over 51 takes. The time is
+   mostly the model, not CLI start-up: pre-starting the process while you talk saved only
+   ~0.3s median, so it isn't done. Haiku thinks adaptively on long takes (up to ~2K thinking
+   tokens), and neither `--effort low`, `MAX_THINKING_TOKENS` nor
+   `CLAUDE_CODE_DISABLE_THINKING` turns that off. What `claudePrint` does cut is the tool,
+   MCP and skill definitions (`--tools ""`, `--strict-mcp-config`, `--disable-slash-commands`),
+   about 22K of ~32K input tokens. On 5 long takes
+   that halved the mean, ~8.0s to ~4.7s, with the same fixes.
 
    Haiku, not Sonnet, though Sonnet is ~1.5s faster. On a 48-clip benchmark Sonnet turned
    correct words into vocabulary terms 4–7 times per run ("CSM", "local Claude", "Camp One"
@@ -98,8 +154,12 @@ Order of one dictation:
    prompt polished fluent sentences and doubled word error against typed prompts.
 
    The client swaps the cleaned text in only if the raw text is still in the box exactly as
-   inserted, so an edit you make meanwhile wins. The swapped words are flashed
-   ("Fixed: myatron → Maestro").
+   inserted, so an edit you make meanwhile wins. While cleanup runs, the arc on the
+   button's rim spins peach. Each outcome then flashes: the swapped words ("Fixed: myatron
+   → Maestro"), punctuation and layout only, "nothing to fix", kept as dictated (guard or
+   failure) or not applied (edited). A cleanup that returns after the message was sent, or
+   after you left the session, is dropped without a flash. Before this, 8 of 17 changed
+   cleanups landed after the message was sent.
 6. **Guard.** Cleanup once deleted a whole sentence. So every raw sentence with 3+ real
    words must keep 40%+ of them, and so must the message overall; otherwise the raw text
    is kept (`guardCleanup`). It checks per sentence, not by word count or longest run:
@@ -116,7 +176,8 @@ Order of one dictation:
    need this: history mining keeps only words used 15+ times, and "betterstack" had 6.
 
    A learned pair is a rule applied to every later dictation, so a swap is kept only when:
-   - it isn't an addition, a case-only edit or a rewrite over three words;
+   - it isn't an addition, a case-only edit, a tense or plural change, or a rewrite over
+     three words. The `claude -p` check below passed "works" → "worked";
    - it looks like its replacement (character-bigram overlap); and
    - a one-word background `claude -p` check confirms it's a mangled name or term.
 
