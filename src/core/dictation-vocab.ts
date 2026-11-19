@@ -115,7 +115,8 @@ async function judge(candidates: { key: string; form: string; n: number }[]): Pr
 /**
  * Lines of a JSONL file shorter than `maxBytes`; longer ones are skipped without being
  * decoded. A prompt's record is a few KB, while tool results and images run to MBs — turning
- * those into strings (as `jsonlLines` must) took mining past 1.5 GB RSS over a 13 GB history.
+ * those into strings (as `jsonlLines` must) takes mining to ~500MB RSS over a 4.4GB history,
+ * against ~120MB skipping them.
  */
 export async function* shortJsonlLines(path: string, maxBytes = 64 * 1024): AsyncGenerator<string> {
   const reader = Bun.file(path).stream().getReader();

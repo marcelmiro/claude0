@@ -133,9 +133,9 @@ missed "DNC", "Maestro" and "EmailBison" whenever you dictated about another top
 - **Where it runs.** `claude0 dictation-vocab` mines them. The bridge launches it in the
   background when `dictation-vocab.json` is missing or more than a day old
   (`refreshVocabIfStale`).
-- **Memory.** The history is ~13GB, so mining reads it with `shortJsonlLines`, which skips
-  lines over 64KB without decoding them. Decoding every line, as `jsonlLines` does, peaked
-  at 1.6GB RSS; skipping them takes ~150MB.
+- **Memory.** Mining reads every top-level transcript (~4.4GB), so it uses `shortJsonlLines`,
+  which skips lines over 64KB without decoding them. Decoding every line, as `jsonlLines`
+  does, peaks at ~500MB RSS; skipping them takes ~120MB.
 - **Kept by shape.** Acronyms used mostly in caps, and identifier-shaped words. The
   identifier spelling is canonical ("CustomerOS", not the "customeros" you type).
 - **Judged by Claude.** The remaining frequent words go to batched `claude -p` calls that

@@ -43,7 +43,9 @@ test("the guard refuses a foreign Host and cross-origin browser requests; the sh
   expect(await status("/sessions", { "sec-fetch-site": "cross-site" })).toBe(403);
   expect(await status("/sessions", { "sec-fetch-site": "same-site" })).toBe(403);
   expect(await status("/shell", { origin: "http://127.0.0.1:8921" }, "POST")).toBe(403);
-  expect(await status("/sessions", { "sec-fetch-site": "same-origin" })).toBe(200);
+  // A guarded route that does no work: `/sessions` would run real session discovery
+  // (tmux, process scans) cold in this fresh server, which can outlast the test timeout.
+  expect(await status("/push/vapid-key", { "sec-fetch-site": "same-origin" })).toBe(200);
   expect(await status("/", { host: "evil.example:8473", "sec-fetch-site": "cross-site" })).toBe(200);
 });
 
