@@ -149,9 +149,11 @@ Order of one dictation:
 
    The prompt turns the dictation into the message as you'd have typed it. It removes
    fillers and false starts, turns spoken lists into numbered lists, and writes spoken
-   symbols as typed (`claude -p`, UI/UX, "iff"). It fixes mis-heard terms and leaves every
-   other word as said. That target came from your hand edits of real dictations. A looser
-   prompt polished fluent sentences and doubled word error against typed prompts.
+   symbols as typed (`claude -p`, UI/UX, "iff"), and writes a number that points at something
+   (a list item, PR, code) in digits ("do 1 and 2"); counts in prose stay words. It fixes
+   mis-heard terms and leaves every other word as said. That target came from your hand
+   edits of real dictations. A looser prompt polished fluent sentences and doubled word
+   error against typed prompts.
 
    The client swaps the cleaned text in only if the raw text is still in the box exactly as
    inserted, so an edit you make meanwhile wins. While cleanup runs, the arc on the

@@ -57,6 +57,10 @@ describe("guardCleanup", () => {
   test("an empty cleanup is guarded", () => {
     expect(guardCleanup("run the tests", "  ")).toEqual({ final: "run the tests", guarded: true });
   });
+  test("spoken digits written as a number are not lost words", () => {
+    expect(guardCleanup("Two one oh four.", "2104").guarded).toBe(false);
+    expect(guardCleanup("Merge PR six seven eight nine now.", "Merge PR 6789 now.").guarded).toBe(false);
+  });
 });
 
 describe("buildContext", () => {
