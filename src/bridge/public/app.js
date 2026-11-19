@@ -3250,6 +3250,52 @@ async function ensureMic() {
     dtrace("mic-switch-failed", { error: String(err && err.message) }); // keep the working stream
   }
 }
+// The take's voice level (0–1), drawn as the composer button's ring. Display only, never a
+// gate (the analyser above read silence while the recorder heard every word).
+const micLevel = signal(0);
+const meter = { ctx: null };
+// iOS runs an AudioContext only once it's resumed inside a user gesture, so the tap does this
+// before it awaits the mic.
+function unlockMeter() {
+  try {
+    meter.ctx ||= new AudioContext();
+    meter.ctx.resume().catch(() => {});
+  } catch {}
+}
+/** Starts driving `micLevel` from `stream`; the returned stop() gives the take's peak level. */
+function startMeter(stream) {
+  try {
+    const src = meter.ctx.createMediaStreamSource(stream);
+    const an = meter.ctx.createAnalyser();
+    an.fftSize = 1024;
+    src.connect(an);
+    const buf = new Float32Array(an.fftSize);
+    let raf = 0;
+    let level = 0;
+    let peak = 0;
+    const tick = () => {
+      an.getFloatTimeDomainData(buf);
+      let sum = 0;
+      for (const v of buf) sum += v * v;
+      const db = 10 * Math.log10(sum / buf.length + 1e-12);
+      const target = Math.min(1, Math.max(0, (db + 60) / 45)); // -60 dBFS reads silent, -15 full
+      level += (target - level) * (target > level ? 0.5 : 0.12); // quick rise, slow fall
+      peak = Math.max(peak, target);
+      micLevel.value = level;
+      raf = requestAnimationFrame(tick);
+    };
+    tick();
+    return () => {
+      cancelAnimationFrame(raf);
+      src.disconnect();
+      micLevel.value = 0;
+      return peak;
+    };
+  } catch (err) {
+    dtrace("meter-error", { error: String(err && err.message) });
+    return () => null;
+  }
+}
 function startRecorder() {
   const mimeType = ["audio/mp4", "audio/webm;codecs=opus"].find((m) => MediaRecorder.isTypeSupported(m)) || "";
   const rec = new MediaRecorder(mic.stream, mimeType ? { mimeType } : undefined);
@@ -3374,7 +3420,7 @@ function Composer({ disabled, status }) {
   // phase "idle" → "arming" (acquiring the mic) → "recording" → "busy" (transcribing).
   const [dictFace, setDictFace] = useState("idle");
   const [cleaning, setCleaning] = useState(0); // cleanups in flight — the mic shows a peach ring
-  const dict = useRef({ phase: "idle", sid: null, recorder: null, liveAt: 0, timer: null });
+  const dict = useRef({ phase: "idle", sid: null, recorder: null, liveAt: 0, timer: null, stopMeter: null });
   const dictations = useRef([]); // { raw, final } inserted into this draft — logged on send
   function grow() {
     const el = ref.current;
@@ -3679,6 +3725,7 @@ function Composer({ disabled, status }) {
     dtrace("tap", { phase: d.phase });
     if (d.phase === "recording") return finishDictation();
     if (d.phase !== "idle") return; // still acquiring the mic, or transcribing
+    unlockMeter();
     d.phase = "arming";
     d.sid = selectedId.value; // the take belongs to the session it was started in
     const warm = setTimeout(() => setDictFace("warm"), 150); // only if acquiring the mic takes a moment
@@ -3703,14 +3750,18 @@ function Composer({ disabled, status }) {
     dtrace("mic", { track: track && track.readyState, muted: track && track.muted });
     d.recorder = startRecorder();
     dtrace("rec-start", { mime: d.recorder.mimeType });
+    d.stopMeter = startMeter(mic.stream);
     d.phase = "recording";
     d.liveAt = performance.now();
     setDictFace("rec");
     d.timer = setInterval(rerender, 250); // the face shows elapsed seconds
   }
   function stopDictationTimer() {
-    clearInterval(dict.current.timer);
-    dict.current.timer = null;
+    const d = dict.current;
+    clearInterval(d.timer);
+    d.timer = null;
+    if (d.stopMeter) dtrace("meter", { peak: d.stopMeter(), ctx: meter.ctx && meter.ctx.state });
+    d.stopMeter = null;
   }
   async function finishDictation() {
     const d = dict.current;
@@ -4187,6 +4238,9 @@ function ComposerButton({ face, cleaning, recLabel, canDictate, disabled, canCle
   const [muted, setMuted] = useState(false); // finger off the menu: lifting cancels
   const [armed, setArmed] = useState(null); // {x, y} — lifted on Attach, waiting for the picker's tap
   const wrapRef = useRef(null);
+  // The voice-level ring reads --lvl, set straight on the element: a re-render per frame
+  // would redraw the whole composer.
+  useEffect(() => micLevel.subscribe((v) => wrapRef.current && wrapRef.current.style.setProperty("--lvl", v.toFixed(3))), []);
   const menuRef = useRef(null);
   const fileRef = useRef(null);
   const switchRef = useRef(null);

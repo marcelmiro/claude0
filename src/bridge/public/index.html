@@ -878,6 +878,13 @@
       /* acquiring the mic: a grey spinner, so it never reads as a second (peach) Send */
       .cbtn.warm .spin { border-color: var(--muted); border-right-color: transparent; }
       .cbtn.rec { background: var(--red); border-color: var(--red); color: var(--bg); }
+      /* the voice-level ring: --lvl (0–1) is the take's live level, so silence shows none */
+      .cbwrap { isolation: isolate; }
+      .cbtn.rec::before {
+        content: ""; position: absolute; inset: 0; z-index: -1; border-radius: 50%; pointer-events: none;
+        background: rgba(255, 128, 128, 0.35);
+        transform: scale(calc(1 + var(--lvl, 0) * 0.4)); /* at most 8px out: the composer gap */
+      }
       .cbtn.busy { border-color: var(--peach); }
       .cbtn.cleaning { border-color: var(--peach); color: var(--peach); }
       .cbtn .spin {

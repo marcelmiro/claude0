@@ -110,6 +110,10 @@ Order of one dictation:
    flowing" gate: in the iOS PWA it read pure silence for 8s while MediaRecorder captured
    every word. In the test, counting aloud, 1–18 were all transcribed, and the gate only
    opened on its timeout at "fifteen".
+   While red, the face counts seconds and a halo behind it grows with the voice level
+   (`startMeter`). The meter is display only, for the same reason. Its AudioContext is
+   resumed inside the tap, since iOS runs one only from a gesture, and each take logs its
+   peak (`dictation-trace: meter`): 0 means the meter heard nothing.
 3. **Transcribe.** `POST /sessions/:id/dictate` (multipart `audio`) sends the recording to
    OpenAI `gpt-transcribe` with a vocabulary hint, and returns the raw text in about 1s. A
    network failure or a 5xx is retried with the same recording, up to 3 attempts, so a blip
