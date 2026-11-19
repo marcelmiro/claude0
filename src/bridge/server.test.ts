@@ -152,14 +152,22 @@ async function readStreamUntil(
   return null;
 }
 
-test("/stream pushes a seq-stamped sessions snapshot on connect", async () => {
-  const ev = await readStreamUntil("/stream?device=stream-test-dev", (e) => e.type === "sessions");
-  expect(ev).not.toBeNull();
-  expect(typeof ev!.seq).toBe("number");
-  expect(typeof ev!.computedAt).toBe("number");
-  const payload = ev!.payload as { sessions: unknown[] };
-  expect(Array.isArray(payload.sessions)).toBe(true);
-});
+// This fresh server has no sessions cache yet, so the snapshot waits on a cold recompute:
+// real discovery over the host's live sessions (pane captures, transcript scans), which
+// took 5.5–7s on a loaded VM — past bun's 5s default.
+const COLD_SESSIONS_MS = 30_000;
+test(
+  "/stream pushes a seq-stamped sessions snapshot on connect",
+  async () => {
+    const ev = await readStreamUntil("/stream?device=stream-test-dev", (e) => e.type === "sessions", COLD_SESSIONS_MS);
+    expect(ev).not.toBeNull();
+    expect(typeof ev!.seq).toBe("number");
+    expect(typeof ev!.computedAt).toBe("number");
+    const payload = ev!.payload as { sessions: unknown[] };
+    expect(Array.isArray(payload.sessions)).toBe(true);
+  },
+  COLD_SESSIONS_MS,
+);
 
 test("/stream/open subscribes the device and pushes a transcript snapshot", async () => {
   const sub = await fetch(`${base}/stream/open`, {
