@@ -7,6 +7,7 @@
 import { lexer, type Token } from "../bridge/public/vendor/marked.mjs";
 import type { TranscriptBlock, TranscriptTurn } from "../types";
 import { C } from "../sidebar/ansi";
+import { stripAttachmentPrefix } from "../shared/message-text.js";
 
 export interface Span {
   t: string;
@@ -408,7 +409,8 @@ function turnItems(t: TranscriptTurn, o: RenderOpts): { lines: Line[]; prompt?: 
     const texts = t.content.flatMap((b) => (b.type === "text" ? [b.text] : b.type === "image" ? ["[image]"] : []));
     const text = texts.join("\n\n").trim();
     if (!text) return [];
-    if (MARKER.test(text)) return [{ lines: [{ spans: clip([{ t: `⊘ ${text.slice(1, -1)}`, fg: C.dim }], o.width) }] }];
+    // A files-only send ("[File: …]") is bracketed too, but it's the user's message.
+    if (MARKER.test(text) && stripAttachmentPrefix(text) === text) return [{ lines: [{ spans: clip([{ t: `⊘ ${text.slice(1, -1)}`, fg: C.dim }], o.width) }] }];
     return [{ lines: promptLines(text, o), prompt: true }];
   }
   const items: { lines: Line[] }[] = [];

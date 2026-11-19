@@ -53,6 +53,8 @@ const DEVICE_ID = (() => {
 const API_TIMEOUT_MS = 12_000;
 const SLOW_API_TIMEOUT_MS = 30_000;
 const slowTimeout = () => AbortSignal.timeout(SLOW_API_TIMEOUT_MS);
+const FILE_SEND_TIMEOUT_MS = 5 * 60_000;
+const MAX_FILE_BYTES = 30 * 1024 * 1024; // under the bridge's 32MB request cap, with room for the rest
 const rawFetch = window.fetch.bind(window);
 window.fetch = (input, init = {}) => {
   const headers = new Headers(init.headers || {});
@@ -156,7 +158,11 @@ const editedPath = (input) => input.file_path || input.notebook_path || "";
 // A whole-line bracketed user turn (e.g. "[Request interrupted by user for tool use]") is a
 // system notice Claude appends on interrupt — not a typed message. It's shown as a dim event
 // line, and Claude's /rewind picker never lists it as a checkpoint. Mirrors preview-pane.ts.
-const isSystemMarkerText = (t) => /^\[.*\]$/.test((t || "").trim());
+// A files-only send ("[File: …]") is bracketed too, but it's the user's message.
+const isSystemMarkerText = (t) => {
+  const s = (t || "").trim();
+  return /^\[.*\]$/.test(s) && stripAttachmentPrefix(s) === s;
+};
 const turnMarkerText = (turn) => {
   const c = turn.content || [];
   return c.length === 1 && c[0].type === "text" && isSystemMarkerText(c[0].text) ? c[0].text : null;
@@ -977,9 +983,9 @@ async function actionJson(path, body) {
 
 // Multipart sibling of action() for image uploads — identical result handling, but lets
 // the browser set the multipart boundary (no JSON content-type header).
-async function actionForm(path, formData) {
+async function actionForm(path, formData, signal = slowTimeout()) {
   try {
-    const r = await fetch(path, { method: "POST", body: formData, signal: slowTimeout() });
+    const r = await fetch(path, { method: "POST", body: formData, signal });
     let data = {};
     try {
       data = await r.json();
@@ -3666,6 +3672,10 @@ function Composer({ disabled, status }) {
         added.push({ kind: "image", blob, url: URL.createObjectURL(blob), name: f.name });
         continue;
       }
+      if (f.size > MAX_FILE_BYTES) {
+        flashError(`✗ ${f.name || "file"} is over 30MB`);
+        continue;
+      }
       added.push({ kind: "file", blob: f, url: URL.createObjectURL(f), name: f.name || "file" });
     }
     if (added.length) attachments.value = [...attachments.value, ...added];
@@ -3947,7 +3957,9 @@ function Composer({ disabled, status }) {
     const entry = { text, urls: images.map((it) => it.url), files: files.map((it) => it.name), after };
     pendingImageSends.value = [...pendingImageSends.value, entry];
     attachments.value = [];
-    const ok = await actionForm(`/sessions/${encodeURIComponent(sid)}/message`, fd);
+    // Files go up at full size: a slow upload must not time out after the bridge has typed
+    // the message, or the restored draft invites a second, duplicate send.
+    const ok = await actionForm(`/sessions/${encodeURIComponent(sid)}/message`, fd, files.length ? AbortSignal.timeout(FILE_SEND_TIMEOUT_MS) : undefined);
     if (ok) logDictations(sid, text, dictated);
     if (!ok) {
       clearStatusOverlay(sid); // never reached the pane — no turn is starting

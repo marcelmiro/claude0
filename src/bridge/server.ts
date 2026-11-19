@@ -1558,8 +1558,8 @@ async function route(req: Request): Promise<Response> {
   if (method === "GET" && path === "/dictation") return json({ available: !!openaiKey() });
   // The composer button's pinned skills (config ui.composerSkills).
   if (method === "GET" && path === "/composer") {
-    const cfg = await loadConfig().catch(() => null);
-    return json({ skills: cfg?.ui.composerSkills ?? DEFAULT_CONFIG.ui.composerSkills });
+    const cfg = await loadConfig(); // a broken config is a logged 500, never the default pins
+    return json({ skills: cfg.ui.composerSkills ?? DEFAULT_CONFIG.ui.composerSkills });
   }
   // TEMPORARY: on-device step tracing while the iOS recording flow is being debugged.
   if (method === "POST" && path === "/dictation/trace") {
