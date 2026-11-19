@@ -66,7 +66,11 @@ One button left of the textarea (`ComposerButton`) replaces the old attach `＋`
   other file goes up as a multipart `file`, is saved as `uploads/<uuid>/<name>` (`saveUploadedFile`,
   `safeUploadName`) and rides in the message as a `[File: <path>]` ref (`withFileRefs`).
   History renders the refs as 📎 marks. A bare path would do for Claude, but a message that
-  starts with one is read by Claude Code as a slash command.
+  starts with one is read by Claude Code as a slash command. Files go up at full size, so a
+  send with files gets a 5-minute timeout instead of 30s: the bridge types the message once
+  the upload lands, and a client that gave up first would restore the draft for a duplicate
+  resend. A file over 30MB is refused when attached (`MAX_FILE_BYTES`), under the bridge's
+  32MB `maxRequestBodySize`, which otherwise answers a bare 413.
 - **Swipe-back** ignores touches that start on the button: it sits in the left edge zone,
   and its menu drag runs up and to the right.
 
@@ -133,7 +137,8 @@ Order of one dictation:
    ~0.3s median, so it isn't done. Haiku thinks adaptively on long takes (up to ~2K thinking
    tokens), and neither `--effort low`, `MAX_THINKING_TOKENS` nor
    `CLAUDE_CODE_DISABLE_THINKING` turns that off. What `claudePrint` does cut is the tool,
-   MCP and skill definitions (`--tools ""`), about 22K of ~32K input tokens. On 5 long takes
+   MCP and skill definitions (`--tools ""`, `--strict-mcp-config`, `--disable-slash-commands`),
+   about 22K of ~32K input tokens. On 5 long takes
    that halved the mean, ~8.0s to ~4.7s, with the same fixes.
 
    Haiku, not Sonnet, though Sonnet is ~1.5s faster. On a 48-clip benchmark Sonnet turned
@@ -150,9 +155,11 @@ Order of one dictation:
 
    The client swaps the cleaned text in only if the raw text is still in the box exactly as
    inserted, so an edit you make meanwhile wins. While cleanup runs, the arc on the
-   button's rim spins peach. Every outcome then flashes: the swapped words ("Fixed: myatron
-   → Maestro"), "nothing to fix", kept as dictated (guard or failure) or not applied
-   (edited). Before this, 8 of 17 changed cleanups landed after the message was sent.
+   button's rim spins peach. Each outcome then flashes: the swapped words ("Fixed: myatron
+   → Maestro"), punctuation and layout only, "nothing to fix", kept as dictated (guard or
+   failure) or not applied (edited). A cleanup that returns after the message was sent, or
+   after you left the session, is dropped without a flash. Before this, 8 of 17 changed
+   cleanups landed after the message was sent.
 6. **Guard.** Cleanup once deleted a whole sentence. So every raw sentence with 3+ real
    words must keep 40%+ of them, and so must the message overall; otherwise the raw text
    is kept (`guardCleanup`). It checks per sentence, not by word count or longest run:

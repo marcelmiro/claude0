@@ -2147,7 +2147,7 @@ export function startBridge(): ReturnType<typeof Bun.serve> {
   const server = Bun.serve({
     hostname: host,
     port,
-    maxRequestBodySize: 32 * 1024 * 1024, // backstop for image uploads (client downscales first)
+    maxRequestBodySize: 32 * 1024 * 1024, // uploads: images are downscaled first, files go up whole (the client refuses >30MB, MAX_FILE_BYTES)
     idleTimeout: 255, // long-lived SSE; heartbeat (15s) keeps it active well within
     async fetch(req) {
       try {

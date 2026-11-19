@@ -157,7 +157,7 @@ const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 const editedPath = (input) => input.file_path || input.notebook_path || "";
 // A whole-line bracketed user turn (e.g. "[Request interrupted by user for tool use]") is a
 // system notice Claude appends on interrupt — not a typed message. It's shown as a dim event
-// line, and Claude's /rewind picker never lists it as a checkpoint. Mirrors preview-pane.ts.
+// line, and Claude's /rewind picker never lists it as a checkpoint. Mirrors preview/render.ts (MARKER).
 // A files-only send ("[File: …]") is bracketed too, but it's the user's message.
 const isSystemMarkerText = (t) => {
   const s = (t || "").trim();
