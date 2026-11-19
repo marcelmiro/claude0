@@ -909,6 +909,9 @@
       .cbtn:disabled + .cbswitch { display: none; }
       .cblayer { position: fixed; inset: 0; z-index: 40; }
       .cbdim, .cbscrim { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.35); animation: cb-fade 0.18s; }
+      /* past the layer's edges: while the keyboard pans the page, the fixed layer can sit off
+         the visible area, and the dim (or the scrim catching outside taps) must still cover it */
+      .cbdim, .cbscrim { inset: -100vh 0; }
       .cbdim { pointer-events: none; }
       @keyframes cb-fade { from { opacity: 0; } }
       .cbmenu {

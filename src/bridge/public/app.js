@@ -4253,15 +4253,19 @@ function ComposerButton({ face, cleaning, recLabel, canDictate, disabled, canCle
   };
   // Inside the VISIBLE viewport: with the keyboard up iOS pans the page, and a menu anchored
   // above the button would run off the top. Rows tighten before the menu gives up its top.
+  // While it pans, iOS reports visualViewport.offsetTop equal to the page scroll, so the
+  // visible top in getBoundingClientRect's frame is pageTop - scrollY (as in index.html's
+  // viewport diagnostics), and the fixed layer's own frame needn't be that one either.
   useLayoutEffect(() => {
     const m = menuRef.current;
     if (!m) return;
     const { r } = center();
+    const layer = m.parentElement.getBoundingClientRect();
     const vv = window.visualViewport;
-    const visTop = (vv ? vv.offsetTop : 0) + 8;
+    const visTop = (vv ? vv.pageTop - window.scrollY : 0) + 8;
     m.classList.toggle("dense", m.offsetHeight > r.top - 10 - visTop);
-    m.style.left = Math.max(6, r.left - 2) + "px";
-    m.style.top = Math.max(visTop, r.top - 10 - m.offsetHeight) + "px";
+    m.style.left = Math.max(6, r.left - 2) - layer.left + "px";
+    m.style.top = Math.max(visTop, r.top - 10 - m.offsetHeight) - layer.top + "px";
   }, [menu]);
   const close = () => {
     setMenu(null);
@@ -4282,6 +4286,7 @@ function ComposerButton({ face, cleaning, recLabel, canDictate, disabled, canCle
     if (live || canDictate) return onDictate();
     setMenu("tap");
   }
+  // x, y: where the finger lifted, in the fixed layer's frame (where the armed button goes).
   function fire(act, x, y) {
     if (act === "clear") onClear();
     // iOS opens a file picker only from a tap's user activation, and a drag never grants one.
@@ -4322,7 +4327,9 @@ function ComposerButton({ face, cleaning, recLabel, canDictate, disabled, canCle
     const el = document.elementFromPoint(e.clientX, e.clientY);
     const row = el && el.closest && el.closest(".cbmenu [data-act]:not(.off)");
     close();
-    if (row) fire(row.dataset.act, e.clientX, e.clientY);
+    if (!row) return;
+    const layer = row.closest(".cblayer").getBoundingClientRect();
+    fire(row.dataset.act, e.clientX - layer.left, e.clientY - layer.top);
   }
   function onPointerCancel() {
     resetSwitch();
