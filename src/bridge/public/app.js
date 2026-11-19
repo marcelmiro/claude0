@@ -3244,9 +3244,14 @@ const MIC_AUDIO = { echoCancellation: true, noiseSuppression: true };
 const BUILT_IN_MIC = /iphone|ipad|built-in|internal/i;
 async function ensureMic() {
   let track = mic.stream && mic.stream.getAudioTracks()[0];
-  if (!track || track.readyState !== "live") {
+  // iOS can mute the kept stream (seen after the app sat in the background) and leave it
+  // muted: still "live", no orange mic dot, and it records silence until the app restarts.
+  // Only a fresh getUserMedia gets the mic back.
+  if (!track || track.readyState !== "live" || track.muted) {
+    if (mic.stream) mic.stream.getTracks().forEach((t) => t.stop());
     mic.stream = await navigator.mediaDevices.getUserMedia({ audio: MIC_AUDIO });
     track = mic.stream.getAudioTracks()[0];
+    if (track.muted) throw new Error("another app is using it");
   }
   const inputs = (await navigator.mediaDevices.enumerateDevices().catch(() => [])).filter((d) => d.kind === "audioinput");
   const builtIn = inputs.find((d) => BUILT_IN_MIC.test(d.label));
@@ -3652,8 +3657,12 @@ function Composer({ disabled, status }) {
     }
     if (d.phase !== "arming") return; // the thread was left while the mic was starting
     const track = mic.stream.getAudioTracks()[0];
-    // A call, Siri or the OS taking the mic ends the track: transcribe what was captured.
-    track.onended = () => dict.current.phase === "recording" && finishDictation();
+    // A call, Siri or the OS taking the mic ends or mutes the track: transcribe what was
+    // captured rather than show red over a mic that hears nothing.
+    track.onended = track.onmute = (e) => {
+      dtrace("track-lost", { event: e.type });
+      if (dict.current.phase === "recording") finishDictation();
+    };
     dtrace("mic", { track: track && track.readyState, muted: track && track.muted });
     d.recorder = startRecorder();
     dtrace("rec-start", { mime: d.recorder.mimeType });
@@ -3758,9 +3767,10 @@ function Composer({ disabled, status }) {
     dtrace("clean", { ok: res && res.ok, guarded: res && res.guarded, changed: !!res && res.text !== entry.raw });
     if (!res || !res.ok || !res.text || res.text === entry.raw) return;
     const el = ref.current;
-    if (selectedId.value !== forSid || !el) return;
+    if (selectedId.value !== forSid || !el) return dtrace("swap", { applied: false, why: "left" });
     const at = el.value.indexOf(entry.raw);
-    if (at < 0 || el.value.indexOf(entry.raw, at + 1) >= 0) return;
+    if (at < 0 || el.value.indexOf(entry.raw, at + 1) >= 0) return dtrace("swap", { applied: false, why: at < 0 ? "edited" : "twice" });
+    dtrace("swap", { applied: true });
     // Keep the caret where the user is: past the dictation it shifts by the length change,
     // inside it lands at the cleaned text's end, before it stays put.
     const rawEnd = at + entry.raw.length;

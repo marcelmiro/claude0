@@ -55,7 +55,10 @@ Order of one dictation:
    handler, so a hardware keyboard's Space/Enter and VoiceOver work too. Pointer-down is
    cancelled so the textarea keeps focus and the keyboard stays up. One mic stream lives for the page's lifetime
    (`ensureMic`): iOS asks permission once per app launch and re-prompts sooner for a
-   stopped stream. It uses the built-in mic whenever one is listed: dictating through a
+   stopped stream. iOS can mute that kept stream, which happened after the app sat in the
+   background, and leave it muted. The track still reads "live" but records silence (0-byte
+   takes) with no orange mic dot, so a muted track is replaced with a fresh one before
+   recording. A track that mutes or ends mid-take finishes the take. It uses the built-in mic whenever one is listed: dictating through a
    Bluetooth earbud came out badly garbled ("The urgency that is. Calculate." for "new
    incidents in better stack"), because earbud mics record narrowband call audio.
 2. **Speak on red.** The button shows a grey spinner only while the mic stream is being
