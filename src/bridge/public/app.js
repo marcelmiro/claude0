@@ -138,7 +138,7 @@ const tick = signal(Date.now());
 // last known state with a banner. Server-computed.
 const inboxStale = signal(false);
 const dictationAvailable = signal(false); // host has an OpenAI key → a tap on the composer button dictates
-const skillPins = signal(["/compact"]); // config ui.composerSkills — the composer menu's pinned skills
+const skillPins = signal([]); // config ui.composerSkills (GET /composer, which applies the default)
 // Recently-done stays collapsed by default (a day of archives is screen bloat, and the
 // section is an archive entry point, not a queue) — tap its header to expand. Not
 // persisted: every launch starts collapsed.
@@ -3624,7 +3624,7 @@ function Composer({ disabled, status }) {
     // /model and /effort are intercepted into a native selection sheet instead of being sent
     // as text — the sheet drives the arg-form change and reports Claude's confirmation.
     if (cmd.name === "model" || cmd.name === "effort") {
-      el.value = el.value.replace(/\/\S*$/, "");
+      if (!slash.current.front) el.value = el.value.replace(/\/\S*$/, ""); // All skills: no typed token to drop
       grow();
       syncHasText();
       slash.current.open = false;
@@ -3659,12 +3659,12 @@ function Composer({ disabled, status }) {
   async function addFiles(files) {
     const added = [];
     for (const f of files) {
-      if (f.type.startsWith("image/")) {
-        try {
-          const blob = await downscale(f);
-          added.push({ kind: "image", blob, url: URL.createObjectURL(blob), name: f.name });
-          continue;
-        } catch {}
+      // downscale hands back the original when the browser can't decode it (an SVG, say):
+      // that goes as a file, since the bridge takes only the image types it knows.
+      const blob = f.type.startsWith("image/") ? await downscale(f) : f;
+      if (blob !== f) {
+        added.push({ kind: "image", blob, url: URL.createObjectURL(blob), name: f.name });
+        continue;
       }
       added.push({ kind: "file", blob: f, url: URL.createObjectURL(f), name: f.name || "file" });
     }
