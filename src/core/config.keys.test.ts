@@ -6,6 +6,23 @@ function base(): Config {
   return structuredClone(DEFAULT_CONFIG);
 }
 
+describe("ui.composerSkills validation", () => {
+  test("defaults to /compact and passes a slash-command list through", () => {
+    expect(base().ui.composerSkills).toEqual(["/compact"]);
+    const cfg = base();
+    cfg.ui.composerSkills = ["/compact", "/pr-triage", "/mattpocock-skills:grill-me"];
+    expect(validateConfig(cfg).ui.composerSkills).toEqual(["/compact", "/pr-triage", "/mattpocock-skills:grill-me"]);
+  });
+
+  test("rejects anything that isn't a list of /commands", () => {
+    const cfg = base() as unknown as { ui: { composerSkills: unknown } };
+    for (const bad of ["/compact", ["compact"], ["/"], ["/two words"], [7]]) {
+      cfg.ui.composerSkills = bad;
+      expect(() => validateConfig(cfg)).toThrow("ui.composerSkills");
+    }
+  });
+});
+
 describe("ui.repoAbbreviations validation", () => {
   test("accepts a string map and passes it through", () => {
     const cfg = base();

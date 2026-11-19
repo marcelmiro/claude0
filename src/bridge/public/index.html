@@ -722,6 +722,7 @@
       .flash.archived { color: var(--muted); }
       /* restore-on-interrupt toast — attention, not failure */
       .flash.notice { color: var(--peach); }
+      .flashundo { margin-left: 10px; padding: 0; border: none; background: none; color: var(--fg); font: inherit; font-weight: 600; }
       .restore-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
       .restore-btn { padding: 6px 14px; border-radius: 8px; font-size: 13px; }
       .restore-btn:disabled { opacity: 0.6; }
@@ -835,22 +836,20 @@
       }
       /* Armed = first tap landed; filled red signals "tap again to stop" (double-tap confirm). */
       .composer .stop.armed { background: var(--red); color: var(--bg); }
-      .composer .attach {
+      /* The composer button (app.js ComposerButton): tap dictates, hold/swipe up opens the
+         menu. warm = acquiring the mic; rec = recording; busy = transcribing; cleaning =
+         cleanup in flight (usable again, the text may still change). */
+      .cbwrap {
         flex: none;
+        position: relative;
         width: 40px;
         height: 40px;
-        padding: 0;
-        border: 1px solid var(--dim);
-        border-radius: 50%;
-        background: var(--surface);
-        color: var(--muted);
-        font-size: 22px;
-        line-height: 1;
+        touch-action: none;
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
       }
-      /* Dictation mic: tap starts, tap stops. warm = acquiring the mic; rec = recording, speak;
-         busy = transcribing. */
-      .composer .mic {
-        flex: none;
+      .cbtn {
         width: 40px;
         height: 40px;
         padding: 0;
@@ -861,17 +860,27 @@
         font-size: 12px;
         font-variant-numeric: tabular-nums;
         line-height: 1;
-        touch-action: manipulation;
-        user-select: none;
-        -webkit-user-select: none;
+        display: grid;
+        place-items: center;
+        touch-action: none;
         -webkit-touch-callout: none;
       }
-      .composer .mic svg { width: 18px; height: 18px; vertical-align: middle; }
+      .cbtn:disabled { opacity: 0.5; }
+      .cbtn svg { width: 18px; height: 18px; }
+      /* a short arc on the rim: the quiet hint that a hold does more than a tap */
+      .cbtn::after {
+        content: ""; position: absolute; inset: -4px; border-radius: 50%; pointer-events: none;
+        border: 2px solid transparent; border-top-color: var(--dim); border-right-color: var(--dim);
+        transform: rotate(-10deg);
+      }
+      .cbtn.open { border-color: var(--peach); color: var(--peach); background: var(--hover); }
+      .cbtn.open::after, .cbtn.rec::after, .cbtn:disabled::after { opacity: 0; }
       /* acquiring the mic: a grey spinner, so it never reads as a second (peach) Send */
-      .composer .mic.warm .spin { border-color: var(--muted); border-right-color: transparent; }
-      .composer .mic.rec { background: var(--red); border-color: var(--red); color: var(--bg); }
-      .composer .mic.busy { border-color: var(--peach); }
-      .composer .mic .spin {
+      .cbtn.warm .spin { border-color: var(--muted); border-right-color: transparent; }
+      .cbtn.rec { background: var(--red); border-color: var(--red); color: var(--bg); }
+      .cbtn.busy { border-color: var(--peach); }
+      .cbtn.cleaning { border-color: var(--peach); color: var(--peach); }
+      .cbtn .spin {
         display: inline-block;
         width: 16px;
         height: 16px;
@@ -882,8 +891,65 @@
         animation: mic-spin 0.8s linear infinite;
       }
       @keyframes mic-spin { to { transform: rotate(360deg); } }
-      /* cleanup in flight: the mic is usable again, the ring says the text may still change */
-      .composer .mic.cleaning { border-color: var(--peach); color: var(--peach); }
+      /* Haptics: iOS ticks only a REAL switch moved by the finger. An invisible switch,
+         rotated so a swipe up slides its thumb, sits over the button and ticks as the
+         menu opens. It must stay hit-testable, so opacity, never display:none. */
+      .cbswitch {
+        position: absolute; left: 50%; top: 50%; margin: 0; opacity: 0;
+        transform: translate(-50%, -50%) rotate(-90deg) scale(1.4);
+        touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+      }
+      .cbtn:disabled + .cbswitch { display: none; }
+      .cblayer { position: fixed; inset: 0; z-index: 40; }
+      .cbdim, .cbscrim { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.35); animation: cb-fade 0.18s; }
+      .cbdim { pointer-events: none; }
+      @keyframes cb-fade { from { opacity: 0; } }
+      .cbmenu {
+        position: absolute;
+        width: 200px;
+        padding: 5px;
+        background: var(--sheet-bg);
+        border: 1px solid #2c2c2c;
+        border-radius: 16px;
+        box-shadow: 0 14px 40px rgba(0, 0, 0, 0.6);
+        transform-origin: 18px calc(100% + 30px);
+        animation: cb-grow 0.26s cubic-bezier(0.32, 0.72, 0, 1);
+        user-select: none;
+        -webkit-user-select: none;
+      }
+      @keyframes cb-grow { from { transform: scale(0.4); opacity: 0; } }
+      .cbmenu > * { transition: opacity 0.15s; }
+      /* finger off the menu: lifting now cancels — rows fade, the menu keeps its size */
+      .cbmenu.muted > * { opacity: 0.55; }
+      .cbrow {
+        width: 100%; display: flex; align-items: center; gap: 12px; min-height: 46px;
+        padding: 6px 12px; border: none; background: none; border-radius: 11px;
+        color: var(--fg); font-size: 15px; text-align: left;
+      }
+      .cbrow .ic {
+        flex: none; width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center;
+        background: #2a2a2a; color: var(--fg);
+      }
+      .cbrow .ic svg { width: 17px; height: 17px; }
+      .cbrow.on { background: var(--peach-tint); }
+      .cbrow.on .ic { background: var(--peach); color: var(--bg); }
+      .cbrow.skill .nm { color: var(--peach); font-family: var(--mono); font-size: 14px; }
+      .cbrow.danger .nm, .cbrow.danger .ic { color: var(--red); }
+      .cbrow.danger.on { background: var(--red-tint); }
+      .cbrow.danger.on .ic { background: var(--red); color: var(--bg); }
+      .cbrow.off { opacity: 0.35; }
+      .cbmenu.dense .cbrow { min-height: 40px; padding: 4px 12px; }
+      .cbmenu.dense .cbrow .ic { width: 26px; height: 26px; }
+      .cbsep { height: 1px; background: var(--sheet-line); margin: 4px 8px; }
+      /* lifted on Attach: the one tap iOS needs before it shows a file picker */
+      .cbarmed {
+        position: absolute; transform: translate(-50%, -50%);
+        display: flex; align-items: center; gap: 10px; padding: 14px 22px;
+        border: none; border-radius: 999px; background: var(--peach); color: var(--bg);
+        font-size: 16px; font-weight: 600; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        animation: cb-fade 0.18s;
+      }
+      .cbarmed svg { width: 19px; height: 19px; }
       /* staged-attachment thumbnails above the textarea */
       .thumbs { display: flex; flex-wrap: wrap; gap: 8px; padding: 2px 4px 8px; }
       .macdraft { display: flex; gap: 10px; align-items: center; margin: 0 4px 8px; padding: 6px 10px; border-left: 2px solid var(--dim); font-size: 13px; line-height: 1.35; }
@@ -893,6 +959,16 @@
       .macdraft-note { color: var(--dim-text); font-size: 12px; }
       .thumb { position: relative; width: 56px; height: 56px; }
       .thumb img { width: 100%; height: 100%; object-fit: cover; border-radius: 10px; border: 1px solid var(--dim); }
+      .thumb.filechip {
+        width: auto; max-width: 200px; display: flex; align-items: center; gap: 8px; padding: 0 12px 0 8px;
+        border: 1px solid var(--dim); border-radius: 10px; background: var(--surface);
+      }
+      .filechip .fileext {
+        flex: none; width: 28px; height: 34px; border-radius: 4px; background: var(--hover); display: grid; place-items: center;
+        color: var(--peach); font: 600 9px var(--mono); text-transform: uppercase;
+      }
+      .filechip .filename { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .imgbubble .bubfile { font-size: 13px; color: var(--muted); margin-bottom: 4px; overflow-wrap: anywhere; }
       .thumb .thumbx {
         position: absolute; top: -6px; right: -6px;
         width: 20px; height: 20px; padding: 0;

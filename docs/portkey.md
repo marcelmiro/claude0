@@ -43,11 +43,54 @@ already at the top after tapping +, then **All** repos A–Z (`NewSession`).
 - The sidebar's `n` mode is a separate surface: it keeps `discoverRepos` order (repos with a
   live session, then A–Z) and has no Recent section.
 
+## Composer button
+
+One button left of the textarea (`ComposerButton`) replaces the old attach `＋` and mic.
+
+- **Tap** dictates (below). Without an OpenAI key on the host (`GET /dictation`) the face is
+  `＋` and a tap opens the menu with its rows tappable instead.
+- **Hold (260ms) or swipe up** opens the menu above the button. Slide onto a row and lift to
+  fire it; lifting anywhere else cancels, so a hold released in place does nothing. Off the
+  menu the rows fade (`muted`) to say a lift will cancel. Top to bottom: **Clear**,
+  **Attach**, **All skills**, then the pinned skills with the first pin nearest the thumb.
+- **Pins** are config `ui.composerSkills` (default `["/compact"]`, served by `GET /composer`).
+  A skill goes to the front of the draft and replaces any leading `/command`; the rest of the
+  draft becomes its arguments (`withSkill`, `shared/message-text.js`). It never sends. **All
+  skills** opens the repo-scoped slash menu, and a pick there goes to the front the same way.
+- **Clear** empties text, attachments and bash mode; the "Cleared" notice's Undo puts all
+  three back for 5s. With nothing to clear the row stays, dimmed and inert, so the menu keeps
+  its shape.
+- **Bash mode.** Any action leaves it and keeps the typed command as plain text: a skill,
+  dictation or attachment has no meaning in a shell command.
+- **Attachments.** Images are downscaled to JPEG and pasted as image paths, as before. Any
+  other file goes up as a multipart `file`, is saved as `uploads/<uuid>/<name>` (`saveUploadedFile`,
+  `safeUploadName`) and rides in the message as a `[File: <path>]` ref (`withFileRefs`).
+  History renders the refs as 📎 marks. A bare path would do for Claude, but a message that
+  starts with one is read by Claude Code as a slash command.
+- **Swipe-back** ignores touches that start on the button: it sits in the left edge zone,
+  and its menu drag runs up and to the right.
+
+iOS facts this is built on, each measured on an iPhone (Safari 27) and an iPad:
+
+- **Only a tap opens a file picker.** WebKit's file input needs a fresh user activation
+  (`FileInputType::handleDOMActivateEvent`), and on iOS a swipe, a still hold or a hold-and-drag
+  grants none — tested with every earlier touch more than 5s (the activation window) back.
+  So lifting on Attach doesn't open the picker; it shows a large **Attach** button where the
+  finger lifted, and that one tap opens it.
+- **The picker always starts with iOS's menu** (Photo Library / Take Photo / Choose File) for
+  any `accept` that allows images, and no attribute or API reaches the Photos picker directly
+  (WebKit `WKFileUploadPanel`). With no `accept`, Choose File allows any type.
+- **Haptics come only from a real switch moved by the finger.** Safari has no Vibration API,
+  and a scripted click on an `<input type="checkbox" switch>` never ticks (the toggle path
+  handles trusted clicks only). An invisible switch, rotated so a swipe up slides its thumb,
+  sits over the button (`.cbswitch`): the swipe that opens the menu ticks. A hold-to-open and
+  moving between rows can't tick.
+
 ## Dictation
 
 Why it records in the app instead of using the iOS keyboard or Web Speech:
-[ADR 37](adr/0037-dictation-records-in-the-app-and-transcribes-on-the-host.md). The composer
-shows a mic only when the host has `~/.config/claude0/openai-key` (`GET /dictation`).
+[ADR 37](adr/0037-dictation-records-in-the-app-and-transcribes-on-the-host.md). A tap on the
+composer button dictates when the host has `~/.config/claude0/openai-key` (`GET /dictation`).
 
 Order of one dictation:
 
@@ -77,8 +120,8 @@ Order of one dictation:
 4. **Insert.** The raw text goes in at the caret, spaced from its neighbours
    (`insertDictation`). A take belongs to the session it was started in. If you switched
    sessions, left the thread or backgrounded the app meanwhile, the take is finished and
-   appended to that session's saved draft instead. The mic stays visible mid-take, even
-   in bash mode, so a take can always be stopped.
+   appended to that session's saved draft instead. Starting a take leaves bash mode, and a
+   take can always be stopped, even with the composer disabled.
 5. **Clean.** `POST /dictation/:id/clean` runs `claude -p` (haiku) with the session's terms,
    its recent prose, the personal vocabulary and the learned mis-hearings (`cleanDictation`
    in `core/dictation.ts`). It takes about 3.5–4.5s, and the time is mostly the model, not

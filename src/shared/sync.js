@@ -1,6 +1,7 @@
 // Client-side apply logic for the bridge's versioned state push (see
 // src/bridge/stream.ts for the wire protocol). Served unbuilt as /sync.js and
-// covered by shared/sync.test.ts — keep it dependency-free and side-effect-free.
+// covered by shared/sync.test.ts — keep it side-effect-free, and its only import another
+// unbuilt shared module (the browser resolves it to that module's /<name>.js route).
 
 /**
  * Apply one `transcript` stream event over the transcript object the client
@@ -12,6 +13,8 @@
  * the event's payload (the server ships the full non-turn state on every push —
  * an omitted field means cleared).
  */
+import { stripAttachmentPrefix } from "./message-text.js";
+
 export function applyTranscriptEvent(held, ev) {
   if (ev.kind === "snapshot") return { data: ev.payload };
   if (ev.kind !== "append" || typeof ev.fromIndex !== "number") return { needsFetch: true };
@@ -55,10 +58,6 @@ export function displaySection(section, status, pendingScripts) {
   return section;
 }
 
-// Claude prefixes an image message's caption with literal "[Image #N] " markers; strip
-// them so optimistic-image retirement matches our (prefix-free) caption, and so history
-// renders the caption without the noise (the 🖼 chip already conveys the image).
-export const stripImagePrefix = (t) => String(t || "").replace(/^(?:\[Image #\d+\]\s*)+/, "");
 
 const atMs = (turn) => (turn && turn.at ? Date.parse(turn.at) || 0 : 0);
 
@@ -80,7 +79,7 @@ export function newestTurnAt(turns) {
 /**
  * Each text that landed as a user turn → the newest such turn's `at` (epoch ms). Keys
  * match what a send carries: a slash command's `command`, a `!cmd` as "!" + its trimmed
- * command, prompt text trimmed with any image prefix stripped.
+ * command, prompt text trimmed with any attachment prefix stripped.
  */
 export function landedSends(turns) {
   const out = new Map();
@@ -93,7 +92,7 @@ export function landedSends(turns) {
     if (turn.command) add(turn.command.trim(), at);
     if (turn.bash) add("!" + turn.bash.command, at);
     for (const b of turn.content || []) {
-      if (b.type === "text" && b.text) add(stripImagePrefix(b.text).trim(), at);
+      if (b.type === "text" && b.text) add(stripAttachmentPrefix(b.text).trim(), at);
     }
   }
   return out;

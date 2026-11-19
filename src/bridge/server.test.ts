@@ -319,6 +319,15 @@ test("/sessions/:id/snooze takes a preset, or an until (ms or ISO) with a wake p
   }
 });
 
+test("/composer serves the pinned skills (default /compact); a message needs text or an attachment", async () => {
+  expect(await (await get("/composer")).json()).toEqual({ skills: ["/compact"] });
+  const fd = new FormData();
+  fd.append("text", "  ");
+  const res = await fetch(`${base}/sessions/abc/message`, { method: "POST", body: fd });
+  expect(res.status).toBe(400);
+  expect(await res.json()).toEqual({ ok: false, reason: "empty" });
+});
+
 test("dictation is off without an OpenAI key, and validates input before any network call once on", async () => {
   rmSync(OPENAI_KEY_PATH, { force: true }); // the temp home is fixed, so an earlier run left its key
   expect(await (await get("/dictation")).json()).toEqual({ available: false });

@@ -59,6 +59,11 @@
           "type": "object",
           "additionalProperties": { "type": "string", "minLength": 1 },
           "description": "Repo name → short display name on tmux window names and the sidebar (e.g. {\"claude0\": \"c0\"}). Lists, grouping, and push labels keep the real name."
+        },
+        "composerSkills": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^/\\S+$" },
+          "description": "Skills pinned in portkey's composer-button menu, e.g. [\"/compact\", \"/pr-triage\"]. The first sits nearest the thumb; picking one puts it at the front of the draft (never sends)."
         }
       }
     },

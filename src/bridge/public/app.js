@@ -16,7 +16,8 @@ import { formatWakeAbs } from "/wake-abs.js";
 import { tapTarget } from "/tap-target.js";
 // Stream-event apply logic (versioned state push), served unbuilt and covered by
 // shared/sync.test.ts.
-import { applyTranscriptEvent, overlayResolved, displaySection, landedSends, newestTurnAt, stripImagePrefix } from "/sync.js";
+import { applyTranscriptEvent, overlayResolved, displaySection, landedSends, newestTurnAt } from "/sync.js";
+import { attachedFileNames, stripAttachmentPrefix, withSkill } from "/message-text.js";
 // Tunnel-wake recovery decisions (burst retry + fetch timeouts), served unbuilt
 // and covered by shared/reconnect.test.ts.
 import { burstAction, withTimeout } from "/reconnect.js";
@@ -95,6 +96,7 @@ const historyMore = signal(false); // a page-append fetch is in flight
 const historySession = signal(null); // session-shaped stand-in for a History row absent from sessions.value (>24h)
 const flash = signal(""); // transient FAILURE feedback in the detail view (successes stay silent)
 const flashKind = signal(""); // "" = error styling; "notice" = neutral (restore-on-interrupt)
+const flashUndo = signal(null); // () => void — an Undo on the current notice (Clear draft)
 const copied = signal(false); // transient "✓ copied" pill (clipboard success needs visible feedback)
 // Optimistic user bubbles awaiting transcript catch-up: { text, after, deliveredAt? }. `after`
 // is the held thread's newest turn time at tap (`newestTurnAt`, shared/sync.js) — only a user
@@ -120,8 +122,8 @@ const sessionMenu = signal(null); // long-pressed session ROW → session action
 const configSheet = signal(false); // /model, /effort or the session sheet → combined model+effort picker
 const notice = signal(""); // transient SUCCESS notice, e.g. Claude's model/effort confirmation line
 const loadingAuth = signal(true); // boot-time auth check + initial session load
-const attachments = signal([]); // images staged in the composer: {blob, url} (object URLs)
-const pendingImageSends = signal([]); // optimistic image bubbles awaiting transcript catch-up: {text, urls, after}
+const attachments = signal([]); // staged in the composer: {kind: "image"|"file", blob, url, name}
+const pendingImageSends = signal([]); // optimistic attachment bubbles awaiting transcript catch-up: {text, urls, files, after}
 const connected = signal(true); // SSE stream health — false shows a "reconnecting" banner
 const showAgents = signal(false); // subagent-list sheet open over the detail
 const openSubagent = signal(null); // drilled-in agent {agentId, description, agentType, siblings:[]} | null
@@ -135,7 +137,8 @@ const tick = signal(Date.now());
 // The daemon's inbox snapshot is older than 10s (or absent) — sections render from the
 // last known state with a banner. Server-computed.
 const inboxStale = signal(false);
-const dictationAvailable = signal(false); // host has an OpenAI key → the composer shows a mic
+const dictationAvailable = signal(false); // host has an OpenAI key → a tap on the composer button dictates
+const skillPins = signal(["/compact"]); // config ui.composerSkills — the composer menu's pinned skills
 // Recently-done stays collapsed by default (a day of archives is screen bloat, and the
 // section is an archive entry point, not a queue) — tap its header to expand. Not
 // persisted: every launch starts collapsed.
@@ -595,7 +598,7 @@ function applyTranscript(id, data) {
     // image-only send has caption "" and the transcript text is just "[Image #N]" → "").
     const keep = [];
     for (const e of pendingImageSends.value) {
-      if (sendLanded(landed, stripImagePrefix(e.text).trim(), e.after)) e.urls.forEach(URL.revokeObjectURL);
+      if (sendLanded(landed, stripAttachmentPrefix(e.text).trim(), e.after)) e.urls.forEach(URL.revokeObjectURL);
       else keep.push(e);
     }
     if (keep.length !== pendingImageSends.value.length) pendingImageSends.value = keep;
@@ -868,6 +871,7 @@ async function connect() {
 let flashTimer = null;
 function flashError(msg) {
   flashKind.value = "";
+  flashUndo.value = null;
   flash.value = msg;
   clearTimeout(flashTimer);
   if (msg) flashTimer = setTimeout(() => (flash.value = ""), 5000);
@@ -876,11 +880,12 @@ function flashError(msg) {
 // One exception to "successes are silent": restore-on-interrupt. The message silently
 // moving from the thread to the composer is easy to miss (iOS blocks the keyboard raise),
 // so it gets a neutral, non-error toast in the same slot above the input box.
-function flashNotice(msg) {
+function flashNotice(msg, undo = null) {
   flashKind.value = "notice";
   flash.value = msg;
+  flashUndo.value = undo;
   clearTimeout(flashTimer);
-  if (msg) flashTimer = setTimeout(() => (flash.value = ""), 5000);
+  if (msg) flashTimer = setTimeout(() => ((flash.value = ""), (flashUndo.value = null)), 5000);
 }
 
 // Copy success IS worth a toast (unlike sends): the clipboard is invisible, so silent
@@ -2807,9 +2812,12 @@ function Turn({ turn, upCount, canCode }) {
       els.push(html`<div class="imgmark">🖼 image</div>`);
       continue;
     }
-    // User captions arrive prefixed with literal "[Image #N]" markers — strip for display
-    // (the 🖼 chip already conveys the image; keep the raw text for long-press/rewind).
-    const shown = b.type === "text" ? (role === "user" ? stripImagePrefix(b.text) : b.text) : "";
+    // User captions arrive prefixed with "[Image #N]" markers and "[File: <path>]" refs —
+    // strip for display (🖼/📎 chips convey them; keep the raw text for long-press/rewind).
+    if (b.type === "text" && role === "user") {
+      for (const name of attachedFileNames(b.text)) els.push(html`<div class="imgmark">📎 ${name}</div>`);
+    }
+    const shown = b.type === "text" ? (role === "user" ? stripAttachmentPrefix(b.text) : b.text) : "";
     if (b.type === "text" && shown && shown.trim()) {
       // Assistant text is markdown-rendered; user text stays literal (it's what you typed).
       els.push(
@@ -3336,7 +3344,6 @@ function saveDraft(sid, text) {
 // catches up. Enter sends, Shift+Enter / the multiline keyboard inserts a newline.
 function Composer({ disabled, status }) {
   const ref = useRef(null);
-  const fileRef = useRef(null);
   const enterArmed = useRef(false); // true after a plain Enter — a second one submits
   const enterShift = useRef(false); // e.shiftKey of the latest Enter keydown
   const shiftRun = useRef(false); // inside a Shift+Enter run — suppress submit until a keystroke
@@ -3356,7 +3363,8 @@ function Composer({ disabled, status }) {
   const trampRef = useRef(null); // hidden focus-holder for the mode-flip remount (see flipBashMode)
   // "/" slash-command menu. Kept in a ref (not state) so the once-attached native
   // beforeinput/keydown listeners below never read stale values; `rerender` repaints.
-  const slash = useRef({ open: false, filtered: [], active: 0 });
+  // front: opened from the composer button's "All skills" — a pick goes to the draft's front.
+  const slash = useRef({ open: false, filtered: [], active: 0, front: false });
   const slashCache = useRef(new Map()); // sid → fetched command list (one fetch per session)
   const [, forceRender] = useState(0);
   const rerender = () => forceRender((n) => (n + 1) & 0xffff);
@@ -3559,7 +3567,7 @@ function Composer({ disabled, status }) {
     if (!m2) return closeSlash();
     const token = m2[1].toLowerCase();
     const filtered = items.filter((c) => c.name.toLowerCase().includes(token));
-    slash.current = { open: filtered.length > 0, filtered, active: 0 };
+    slash.current = { open: filtered.length > 0, filtered, active: 0, front: false };
     rerender();
   }
   function selectSlash(cmd) {
@@ -3578,6 +3586,7 @@ function Composer({ disabled, status }) {
       rerender();
       return;
     }
+    if (slash.current.front) return insertSkill("/" + cmd.name);
     el.value = el.value.replace(/\/\S*$/, "/" + cmd.name + " "); // trailing space closes Claude's own native / menu in-pane
     grow();
     syncHasText();
@@ -3585,10 +3594,11 @@ function Composer({ disabled, status }) {
     slash.current.open = false;
     rerender();
   }
-  function onPick(e) {
-    const files = [...(e.target.files || [])];
-    e.target.value = ""; // allow re-picking the same file
-    addImages(files);
+  // Picked from the composer button's Attach. Choosing a file leaves bash mode (a shell
+  // command takes no attachments); the typed command stays as message text.
+  function onFiles(files) {
+    if (bashRef.current) leaveBashKeepingText();
+    addFiles(files);
   }
   // A copied image arrives as a clipboard file. Text paste keeps the browser default, and so
   // does a mixed clipboard (e.g. an image copied off a web page also carries text).
@@ -3596,16 +3606,66 @@ function Composer({ disabled, status }) {
     const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith("image/"));
     if (!files.length) return;
     if (!e.clipboardData.getData("text/plain")) e.preventDefault();
-    addImages(files);
+    addFiles(files);
   }
-  async function addImages(files) {
+  // Images are downscaled and sent as images (Claude sees them); anything else — or an image
+  // the browser can't decode — goes up as a file whose path rides in the message.
+  async function addFiles(files) {
     const added = [];
     for (const f of files) {
-      if (!f.type.startsWith("image/")) continue;
-      const blob = await downscale(f);
-      added.push({ blob, url: URL.createObjectURL(blob) });
+      if (f.type.startsWith("image/")) {
+        try {
+          const blob = await downscale(f);
+          added.push({ kind: "image", blob, url: URL.createObjectURL(blob), name: f.name });
+          continue;
+        } catch {}
+      }
+      added.push({ kind: "file", blob: f, url: URL.createObjectURL(f), name: f.name || "file" });
     }
     if (added.length) attachments.value = [...attachments.value, ...added];
+  }
+  // Leave bash mode with the typed command kept as plain message text.
+  function leaveBashKeepingText() {
+    const el = ref.current;
+    exitBash({ text: el ? el.value : "", focus: !!el && document.activeElement === el });
+  }
+  // A skill from the composer button: to the draft's front, never sent (withSkill).
+  function insertSkill(name) {
+    const el = ref.current;
+    if (!el) return;
+    closeSlash();
+    setComposerText(withSkill(el.value, name), { focus: document.activeElement === el });
+  }
+  async function openAllSkills() {
+    if (!sid) return;
+    const items = await loadSlashItems(sid);
+    slash.current = { open: items.length > 0, filtered: items, active: 0, front: true };
+    rerender();
+  }
+  // Empties text, attachments and bash mode; the notice's Undo puts all three back.
+  function clearDraft() {
+    const el = ref.current;
+    if (!el) return;
+    const saved = { text: bashRef.current ? "!" + el.value : el.value, items: attachments.value, dictated: dictations.current };
+    let undone = false;
+    attachments.value = [];
+    dictations.current = [];
+    closeSlash();
+    setComposerText("");
+    flashNotice("Cleared", () => {
+      undone = true;
+      if (selectedId.value !== sid) return;
+      attachments.value = [...saved.items, ...attachments.value];
+      dictations.current = saved.dictated;
+      setComposerText(saved.text);
+    });
+    setTimeout(() => !undone && saved.items.forEach((a) => URL.revokeObjectURL(a.url)), 5500);
+  }
+  // A tap on the composer button. Dictating from bash mode leaves it: spoken prose would
+  // otherwise run as a shell command.
+  function dictateTap() {
+    if (bashRef.current && dict.current.phase === "idle") leaveBashKeepingText();
+    micTap();
   }
   function removeAttachment(url) {
     attachments.value = attachments.value.filter((a) => a.url !== url);
@@ -3823,12 +3883,15 @@ function Composer({ disabled, status }) {
       }
       return;
     }
-    // Image send: multipart upload + an optimistic bubble (thumbnails + caption) that the
-    // transcript refresh retires once the real turn lands.
+    // Attachment send: multipart upload + an optimistic bubble (thumbnails, file names,
+    // caption) that the transcript refresh retires once the real turn lands.
     const fd = new FormData();
     fd.append("text", text);
-    items.forEach((it, i) => fd.append("image", it.blob, `image${i}.jpg`));
-    const entry = { text, urls: items.map((it) => it.url), after };
+    const images = items.filter((it) => it.kind === "image");
+    const files = items.filter((it) => it.kind === "file");
+    images.forEach((it, i) => fd.append("image", it.blob, `image${i}.jpg`));
+    files.forEach((it) => fd.append("file", it.blob, it.name));
+    const entry = { text, urls: images.map((it) => it.url), files: files.map((it) => it.name), after };
     pendingImageSends.value = [...pendingImageSends.value, entry];
     attachments.value = [];
     const ok = await actionForm(`/sessions/${encodeURIComponent(sid)}/message`, fd);
@@ -4036,23 +4099,34 @@ function Composer({ disabled, status }) {
       />
       ${attachments.value.length > 0 &&
       html`<div class="thumbs">
-        ${attachments.value.map(
-          (a) => html`<div class="thumb" key=${a.url}>
-            <img src=${a.url} alt="" />
-            <button class="thumbx" onClick=${() => removeAttachment(a.url)} aria-label="Remove">×</button>
-          </div>`,
+        ${attachments.value.map((a) =>
+          a.kind === "file"
+            ? html`<div class="thumb filechip" key=${a.url}>
+                <span class="fileext">${(a.name.includes(".") ? a.name.split(".").pop() : "file").slice(0, 4)}</span>
+                <span class="filename">${a.name}</span>
+                <button class="thumbx" onClick=${() => removeAttachment(a.url)} aria-label="Remove">×</button>
+              </div>`
+            : html`<div class="thumb" key=${a.url}>
+                <img src=${a.url} alt="" />
+                <button class="thumbx" onClick=${() => removeAttachment(a.url)} aria-label="Remove">×</button>
+              </div>`,
         )}
       </div>`}
       <div class="composer">
-        <input ref=${fileRef} type="file" accept="image/*" multiple style="display:none" onChange=${onPick} />
-        <button
-          class="attach"
+        <${ComposerButton}
+          face=${dictFace}
+          cleaning=${cleaning > 0}
+          recLabel=${dictFace === "rec" ? `${Math.floor((performance.now() - dict.current.liveAt) / 1000)}s` : ""}
+          canDictate=${dictationAvailable.value}
           disabled=${disabled}
-          onClick=${() => fileRef.current && fileRef.current.click()}
-          aria-label="Attach image"
-        >
-          ＋
-        </button>
+          canClear=${hasText || attachments.value.length > 0 || bashMode}
+          pins=${skillPins.value}
+          onDictate=${dictateTap}
+          onClear=${clearDraft}
+          onSkill=${insertSkill}
+          onAllSkills=${openAllSkills}
+          onFiles=${onFiles}
+        />
         ${bashMode
           ? html`<div class="bashfield" key="bash">
               <span class="bangglyph" onClick=${() => exitBash()} aria-label="Leave bash mode">!</span>
@@ -4078,23 +4152,6 @@ function Composer({ disabled, status }) {
               onInput=${onInput}
               onPaste=${onPaste}
             ></textarea>`}
-        ${dictationAvailable.value &&
-        ((!bashMode && !disabled) || dictFace !== "idle") &&
-        html`<button
-          class=${"mic " + dictFace + (cleaning && dictFace === "idle" ? " cleaning" : "")}
-          onPointerDown=${(e) => e.preventDefault() /* keeps the textarea focused, so the keyboard stays up */}
-          onClick=${micTap}
-          aria-label=${dictFace === "idle" ? "Dictate" : dictFace === "busy" ? "Transcribing" : dictFace === "warm" ? "Starting the mic" : "Stop dictating"}
-        >
-          ${dictFace === "rec"
-            ? `${Math.floor((performance.now() - dict.current.liveAt) / 1000)}s`
-            : dictFace === "busy" || dictFace === "warm"
-              ? html`<span class="spin"></span>`
-              : html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <rect x="9" y="3" width="6" height="11" rx="3" />
-                    <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
-                  </svg>`}
-        </button>`}
         ${!hasText && attachments.value.length === 0 && status === "running" && !disabled
           ? html`<button
               class=${"stop" + (stopArmed.current ? " armed" : "")}
@@ -4106,6 +4163,199 @@ function Composer({ disabled, status }) {
           : html`<button class="send" disabled=${disabled} onClick=${send} aria-label="Send">↑</button>`}
       </div>
     </div>
+  `;
+}
+
+// The composer's one button (docs/portkey.md § Composer button). A tap dictates; a hold or
+// a swipe up opens a menu you slide through and lift on: Clear, Attach, All skills, pinned
+// skills. Lifting anywhere off a row cancels. With no dictation on the host a tap opens the
+// menu instead, its rows tappable.
+const CB_HOLD_MS = 260;
+const CB_ICONS = {
+  mic: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="9" y="3" width="6" height="11" rx="3" />
+    <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
+  </svg>`,
+  clip: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M21 11.5l-8.6 8.6a5 5 0 0 1-7-7l8.6-8.6a3.3 3.3 0 0 1 4.7 4.7l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9" />
+  </svg>`,
+  slash: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M15 4L9 20" /></svg>`,
+};
+function ComposerButton({ face, cleaning, recLabel, canDictate, disabled, canClear, pins, onDictate, onClear, onSkill, onAllSkills, onFiles }) {
+  const [menu, setMenu] = useState(null); // null | "drag" (hold/swipe, lift picks) | "tap" (rows tappable)
+  const [active, setActive] = useState(null); // the row under the finger
+  const [muted, setMuted] = useState(false); // finger off the menu: lifting cancels
+  const [armed, setArmed] = useState(null); // {x, y} — lifted on Attach, waiting for the picker's tap
+  const wrapRef = useRef(null);
+  const menuRef = useRef(null);
+  const fileRef = useRef(null);
+  const switchRef = useRef(null);
+  const g = useRef(null); // the gesture in progress
+  const live = face !== "idle"; // dictation in progress: a tap stops it, no menu
+  const inert = disabled && !live;
+  const center = () => {
+    const r = wrapRef.current.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2, r };
+  };
+  // Inside the VISIBLE viewport: with the keyboard up iOS pans the page, and a menu anchored
+  // above the button would run off the top. Rows tighten before the menu gives up its top.
+  useLayoutEffect(() => {
+    const m = menuRef.current;
+    if (!m) return;
+    const { r } = center();
+    const vv = window.visualViewport;
+    const visTop = (vv ? vv.offsetTop : 0) + 8;
+    m.classList.toggle("dense", m.offsetHeight > r.top - 10 - visTop);
+    m.style.left = Math.max(6, r.left - 2) + "px";
+    m.style.top = Math.max(visTop, r.top - 10 - m.offsetHeight) + "px";
+  }, [menu]);
+  const close = () => {
+    setMenu(null);
+    setActive(null);
+    setMuted(false);
+  };
+  // The hidden switch ticks the haptic as a swipe up slides its thumb (a scripted click
+  // never ticks on iOS — only a real switch moved by the finger). Re-arm it for the next swipe.
+  const resetSwitch = () => setTimeout(() => switchRef.current && (switchRef.current.checked = false), 80);
+  function open() {
+    const s = g.current;
+    if (!s || s.opened || live) return;
+    s.opened = true;
+    clearTimeout(s.timer);
+    setMenu("drag");
+  }
+  function tap() {
+    if (live || canDictate) return onDictate();
+    setMenu("tap");
+  }
+  function fire(act, x, y) {
+    if (act === "clear") onClear();
+    // iOS opens a file picker only from a tap's user activation, and a drag never grants one.
+    else if (act === "attach") setArmed({ x, y });
+    else if (act === "all") onAllSkills();
+    else onSkill(act);
+  }
+  function onPointerDown(e) {
+    e.preventDefault(); // keeps the textarea focused, so the keyboard stays up
+    if (inert || menu === "tap") return;
+    if (e.pointerType === "mouse") wrapRef.current.setPointerCapture(e.pointerId); // touch is captured implicitly
+    g.current = { x0: e.clientX, y0: e.clientY, moved: false, opened: false };
+    g.current.timer = setTimeout(open, CB_HOLD_MS);
+  }
+  function onPointerMove(e) {
+    const s = g.current;
+    if (!s) return;
+    const dx = e.clientX - s.x0;
+    const dy = e.clientY - s.y0;
+    if (!s.moved && Math.hypot(dx, dy) > 10) s.moved = true;
+    if (!s.opened && dy < -18 && Math.abs(dx) < 40) open(); // a swipe up opens it without the wait
+    if (!s.opened || !menuRef.current) return;
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const row = el && el.closest && el.closest(".cbmenu [data-act]:not(.off)");
+    setActive(row ? row.dataset.act : null);
+    const m = menuRef.current.getBoundingClientRect();
+    const near = e.clientX >= m.left - 16 && e.clientX <= m.right + 16 && e.clientY >= m.top - 16 && e.clientY <= m.bottom + 16;
+    const c = center();
+    setMuted(!row && !near && Math.hypot(e.clientX - c.x, e.clientY - c.y) >= 36);
+  }
+  function onPointerUp(e) {
+    resetSwitch();
+    const s = g.current;
+    g.current = null;
+    if (!s) return;
+    clearTimeout(s.timer);
+    if (!s.opened) return s.moved ? undefined : tap();
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const row = el && el.closest && el.closest(".cbmenu [data-act]:not(.off)");
+    close();
+    if (row) fire(row.dataset.act, e.clientX, e.clientY);
+  }
+  function onPointerCancel() {
+    resetSwitch();
+    if (g.current) clearTimeout(g.current.timer);
+    g.current = null;
+    close();
+  }
+  function tapRow(act) {
+    close();
+    if (act === "attach") fileRef.current && fileRef.current.click(); // a tap: the picker may open
+    else if (act) fire(act);
+  }
+  const rows = [
+    { act: canClear ? "clear" : "", cls: canClear ? "danger" : "danger off", icon: "✕", label: "Clear" },
+    null,
+    { act: "attach", icon: CB_ICONS.clip, label: "Attach" },
+    null,
+    { act: "all", icon: "⋯", label: "All skills" },
+    ...[...pins].reverse().map((p) => ({ act: p, cls: "skill", icon: CB_ICONS.slash, label: p })),
+  ];
+  const faceEl =
+    face === "rec" ? recLabel : face === "busy" || face === "warm" ? html`<span class="spin"></span>` : canDictate ? CB_ICONS.mic : "＋";
+  const label = live ? (face === "busy" ? "Transcribing" : face === "warm" ? "Starting the mic" : "Stop dictating") : canDictate ? "Dictate; hold for more" : "Attach, clear and skills";
+  return html`
+    <div
+      ref=${wrapRef}
+      class="cbwrap"
+      onPointerDown=${onPointerDown}
+      onPointerMove=${onPointerMove}
+      onPointerUp=${onPointerUp}
+      onPointerCancel=${onPointerCancel}
+      onContextMenu=${(e) => e.preventDefault()}
+    >
+      <button
+        class=${"cbtn " + face + (cleaning && face === "idle" ? " cleaning" : "") + (menu ? " open" : "")}
+        disabled=${inert}
+        aria-label=${label}
+        onClick=${(e) => e.detail === 0 && !inert && tap() /* keyboard / VoiceOver activation */}
+      >
+        ${faceEl}
+      </button>
+      <input ref=${switchRef} class="cbswitch" type="checkbox" switch tabindex="-1" aria-hidden="true" />
+      <input
+        ref=${fileRef}
+        type="file"
+        multiple
+        style="display:none"
+        onChange=${(e) => {
+          const files = [...(e.target.files || [])];
+          e.target.value = ""; // allow re-picking the same file
+          if (files.length) onFiles(files);
+        }}
+      />
+    </div>
+    ${menu &&
+    html`<div class="cblayer">
+      <div class=${menu === "tap" ? "cbscrim" : "cbdim"} onPointerDown=${menu === "tap" ? close : undefined}></div>
+      <div ref=${menuRef} class=${"cbmenu" + (muted ? " muted" : "")} role="menu">
+        ${rows.map((r, i) =>
+          r
+            ? html`<button
+                key=${r.label}
+                role="menuitem"
+                class=${"cbrow" + (r.cls ? ` ${r.cls}` : "") + (active && r.act === active ? " on" : "")}
+                data-act=${r.act}
+                onClick=${menu === "tap" ? () => tapRow(r.act) : undefined}
+              >
+                <span class="ic">${r.icon}</span><span class="nm">${r.label}</span>
+              </button>`
+            : html`<div class="cbsep" key=${`sep${i}`}></div>`,
+        )}
+      </div>
+    </div>`}
+    ${armed &&
+    html`<div class="cblayer">
+      <div class="cbscrim" onPointerDown=${() => setArmed(null)}></div>
+      <button
+        class="cbarmed"
+        style=${`left:${Math.min(Math.max(armed.x, 90), innerWidth - 90)}px;top:${armed.y}px`}
+        onClick=${() => {
+          setArmed(null);
+          if (fileRef.current) fileRef.current.click();
+        }}
+      >
+        ${CB_ICONS.clip}<span>Attach</span>
+      </button>
+    </div>`}
   `;
 }
 
@@ -4183,7 +4433,8 @@ function useSwipeBack(onBack, deps = []) {
     function onStart(e) {
       if (swipeScreens[swipeScreens.length - 1] !== token) return; // not the visible screen
       const p = e.changedTouches[0];
-      if (!inSwipeEdgeZone(p.clientX)) {
+      // The composer button sits at the left edge, and its menu drag runs up and to the right.
+      if (!inSwipeEdgeZone(p.clientX) || (e.target.closest && e.target.closest(".cbwrap"))) {
         drag.current = { x: p.clientX, y: p.clientY, active: false, dx: 0, decided: true };
         return;
       }
@@ -4606,14 +4857,15 @@ function Detail() {
                   : html`<${SendingTag} />`}</div>`,
           )}
         ${pendingImageSends.value
-          .filter((e) => !hasLanded(stripImagePrefix(e.text).trim(), e.after))
+          .filter((e) => !hasLanded(stripAttachmentPrefix(e.text).trim(), e.after))
           .map(
             (entry, i) => html`<div
             class="bubble user pending imgbubble"
             key=${`pi${i}`}
             ...${lpProps(entry.text ? lpStartCopyOnly(entry.text) : undefined)}
           >
-            <div class="bubthumbs">${entry.urls.map((u) => html`<img src=${u} alt="" key=${u} />`)}</div>
+            ${entry.urls.length > 0 && html`<div class="bubthumbs">${entry.urls.map((u) => html`<img src=${u} alt="" key=${u} />`)}</div>`}
+            ${(entry.files || []).map((n) => html`<div class="bubfile" key=${n}>📎 ${n}</div>`)}
             ${entry.text && html`<div>${entry.text}</div>`}
             <${SendingTag} />
           </div>`,
@@ -4675,7 +4927,19 @@ function Detail() {
                 ? html`<div class="flash archived">Repo folder is gone — readable, but nowhere to restore.</div>`
                 : html`<div class="flash archived">Archived — resume from your Mac to continue this session.</div>`
             : flash.value &&
-              html`<div class=${"flash" + (flashKind.value ? ` ${flashKind.value}` : "")}>${flash.value}</div>`}
+              html`<div class=${"flash" + (flashKind.value ? ` ${flashKind.value}` : "")}>
+                ${flash.value}
+                ${flashKind.value === "notice" && flashUndo.value &&
+                html`<button
+                  class="flashundo"
+                  onClick=${() => {
+                    const undo = flashUndo.value;
+                    flash.value = "";
+                    flashUndo.value = null;
+                    undo();
+                  }}
+                >Undo</button>`}
+              </div>`}
           <div class="navbar">
             <button class="iconbtn" onClick=${back} aria-label="Back to sessions">‹</button>
             <div class="navtitle">
@@ -6061,6 +6325,10 @@ refreshSessions()
       fetch("/dictation")
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => (dictationAvailable.value = !!(d && d.available)))
+        .catch(() => {});
+      fetch("/composer")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => d && Array.isArray(d.skills) && (skillPins.value = d.skills))
         .catch(() => {});
     }
   })

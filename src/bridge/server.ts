@@ -68,8 +68,9 @@ import { readPersonalVocab, refreshVocabIfStale } from "../core/dictation-vocab"
 import { repoRootForSession, safeRepoPath, fileDiff, rangeDiff, branchChanges } from "../core/repo-files";
 import { branchPullRequest, type PullRequestInfo } from "../core/pull-request";
 import { recoverWorktreeTranscript } from "../core/recover";
-import { loadConfig, PATHS } from "../core/config";
-import { saveUploadedBytes } from "../core/uploads";
+import { DEFAULT_CONFIG, loadConfig, PATHS } from "../core/config";
+import { saveUploadedBytes, saveUploadedFile } from "../core/uploads";
+import { withFileRefs } from "../shared/message-text.js";
 import { listPendingApprovals, decideApproval } from "../core/approval";
 import { markPortkeySource } from "../core/input-source";
 import {
@@ -144,6 +145,8 @@ const STATIC: Record<string, string> = {
   "/reconnect.js": "../../shared/reconnect.js",
   // Whether a send replaces the Mac draft, shared with the send pre-flight — served unbuilt.
   "/mac-draft.js": "../../shared/mac-draft.js",
+  // Attachment refs + skill insertion: built by the bridge, read back by the phone — served unbuilt.
+  "/message-text.js": "../../shared/message-text.js",
   "/manifest.json": "manifest.json",
   "/icon-512.png": "icon-512.png",
   "/apple-touch-icon.png": "apple-touch-icon.png",
@@ -328,7 +331,8 @@ function pruneOldUploads(): void {
     for (const name of readdirSync(PATHS.uploads)) {
       const p = `${PATHS.uploads}/${name}`;
       try {
-        if (now - statSync(p).mtimeMs > UPLOAD_MAX_AGE_MS) rmSync(p, { force: true });
+        // recursive: a non-image attachment lives in its own <uuid>/ dir
+        if (now - statSync(p).mtimeMs > UPLOAD_MAX_AGE_MS) rmSync(p, { force: true, recursive: true });
       } catch {
         // file vanished mid-scan — ignore
       }
@@ -1552,6 +1556,11 @@ async function route(req: Request): Promise<Response> {
   // --- Dictation (ADR 37, docs/portkey.md § Dictation): transcribe returns the raw text
   // fast; the client then asks for the cleanup, which reuses the context gathered here. ---
   if (method === "GET" && path === "/dictation") return json({ available: !!openaiKey() });
+  // The composer button's pinned skills (config ui.composerSkills).
+  if (method === "GET" && path === "/composer") {
+    const cfg = await loadConfig().catch(() => null);
+    return json({ skills: cfg?.ui.composerSkills ?? DEFAULT_CONFIG.ui.composerSkills });
+  }
   // TEMPORARY: on-device step tracing while the iOS recording flow is being debugged.
   if (method === "POST" && path === "/dictation/trace") {
     console.error(`dictation-trace: ${(await req.text().catch(() => "")).slice(0, 1000)}`);
@@ -1735,7 +1744,7 @@ async function route(req: Request): Promise<Response> {
   const message = path.match(/^\/sessions\/([^/]+)\/message$/);
   if (method === "POST" && message) {
     const id = decodeURIComponent(message[1]!);
-    // Multipart = a message with image attachments; JSON = the original text-only path.
+    // Multipart = a message with attachments; JSON = the original text-only path.
     if ((req.headers.get("content-type") || "").includes("multipart/form-data")) {
       const form = await req.formData().catch(() => null);
       if (!form) return json({ ok: false, reason: "bad-form" }, 400);
@@ -1744,13 +1753,17 @@ async function route(req: Request): Promise<Response> {
       // transcript record — as CRLF, and the client's optimistic bubble (LF) never retires.
       const text = typeof form.get("text") === "string" ? (form.get("text") as string).replace(/\r\n/g, "\n") : "";
       const files = form.getAll("image").filter((v): v is File => v instanceof File);
-      if (!text.trim() && files.length === 0) return json({ ok: false, reason: "empty" }, 400);
+      const docs = form.getAll("file").filter((v): v is File => v instanceof File);
+      if (!text.trim() && files.length === 0 && docs.length === 0) return json({ ok: false, reason: "empty" }, 400);
       const saved = await saveUploadedImages(files);
       if ("error" in saved) return json({ ok: false, reason: saved.error }, 400);
+      const docPaths: string[] = [];
+      for (const f of docs) docPaths.push(await saveUploadedFile(await f.arrayBuffer(), f.name));
       pruneOldUploads();
-      const r = await sendTracked(id, () => sendMessage(id, text, saved.paths), false);
+      const message = withFileRefs(text, docPaths);
+      const r = await sendTracked(id, () => sendMessage(id, message, saved.paths), false);
       // Image-only (empty text) can't text-match; fall back to the turn's prompt_id anchor.
-      if (r.ok) markPortkeySource(id, { deviceId: deviceOf(req), text: text.trim() ? text : undefined });
+      if (r.ok) markPortkeySource(id, { deviceId: deviceOf(req), text: message.trim() ? message : undefined });
       return sendResult(r);
     }
     const body = (await req.json().catch(() => ({}))) as { text?: unknown };

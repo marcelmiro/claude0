@@ -24,6 +24,7 @@ const SHELL_PATHS = [
   "/sync.js",
   "/reconnect.js",
   "/mac-draft.js",
+  "/message-text.js",
   "/manifest.json",
   "/icon-512.png",
   "/apple-touch-icon.png",
