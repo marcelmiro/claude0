@@ -1606,5 +1606,63 @@
       }
     </script>
     <script type="module" src="/app.js"></script>
+    <!-- Temporary viewport diagnostics for an unreproduced bug: after a layout shift
+         (keyboard), mostly on iPad, the app stays offset with an edge clipped. Silent until
+         #app stops lining up with the visual viewport for 1s, then shows the event trail
+         that led there (saved, so it survives a reload). Tap to dismiss. Delete this block
+         once a capture explains the bug. -->
+    <script>
+      (() => {
+        if (!(navigator.maxTouchPoints > 0) || !window.visualViewport) return;
+        const KEY = "c0-vvdiag";
+        const box = document.createElement("pre");
+        box.style.cssText = "position:fixed;left:0;top:0;z-index:99999;margin:0;padding:6px 8px;font:10px/1.35 ui-monospace,monospace;background:rgba(90,0,0,.92);color:#fff;white-space:pre-wrap;word-break:break-all;max-width:100vw;display:none";
+        const probe = document.createElement("div");
+        probe.style.cssText = "position:fixed;left:-10px;top:0;width:1px;height:100dvh;visibility:hidden";
+        let trail = [], badSince = 0, shown = false;
+        const show = (text) => {
+          box.textContent = text + "\n[tap to dismiss]";
+          box.style.display = "block";
+          shown = true;
+        };
+        box.addEventListener("click", () => {
+          box.style.display = "none";
+          shown = false;
+          localStorage.removeItem(KEY);
+        });
+        const sample = (why) => {
+          const vv = visualViewport, app = document.getElementById("app");
+          if (!app) return;
+          const r = app.getBoundingClientRect(), a = document.activeElement;
+          const vTop = vv.offsetTop, vBot = vv.offsetTop + vv.height;
+          // The frame should start at or above the visible top and end at the visible bottom.
+          const bad = vv.scale < 1.01 && (r.top > vTop + 4 || Math.abs(r.bottom - vBot) > 80);
+          const line = `${new Date().toISOString().slice(11, 23)} ${why}${bad ? " BAD" : ""} inner=${innerWidth}x${innerHeight} vv=${Math.round(vv.width)}x${Math.round(vv.height)}@${Math.round(vv.offsetLeft)},${Math.round(vTop)} scroll=${scrollX},${scrollY} dvh=${probe.offsetHeight} app=${Math.round(r.top)}..${Math.round(r.bottom)} h=${app.offsetHeight} st=${app.scrollTop} focus=${a && a.tagName}${a && a.className ? "." + String(a.className).split(" ")[0] : ""}`;
+          const key = line.slice(13);
+          if (!trail.length || trail[trail.length - 1].slice(13) !== key) trail = [...trail.slice(-24), line];
+          box.style.transform = `translate(${vv.offsetLeft}px,${vTop}px)`;
+          if (!bad) { badSince = 0; return; }
+          if (!badSince) badSince = Date.now();
+          if (Date.now() - badSince >= 1000) {
+            const text = `${navigator.userAgent}\nstandalone=${matchMedia("(display-mode: standalone)").matches} cls=${document.documentElement.className}\n${trail.join("\n")}`;
+            localStorage.setItem(KEY, text);
+            if (!shown) show(text);
+            else box.textContent = text + "\n[tap to dismiss]";
+          }
+        };
+        addEventListener("DOMContentLoaded", () => {
+          document.body.append(box, probe);
+          const saved = localStorage.getItem(KEY);
+          if (saved) show("CAPTURED EARLIER:\n" + saved);
+          visualViewport.addEventListener("resize", () => sample("vvR"));
+          visualViewport.addEventListener("scroll", () => sample("vvS"));
+          addEventListener("scroll", () => sample("win"));
+          addEventListener("focusin", () => sample("in"));
+          addEventListener("focusout", () => sample("out"));
+          addEventListener("resize", () => sample("winR"));
+          setInterval(() => sample("t"), 400);
+        });
+      })();
+    </script>
   </body>
 </html>
