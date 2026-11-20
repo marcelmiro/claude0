@@ -986,7 +986,8 @@ function isUserQueueEntry(text: string): boolean {
  * Replay a transcript's `queue-operation` records into the messages still queued at EOF.
  * These are op-log lines, not tree nodes (no `uuid`), so this cannot be derived from the
  * active-branch turns — it mirrors `parseBackgroundTasks`'s linear scan instead. Observed
- * ops (validated against real history): `enqueue` carries the text, `dequeue` carries
+ * ops (validated against real history): `enqueue` carries the text (none when queued
+ * during a compaction — such entries aren't replayed, see `userEnqueueAfter`), `dequeue` carries
  * null (a FIFO shift), `remove` carries the text of the entry Claude consumed mid-turn,
  * `popAll` drains everything (one record per drained entry — clearing is idempotent).
  * Task-notification payloads ride the same queue and must be replayed (a dequeue shifts
