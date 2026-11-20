@@ -3298,7 +3298,7 @@ function ApprovalCard({ approval }) {
     }, 5000);
   }
   return html`
-    <div class="card alert">
+    <div class="card alert acard">
       <div class="who ${risky ? "danger" : ""}">approve · ${approval.tool}</div>
       ${input.description && html`<div class="approve-desc">${input.description}</div>`}
       ${detail && html`<pre class=${risky ? "cmd-danger" : ""}>${detail}</pre>`}
