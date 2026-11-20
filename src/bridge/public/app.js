@@ -3607,6 +3607,7 @@ function Composer({ disabled, status }) {
       return !!last?.queued && pendingSends.value.some((p) => p.text === last.text);
     };
     const sentAtTap = sentQueued();
+    const compactingAtTap = !!transcript.value?.compacting;
     const queued = transcript.value?.queuedPending?.length > 0 || sentAtTap;
     // Arm restore-on-interrupt: if the refetched transcript shows the last-sent message
     // fell off the active branch, it comes back into the composer (see interruptRestore).
@@ -3643,7 +3644,10 @@ function Composer({ disabled, status }) {
         if (typeof d?.queued !== "boolean") return; // no read of Claude's queue — keep the guess
         // A send confirmed queued before the tap was already in the file at the bridge's
         // read, so its "not queued" means Claude took it. One confirmed after may postdate it.
-        const nowQueued = d.queued || (!sentAtTap && sentQueued());
+        // Except during a compaction: the bridge can't see that queue (its enqueues carry no
+        // text) and nothing leaves it until the compaction ends — the Escape cancels the
+        // compaction and the queue auto-submits.
+        const nowQueued = d.queued || (sentAtTap && compactingAtTap) || (!sentAtTap && sentQueued());
         if (nowQueued === queued) return;
         if (!nowQueued) return arm();
         if (interruptRestore.value?.sessionId === id) interruptRestore.value = null;
