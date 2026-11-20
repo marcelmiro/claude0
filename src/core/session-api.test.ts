@@ -1104,6 +1104,12 @@ test("userEnqueueAfter: an enqueue appended past the mark, even if already drain
   await Bun.sleep(120);
   writeFileSync(path, before + op("enqueue") + "\n");
   expect(await pending).toBe(true);
+  // a message queued during a compaction: Claude writes its enqueue with no text
+  writeFileSync(path, before + JSON.stringify({ type: "queue-operation", operation: "enqueue" }) + "\n");
+  expect(await userEnqueueAfter(mark, 100)).toBe(true);
+  // a harness entry still doesn't count
+  writeFileSync(path, before + JSON.stringify({ type: "queue-operation", operation: "enqueue", content: "<task-notification>x</task-notification>" }) + "\n");
+  expect(await userEnqueueAfter(mark, 100)).toBe(false);
 });
 
 test("queuedAtMark: the queue as it stood at the mark — the drain the Escape writes after it is ignored", async () => {

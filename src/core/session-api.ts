@@ -1419,7 +1419,9 @@ export async function transcriptMark(sessionId: string): Promise<{ path: string;
  * not the queue's state, since an Escape right after the send drains it at once. Claude
  * flushes the line a beat late, sometimes only with the auto-submit an Escape triggers, so
  * poll; a send that started a turn instead times out as false. Harness entries (a Monitor's
- * notifications) don't count: they arrive any time.
+ * notifications) don't count: they arrive any time. An enqueue with no text does: Claude
+ * Code writes a message queued during a compaction without it (93 of the 97 text-less
+ * enqueues in a week came just before a compaction ended).
  */
 export async function userEnqueueAfter(mark: { path: string; size: number }, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
@@ -1437,7 +1439,7 @@ export async function userEnqueueAfter(mark: { path: string; size: number }, tim
           continue; // a mark taken mid-line leaves a partial first line
         }
         const enqueue = rec.type === "queue-operation" && rec.operation === "enqueue";
-        if (enqueue && typeof rec.content === "string" && isUserQueueEntry(rec.content)) return true;
+        if (enqueue && (typeof rec.content !== "string" || isUserQueueEntry(rec.content))) return true;
       }
       offset += end;
     } catch {
