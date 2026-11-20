@@ -2,7 +2,7 @@
 // the bridge admits same-origin requests from the tailnet owner (request-guard.ts).
 import { h, render } from "preact";
 import { useRef, useEffect, useLayoutEffect, useState } from "preact/hooks";
-import { signal } from "@preact/signals";
+import { signal, effect } from "@preact/signals";
 import htm from "htm";
 import { Marked } from "marked";
 // Same module the TUI uses (core/status.ts imports it directly), served unbuilt.
@@ -61,6 +61,8 @@ const rawFetch = window.fetch.bind(window);
 // A rejected request got no HTTP response at all — the tunnel, not the bridge (a dead
 // bridge behind Tailscale serve answers 502).
 const NO_RESPONSE = "no response (network)";
+let apiInFlight = 0; // gates transcript images (pumpImages) until the app's own requests settle
+let apiSettledAt = 0;
 window.fetch = (input, init = {}) => {
   const headers = new Headers(init.headers || {});
   headers.set("x-claude0-device", DEVICE_ID);
@@ -68,17 +70,24 @@ window.fetch = (input, init = {}) => {
   const opts = withTimeout({ ...init, headers }, API_TIMEOUT_MS);
   const traced = (extra) =>
     traceNet(fetchFailure({ url: typeof input === "string" ? input : input.url, method: init.method || "GET", startedAt, now: Date.now(), signal: opts.signal, ...extra, ...pageContext() }));
-  return rawFetch(input, opts).then(
-    (r) => {
-      if (r.status >= 500) traced({ status: r.status });
-      else flushNetTrace();
-      return r;
-    },
-    (error) => {
-      traced({ error });
-      throw error;
-    },
-  );
+  apiInFlight++;
+  return rawFetch(input, opts)
+    .then(
+      (r) => {
+        if (r.status >= 500) traced({ status: r.status });
+        else flushNetTrace();
+        return r;
+      },
+      (error) => {
+        traced({ error });
+        throw error;
+      },
+    )
+    .finally(() => {
+      apiInFlight--;
+      apiSettledAt = Date.now();
+      pumpImages();
+    });
 };
 
 // Network trace (docs/portkey.md § Network trace): failures can't be reported while the
@@ -363,6 +372,32 @@ const transcriptCache = new Map(); // sessionId → last /transcript payload (op
 // Whether the open thread has been confirmed current since it was opened or the app
 // foregrounded — until then it may be a cached copy, shown with a "syncing…" label.
 const transcriptFresh = signal(false);
+
+// Transcript images load last: an image block renders as a skeleton until the open thread
+// holds its full (not tail-sliced) transcript and no API request has been in flight for
+// IMG_QUIET_MS (opening a session chains requests), then loads newest-first, two at a time.
+// A failed load falls back to the "🖼 image" chip.
+const IMG_QUIET_MS = 400;
+let imgTimer = 0;
+const imgWaiting = []; // start callbacks in mount order — newest last
+let imgActive = 0;
+const imgLoaded = new Set(); // srcs that loaded once: a re-mount shows them at once (HTTP cache)
+function pumpImages() {
+  const t = transcript.value;
+  if (!transcriptFresh.value || !t || t.partial || apiInFlight > 0 || !imgWaiting.length) return;
+  const wait = apiSettledAt + IMG_QUIET_MS - Date.now();
+  if (wait > 0) {
+    clearTimeout(imgTimer);
+    imgTimer = setTimeout(pumpImages, wait);
+    return;
+  }
+  while (imgActive < 2 && imgWaiting.length) {
+    imgActive++;
+    imgWaiting.pop()();
+  }
+}
+effect(pumpImages); // re-check when the transcript lands or turns fresh
+const lightbox = signal(null); // src of the image shown full-screen, or null
 
 const changesDataCache = new Map(); // sessionId → last /changes payload (ChangesCard/FilesView)
 const prDataCache = new Map(); // sessionId → last /pr payload (usePullRequest)
@@ -2823,6 +2858,67 @@ function fmtGap(ms) {
   return `${two(d.getDate())}/${two(d.getMonth() + 1)} ${time}`;
 }
 
+// A history image: skeleton → the image (tap for full-screen) via the low-priority loader
+// (pumpImages), or the plain "🖼 image" chip when it can't be read back. Mount it keyed by
+// `src`, not the ref alone: its phase and loader slot belong to one image, Detail stays
+// mounted across session switches with turns keyed by index, and a fork shares its parent's
+// record uuids (the seeded transcript is a copy).
+const imageSrc = (ref) => `/sessions/${encodeURIComponent(selectedId.value)}/image/${ref}`;
+function TranscriptImage({ src }) {
+  const known = imgLoaded.has(src);
+  const [phase, setPhase] = useState(known ? "loading" : "wait"); // wait → loading → shown | failed
+  const holding = useRef(false); // owns one of the loader's slots
+  const release = () => {
+    if (!holding.current) return;
+    holding.current = false;
+    imgActive--;
+    pumpImages();
+  };
+  useEffect(() => {
+    if (known) return undefined;
+    let hung = 0;
+    const start = () => {
+      holding.current = true;
+      setPhase("loading");
+      // An <img> has no abort timeout: a request lost to a tunnel black hole hangs for the
+      // platform default, so give its slot back (it keeps loading) after the API timeout.
+      hung = setTimeout(release, API_TIMEOUT_MS);
+    };
+    imgWaiting.push(start);
+    pumpImages();
+    return () => {
+      clearTimeout(hung);
+      const i = imgWaiting.indexOf(start);
+      if (i >= 0) imgWaiting.splice(i, 1);
+      release();
+    };
+  }, [src]);
+  if (phase === "failed") return html`<div class="imgmark">🖼 image</div>`;
+  return html`<div class=${"himg" + (phase === "shown" ? "" : " skel")}>
+    ${phase !== "wait" &&
+    html`<img
+      src=${src}
+      alt="image"
+      fetchpriority="low"
+      onLoad=${() => {
+        imgLoaded.add(src);
+        setPhase("shown");
+        release();
+      }}
+      onError=${() => {
+        setPhase("failed");
+        release();
+      }}
+      onClick=${() => (lightbox.value = src)}
+    />`}
+  </div>`;
+}
+
+function Lightbox() {
+  if (!lightbox.value) return null;
+  return html`<div class="lightbox" onClick=${() => (lightbox.value = null)}><img src=${lightbox.value} alt="image" /></div>`;
+}
+
 // One conversational turn → a sequence of chat elements: text blocks become
 // bubbles (user right / assistant left), tool calls become chips (ToolChip), image
 // attachments become a 🖼 marker; thinking is omitted and tool results survive only as
@@ -2894,7 +2990,11 @@ function Turn({ turn, upCount, canCode }) {
   const els = [];
   for (const b of turn.content || []) {
     if (b.type === "image") {
-      els.push(html`<div class="imgmark">🖼 image</div>`);
+      els.push(
+        b.ref
+          ? html`<${TranscriptImage} key=${imageSrc(b.ref)} src=${imageSrc(b.ref)} />`
+          : html`<div class="imgmark">🖼 image</div>`,
+      );
       continue;
     }
     // User captions arrive prefixed with "[Image #N]" markers and "[File: <path>]" refs —
@@ -4251,7 +4351,7 @@ function Composer({ disabled, status }) {
                 <button class="thumbx" onClick=${() => removeAttachment(a.url)} aria-label="Remove">×</button>
               </div>`
             : html`<div class="thumb" key=${a.url}>
-                <img src=${a.url} alt="" />
+                <img src=${a.url} alt="" onClick=${() => (lightbox.value = a.url)} />
                 <button class="thumbx" onClick=${() => removeAttachment(a.url)} aria-label="Remove">×</button>
               </div>`,
         )}
@@ -5018,7 +5118,7 @@ function Detail() {
             key=${`pi${i}`}
             ...${lpProps(entry.text ? lpStartCopyOnly(entry.text) : undefined)}
           >
-            ${entry.urls.length > 0 && html`<div class="bubthumbs">${entry.urls.map((u) => html`<img src=${u} alt="" key=${u} />`)}</div>`}
+            ${entry.urls.length > 0 && html`<div class="bubthumbs">${entry.urls.map((u) => html`<img src=${u} alt="" key=${u} onClick=${() => (lightbox.value = u)} />`)}</div>`}
             ${(entry.files || []).map((n) => html`<div class="bubfile" key=${n}>📎 ${n}</div>`)}
             ${entry.text && html`<div>${entry.text}</div>`}
             <${SendingTag} />
@@ -6134,7 +6234,7 @@ function App() {
   // Bottom connectivity banner: a failed fetch (NO_RESPONSE) is the persistent
   // state (stays until a refresh succeeds); a dropped SSE socket is the transient one.
   const banner = error.value === NO_RESPONSE ? NO_RESPONSE : !connected.value ? "reconnecting…" : null;
-  return html`${screen}${banner && html`<div class="offline">${banner}</div>`}<${ActionSheet} /><${SessionSheet} /><${ConfigSheet} /><${AgentList} /><${SubagentView} /><${DiffView} /><${FilesView} /><${NoticeToast} /><${CopiedToast} />`;
+  return html`${screen}${banner && html`<div class="offline">${banner}</div>`}<${ActionSheet} /><${SessionSheet} /><${ConfigSheet} /><${AgentList} /><${SubagentView} /><${DiffView} /><${FilesView} /><${NoticeToast} /><${CopiedToast} /><${Lightbox} />`;
 }
 
 // A brief centered "✓ copied" pill, shown on any successful clipboard write.

@@ -991,6 +991,20 @@
       /* thumbnails inside an optimistic sent bubble */
       .imgbubble .bubthumbs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
       .imgbubble .bubthumbs img { width: 120px; max-width: 60vw; border-radius: 10px; }
+      .thumb img, .imgbubble .bubthumbs img { cursor: zoom-in; }
+      /* history image (TranscriptImage): a pulsing skeleton until the low-priority loader gets to it */
+      .himg { width: 120px; max-width: 60vw; margin: 2px 0 2px auto; border-radius: 10px; overflow: hidden; }
+      .himg img { display: block; width: 100%; cursor: zoom-in; }
+      .himg.skel { height: 90px; background: var(--surface); border: 1px solid var(--dim); animation: himg-pulse 1.4s ease-in-out infinite; }
+      .himg.skel img { opacity: 0; }
+      @keyframes himg-pulse { 50% { opacity: 0.5; } }
+      .lightbox {
+        position: fixed; inset: 0; z-index: 60;
+        display: flex; align-items: center; justify-content: center;
+        padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+        background: #000;
+      }
+      .lightbox img { max-width: 100%; max-height: 100%; object-fit: contain; }
       /* history marker for an image attachment — right-aligned like a user bubble */
       .imgmark {
         display: block;
