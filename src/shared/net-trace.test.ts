@@ -30,6 +30,13 @@ test("an error status from the bridge or Tailscale's proxy records the status, n
 test("a fetch the app aborted on purpose is not a failure", () => {
   const abort = Object.assign(new Error("aborted"), { name: "AbortError" });
   expect(fetchFailure({ ...base, error: abort })).toBeNull();
+  expect(fetchFailure({ ...base, error: abort, signal: { reason: { name: "AbortError" } } })).toBeNull();
+});
+
+test("an iOS timeout, which WebKit rejects as AbortError, is recorded as a timeout", () => {
+  const abort = Object.assign(new Error("aborted"), { name: "AbortError" });
+  const entry = fetchFailure({ ...base, error: abort, signal: { reason: { name: "TimeoutError" } } });
+  expect(entry).toMatchObject({ kind: "fetch", error: "TimeoutError" });
 });
 
 test("a stream gap counts only the time the app was on screen", () => {

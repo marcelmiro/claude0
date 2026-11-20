@@ -5,6 +5,7 @@ export declare function fetchFailure(args: {
   startedAt: number;
   now: number;
   error?: { name: string };
+  signal?: { reason?: { name?: string } } | null;
   status?: number;
   hidden: boolean;
   foregroundAt: number;
