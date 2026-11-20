@@ -67,10 +67,11 @@ window.fetch = (input, init = {}) => {
   const headers = new Headers(init.headers || {});
   headers.set("x-claude0-device", DEVICE_ID);
   const startedAt = Date.now();
+  const opts = withTimeout({ ...init, headers }, API_TIMEOUT_MS);
   const traced = (extra) =>
-    traceNet(fetchFailure({ url: typeof input === "string" ? input : input.url, method: init.method || "GET", startedAt, now: Date.now(), ...extra, ...pageContext() }));
+    traceNet(fetchFailure({ url: typeof input === "string" ? input : input.url, method: init.method || "GET", startedAt, now: Date.now(), signal: opts.signal, ...extra, ...pageContext() }));
   apiInFlight++;
-  return rawFetch(input, withTimeout({ ...init, headers }, API_TIMEOUT_MS))
+  return rawFetch(input, opts)
     .then(
       (r) => {
         if (r.status >= 500) traced({ status: r.status });

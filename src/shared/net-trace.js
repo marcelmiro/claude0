@@ -13,16 +13,19 @@ const STREAM_GAP_MIN_VISIBLE_MS = 3_000;
  * rejection's name — TimeoutError: no response before the timeout; TypeError: the
  * connection failed outright. `status` instead: something answered with a 5xx (a 502 from
  * Tailscale serve means the tunnel reached the VM and the bridge didn't answer).
+ * `signal` is the one the request ran with: WebKit rejects a timed-out fetch with
+ * AbortError, so only the signal's reason tells a timeout from the app's own cancel.
  */
-export function fetchFailure({ url, method, startedAt, now, error, status, hidden, foregroundAt, online }) {
-  if (error?.name === "AbortError") return null;
+export function fetchFailure({ url, method, startedAt, now, error, signal, status, hidden, foregroundAt, online }) {
+  const timedOut = signal?.reason?.name === "TimeoutError";
+  if (error?.name === "AbortError" && !timedOut) return null;
   return {
     kind: "fetch",
     at: new Date(startedAt).toISOString(),
     method,
     path: new URL(url, "http://x").pathname,
     ms: now - startedAt,
-    ...(status ? { status } : { error: error?.name ?? "Error" }),
+    ...(status ? { status } : { error: timedOut ? "TimeoutError" : (error?.name ?? "Error") }),
     hidden,
     sinceForegroundMs: startedAt - foregroundAt,
     online,
