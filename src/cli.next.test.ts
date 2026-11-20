@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { nextTier } from "./cli";
+import { nextCandidates, nextTier } from "./cli";
 import { detectStatus } from "./core/status";
 import { fixture } from "../test/helpers/fixture";
 
@@ -37,4 +37,14 @@ test("a finished turn ranks last", () => {
     "────────────────────────────────────────\n" +
     "  ctx 12%\n";
   expect(tier(done)).toBe(3);
+});
+
+test("a pane still waiting on its prompt stays a candidate after its flag clears", () => {
+  const sessions = {
+    "%1": { status: "ready", needsAttention: true, lastTransition: 1 },
+    "%2": { status: "waiting", needsAttention: false },
+    "%3": { status: "ready", needsAttention: false },
+    "%4": { status: "waiting", needsAttention: false },
+  };
+  expect(nextCandidates(sessions, "%4").map(([k]) => k)).toEqual(["%1", "%2"]);
 });

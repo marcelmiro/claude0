@@ -24,7 +24,7 @@ import { nativeStatus, resolveStatus } from "./core/session-state";
 import { loadNameCache, getSessionName, slugify } from "./core/names";
 import { PATHS, DEFAULT_CONFIG, loadConfig, saveConfig, ensureUserConfig, tmuxKeys, resolveRole } from "./core/config";
 import { renderTmuxFragment, renderTerminalLauncher, importAccepted, installedHookVersion, runDoctor, envValue, REQUIRED_TOOLS, CLIENT_TOOLS } from "./core/doctor";
-import type { Config, DeploymentRole } from "./types";
+import type { Config, DeploymentRole, SessionNotificationState } from "./types";
 import { PRESENCE_WINDOW_S } from "./core/presence";
 import { pickSavedCwd, resolveRestoreTarget, resolveResurrect, resurrectOptionSet, resurrectRenderDir, resurrectCommand, cloneResurrectCommands, RESURRECT_COMMIT, daemonSaveCommand, RESURRECT_SAVE_INTERVAL_MS } from "./core/resurrect";
 import { pickRepoPath } from "./core/sessions";
@@ -49,6 +49,20 @@ export function nextTier(plain: string, status: SessionStatus): number {
   if (/Would you like to proceed/i.test(bottom)) return 2;
   if (questionPickerVisible(plain)) return 1;
   return status === "waiting" ? 0 : 3;
+}
+
+/**
+ * Panes `next` considers, oldest attention first. A pane blocked on a prompt (tool
+ * approval, question, plan) stays a candidate after its flag is cleared — looking at it
+ * (the monitor's focus clear, or `next` leaving it) doesn't answer it. Exported for tests.
+ */
+export function nextCandidates(
+  sessions: Record<string, SessionNotificationState>,
+  activePaneId: string | undefined,
+): [string, SessionNotificationState][] {
+  return Object.entries(sessions)
+    .filter(([key, s]) => s.needsAttention || (s.status === "waiting" && key !== activePaneId))
+    .sort((a, b) => (a[1].lastTransition ?? Infinity) - (b[1].lastTransition ?? Infinity));
 }
 
 /**
@@ -90,11 +104,7 @@ export async function next(): Promise<void> {
     // Not in tmux context
   }
 
-  const attentionSessions = Object.entries(state.sessions)
-    .filter(([_, s]) => s.needsAttention)
-    .sort(
-      (a, b) => (a[1].lastTransition ?? Infinity) - (b[1].lastTransition ?? Infinity),
-    );
+  const attentionSessions = nextCandidates(state.sessions, activePaneId);
 
   // Validate candidates from state: check pane still exists and session still needs attention
   let target: { paneId: string; tmuxSession: string; tmuxWindow: number } | null = null;
@@ -118,6 +128,9 @@ export async function next(): Promise<void> {
       .replace(/\x1b[\x20-\x2f]*[\x30-\x7e]/g, "")
       .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
     const result = detectStatus(plain, true);
+
+    // Unflagged, it's a candidate only while still blocked on its prompt.
+    if (!s.needsAttention && result.status !== "waiting") continue;
 
     if (result.status === "running" || result.status === "idle") {
       // Session no longer needs attention — clear stale flag, sync prefix

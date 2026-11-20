@@ -39,7 +39,9 @@ Hook-held approvals push on their own path (`dispatchHeldApprovalPushes`), dedup
 `claude0 next` (prefix a) jumps to the attention session whose reply is quickest — tool
 approval, then AskUserQuestion, then plan approval, then a finished turn — oldest first
 within each. It ranks from each pane's live capture (`nextTier`, `cli.ts`), not the stored
-blocked/turnComplete classification, which can't separate the three blocked kinds.
+blocked/turnComplete classification, which can't separate the three blocked kinds. A pane still
+blocked on a prompt stays a candidate after its ⚡ clears — looking at it doesn't answer it
+(`nextCandidates`); the pane you're on is skipped.
 
 ## Who drove the turn
 
