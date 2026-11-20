@@ -48,6 +48,21 @@ export const FIXTURE_SESSIONS = [
     inbox: { section: "needs-you", since: agoMs(4 * 60_000) },
   },
   {
+    id: "fix-approval",
+    repo: "claude0",
+    branch: "main",
+    status: "waiting",
+    name: "Backfill Script",
+    label: "Backfill Script",
+    pending: "approval",
+    unread: false,
+    messageCount: 21,
+    summary: "Generate the backfill SQL in batches",
+    statusSource: "fixture",
+    modified: ago(5 * 60_000),
+    inbox: { section: "needs-you", since: agoMs(5 * 60_000) },
+  },
+  {
     id: "push-retry",
     repo: "claude0",
     branch: "push-retry-backoff",
@@ -566,6 +581,32 @@ const FIXTURE_DIALOG = {
   cursor: 0,
 };
 
+// A Bash approval whose command (a heredoc script) is taller than a phone screen.
+const FIXTURE_APPROVAL_COMMAND = [
+  "mkdir -p /tmp/backfill/sql; cat > /tmp/backfill/gen.ts <<'EOF'",
+  'import { readFileSync, writeFileSync } from "node:fs";',
+  "const [dir, idsFile, outDir, perFile] = process.argv.slice(2);",
+  'const ids = readFileSync(idsFile, "utf8").split("\\n").filter(Boolean);',
+  "const rows: unknown[] = [];",
+  "let refused = 0;",
+  "for (const id of ids) {",
+  "  const envelope = JSON.parse(readFileSync(`${dir}/${id}.json`, \"utf8\"));",
+  "  if (!envelope.segments) { refused++; continue; }",
+  "  rows.push({ call_id: id, chars: envelope.chars, segments: envelope.segments.length });",
+  "}",
+  ...Array.from({ length: 30 }, (_, i) => `// batch step ${i + 1}: write part-${String(i + 1).padStart(2, "0")}.sql`),
+  "console.log(`rows=${rows.length} refused=${refused}`);",
+  "EOF",
+  "cd /tmp/backfill && bun gen.ts transcripts ids.txt sql 5000 | tail -3; ls -la sql | tail -6",
+].join("\n");
+const FIXTURE_APPROVAL = {
+  sessionId: "fix-approval",
+  ts: 0,
+  tool: "Bash",
+  tool_use_id: "toolu_fixture_approval",
+  input: { command: FIXTURE_APPROVAL_COMMAND, description: "Generate the backfill SQL in batches" },
+};
+
 export const FIXTURE_REPOS = [
   { name: "throxy", path: "/Users/throxy/dev/throxy", branch: "main", isWorktree: false, recent: 0 },
   { name: "throxy", path: "/Users/throxy/dev/throxy/.claude/worktrees/add-tomba-as-enrichment-provider", branch: "marcelmiro/tf-1498-add-tomba-as-enrichment-provider", isWorktree: true, head: "3f9a1c0e5b7d2a41c8e0f6b19d2a7c4e5f3b8a10", committedAt: agoMs(2 * 3600_000) },
@@ -758,6 +799,7 @@ export function fixtureData(method: string, path: string, params?: URLSearchPara
   const tm = path.match(/^\/sessions\/([^/]+)\/transcript$/);
   if (method === "GET" && tm) {
     if (tm[1] === "fix-dialog") return { ...FIXTURE_TRANSCRIPT, openQuestion: null, dialog: FIXTURE_DIALOG };
+    if (tm[1] === "fix-approval") return { ...FIXTURE_TRANSCRIPT, openQuestion: null, approval: FIXTURE_APPROVAL };
     // A typed draft, a stash-only box and a shell-mode command at the Mac (the composer's macDraft note).
     if (tm[1] === "push-retry") {
       return { ...FIXTURE_TRANSCRIPT, openQuestion: null, macDraft: { text: "skip #1. how would you do #2? and keep the retry budget per device, not global", stashed: false, shell: false, cuttable: true } };

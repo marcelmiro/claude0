@@ -1392,7 +1392,11 @@
       .chat-about { flex: none; margin-top: 8px; padding: 12px; border: 1px solid var(--dim); border-radius: 10px; background: var(--surface); color: var(--muted); font-size: 14px; font-weight: 600; }
 
       /* approval card: distinct primary (Allow) vs secondary (Deny); destructive
-         commands get a red command box + a warning tag */
+         commands get a red command box + a warning tag. Capped like .qcard: a long
+         command scrolls inside its box so the buttons never leave the screen. */
+      .acard { display: flex; flex-direction: column; max-height: 68dvh; }
+      .acard > * { flex: none; }
+      .acard > pre { flex: 0 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
       .approve-desc { color: var(--muted); font-size: 13px; margin-bottom: 2px; }
       pre.cmd-danger { color: var(--red); background: var(--danger-bg); border: 1px solid var(--danger-border); border-radius: 6px; padding: 8px; }
       .risk-tag { color: var(--red); font-size: 12px; font-weight: 700; margin-top: 6px; }
