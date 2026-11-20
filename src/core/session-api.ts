@@ -1383,12 +1383,12 @@ export async function interruptSession(sessionId: string): Promise<SendResult> {
 /**
  * Whether Claude's queue held messages at an Escape sent just after `mark`: queued at the
  * mark, or — when Claude hadn't flushed the enqueue yet — the user's enqueue the Escape's
- * auto-submit writes past it. A revert writes none.
+ * auto-submit writes past it, or the compaction the Escape canceled. A revert writes none.
  */
 export async function queuedAtEscape(mark: { path: string; size: number }): Promise<boolean | undefined> {
   const atMark = await queuedAtMark(mark);
   if (atMark !== false) return atMark;
-  return userEnqueueAfter(mark, 400);
+  return userEnqueueAfter(mark, 400, { canceledCompaction: true });
 }
 
 /**
@@ -1423,17 +1423,28 @@ export async function transcriptMark(sessionId: string): Promise<{ path: string;
  * notifications) don't count: they arrive any time. An enqueue with no text does: Claude
  * Code writes a message queued during a compaction without it (93 of the 97 text-less
  * enqueues in a week came just before a compaction ended).
+ *
+ * `canceledCompaction` also counts a dequeue plus a "Compaction canceled." record: an
+ * Escape during a compaction cancels it and the queue auto-submits, the entry having been
+ * enqueued (with no text, so `queuedAtMark` can't see it) before the mark.
  */
-export async function userEnqueueAfter(mark: { path: string; size: number }, timeoutMs: number): Promise<boolean> {
+export async function userEnqueueAfter(
+  mark: { path: string; size: number },
+  timeoutMs: number,
+  { canceledCompaction = false } = {},
+): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   let offset = mark.size; // past the complete lines already scanned — each poll reads only new bytes
+  let dequeued = false;
+  let canceled = false;
   for (;;) {
     try {
       const bytes = new Uint8Array(await Bun.file(mark.path).slice(offset).arrayBuffer());
       const end = bytes.lastIndexOf(10) + 1; // a torn last line waits for the next poll
       for (const line of new TextDecoder().decode(bytes.subarray(0, end)).split("\n")) {
-        if (!line.includes('"queue-operation"')) continue;
-        let rec: { type?: unknown; operation?: unknown; content?: unknown };
+        const cancelLine = canceledCompaction && line.includes("Compaction canceled.");
+        if (!line.includes('"queue-operation"') && !cancelLine) continue;
+        let rec: { type?: unknown; subtype?: unknown; operation?: unknown; content?: unknown };
         try {
           rec = JSON.parse(line);
         } catch {
@@ -1441,6 +1452,9 @@ export async function userEnqueueAfter(mark: { path: string; size: number }, tim
         }
         const enqueue = rec.type === "queue-operation" && rec.operation === "enqueue";
         if (enqueue && (typeof rec.content !== "string" || isUserQueueEntry(rec.content))) return true;
+        if (rec.type === "queue-operation" && rec.operation === "dequeue") dequeued = true;
+        if (cancelLine && rec.type === "system" && rec.subtype === "local_command") canceled = true;
+        if (dequeued && canceled) return true;
       }
       offset += end;
     } catch {

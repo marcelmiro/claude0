@@ -107,8 +107,9 @@ whether the input box was occupied:
   prompt, and an Escape before it streams reverts it — so the client re-decides on that.
 - Escape during a compaction cancels it ("Compaction canceled.") and a queued message
   auto-submits ~0.3s later (2.1.329, lab run). A message queued during a compaction is
-  enqueued with no text, so `queuedAtEscape` can't see it: while `compacting`, the client
-  keeps its own send's `queued` answer over the bridge's "not queued" (`onStop`).
+  enqueued with no text, so `queuedAtMark` can't see it; `queuedAtEscape` answers queued
+  on the dequeue plus the "Compaction canceled." record the Escape writes past the mark
+  (`userEnqueueAfter`). A cancel with nothing queued writes no dequeue.
 - `/rewind` lists every sent prompt, including several submitted together with no reply
   in between and back-to-back `!cmd` turns. It never lists a prompt followed only by an
   interrupt marker before the next prompt (`promptCheckpointIndices`, `app.js`).

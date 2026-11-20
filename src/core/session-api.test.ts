@@ -1140,6 +1140,27 @@ test("queuedAtEscape: an enqueue Claude flushes only with the Escape's auto-subm
   expect(await pending).toBe(true);
 });
 
+test("queuedAtEscape: an Escape that cancels a compaction with a message queued counts as queued", async () => {
+  const path = join(PATHS.dir, "q-compact.jsonl");
+  // Shapes from a Claude Code 2.1.329 lab run: the message queued during the compaction is
+  // enqueued with no text, before the mark.
+  const before = JSON.stringify({ type: "queue-operation", operation: "enqueue" }) + "\n";
+  const dequeue = JSON.stringify({ type: "queue-operation", operation: "dequeue" }) + "\n";
+  const canceled =
+    JSON.stringify({
+      type: "system",
+      subtype: "local_command",
+      content: "<local-command-stdout>Compaction canceled.</local-command-stdout>",
+    }) + "\n";
+  const mark = { path, size: before.length };
+  writeFileSync(path, before + dequeue + canceled);
+  expect(await queuedAtEscape(mark)).toBe(true);
+  writeFileSync(path, before + canceled); // canceled with nothing queued: no dequeue
+  expect(await queuedAtEscape(mark)).toBe(false);
+  writeFileSync(path, before + dequeue); // taken at the compaction's end, then reverted
+  expect(await queuedAtEscape(mark)).toBe(false);
+});
+
 test("clearPaneInput: no pane mapping → no-pane, sends nothing", async () => {
   const r = await clearPaneInput("ghost-session");
   expect(r).toEqual({ ok: false, reason: "no-pane" });
