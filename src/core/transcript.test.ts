@@ -97,8 +97,10 @@ test("image block parses to a byte-free marker (drops the base64 source)", () =>
     '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Image #1] look"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAAconst-big-base64"}}]}}';
   const all = blocks(parseTranscript(raw));
   const img = all.find((b) => b.type === "image");
-  expect(img).toEqual({ type: "image" }); // no `source`/`data`
+  expect(img).toEqual({ type: "image" }); // no `source`/`data`, and no uuid → no ref
   expect(JSON.stringify(parseTranscript(raw))).not.toContain("base64");
+  const withUuid = raw.replace('{"type":"user",', '{"type":"user","uuid":"u-1",');
+  expect(blocks(parseTranscript(withUuid)).find((b) => b.type === "image")).toEqual({ type: "image", ref: "u-1/1" });
 });
 
 test("tolerates a truncated last line and unknown keys", () => {

@@ -228,7 +228,7 @@ function recordToTurnBody(record: RawRecord): FoldableTurn | null {
     typeof content === "string"
       ? [{ type: "text", text: content }]
       : Array.isArray(content)
-        ? (content as RawBlock[]).map(toBlock).filter((b): b is TranscriptBlock => b !== null)
+        ? (content as RawBlock[]).map((b, i) => toBlock(b, record.uuid, i)).filter((b): b is TranscriptBlock => b !== null)
         : [];
 
   // An executed slash command's runner record (`<command-name>…`): map to a command turn
@@ -530,8 +530,8 @@ export function lastAssistantMessage(turns: TranscriptTurn[]): string | undefine
   return undefined;
 }
 
-/** Map one raw content block to a typed `TranscriptBlock`, or null if unknown. */
-function toBlock(block: RawBlock): TranscriptBlock | null {
+/** Map one raw content block (at `index` in record `uuid`) to a typed `TranscriptBlock`, or null if unknown. */
+function toBlock(block: RawBlock, uuid: string | undefined, index: number): TranscriptBlock | null {
   switch (block.type) {
     case "text":
       return { type: "text", text: block.text ?? "" };
@@ -542,7 +542,9 @@ function toBlock(block: RawBlock): TranscriptBlock | null {
     case "tool_result":
       return { type: "tool_result", tool_use_id: block.tool_use_id ?? "", content: block.content, is_error: block.is_error };
     case "image":
-      return { type: "image" }; // drop the (large base64) source — keep only a marker
+      // Drop the (large base64) source — keep a marker plus where to read it back from
+      // (`readTranscriptImage`, core/transcript-image.ts).
+      return uuid ? { type: "image", ref: `${uuid}/${index}` } : { type: "image" };
     default:
       return null; // unknown block type — drop
   }
