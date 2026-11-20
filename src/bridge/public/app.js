@@ -2914,9 +2914,23 @@ function TranscriptImage({ src }) {
   </div>`;
 }
 
+// Inset, framed and over a blurred app, so a screenshot of this same screen still reads as a
+// preview; it eases in and out instead of flashing. Any tap closes it.
 function Lightbox() {
+  const [closing, setClosing] = useState(false);
   if (!lightbox.value) return null;
-  return html`<div class="lightbox" onClick=${() => (lightbox.value = null)}><img src=${lightbox.value} alt="image" /></div>`;
+  return html`<div
+    class=${"lightbox" + (closing ? " closing" : "")}
+    onClick=${() => setClosing(true)}
+    onAnimationEnd=${(e) => {
+      if (!closing || e.target !== e.currentTarget) return;
+      setClosing(false);
+      lightbox.value = null;
+    }}
+  >
+    <img src=${lightbox.value} alt="image" />
+    <button class="lightbox-x" aria-label="Close">×</button>
+  </div>`;
 }
 
 // One conversational turn → a sequence of chat elements: text blocks become

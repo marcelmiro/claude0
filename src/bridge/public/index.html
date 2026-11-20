@@ -1001,10 +1001,31 @@
       .lightbox {
         position: fixed; inset: 0; z-index: 60;
         display: flex; align-items: center; justify-content: center;
-        padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
-        background: #000;
+        padding: calc(env(safe-area-inset-top) + 60px) calc(env(safe-area-inset-right) + 16px)
+          calc(env(safe-area-inset-bottom) + 32px) calc(env(safe-area-inset-left) + 16px);
+        background: rgba(0, 0, 0, 0.75);
+        -webkit-backdrop-filter: blur(12px);
+        backdrop-filter: blur(12px);
+        animation: lb-fade 180ms ease-out;
       }
-      .lightbox img { max-width: 100%; max-height: 100%; object-fit: contain; }
+      .lightbox img {
+        max-width: 100%; max-height: 100%; object-fit: contain;
+        border: 1px solid var(--dim); border-radius: 12px;
+        box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+        animation: lb-zoom 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+      }
+      .lightbox.closing { animation: lb-fade-out 150ms ease-in forwards; }
+      .lightbox.closing img { animation: lb-zoom-out 150ms ease-in forwards; }
+      .lightbox-x {
+        position: absolute; top: calc(env(safe-area-inset-top) + 12px); right: calc(env(safe-area-inset-right) + 12px);
+        width: 36px; height: 36px; padding: 0;
+        border: 1px solid var(--dim); border-radius: 50%;
+        background: var(--surface); color: var(--fg); font-size: 20px; line-height: 1;
+      }
+      @keyframes lb-fade { from { opacity: 0; } }
+      @keyframes lb-zoom { from { opacity: 0; transform: scale(0.92); } }
+      @keyframes lb-fade-out { to { opacity: 0; } }
+      @keyframes lb-zoom-out { to { transform: scale(0.96); } }
       /* history marker for an image attachment — right-aligned like a user bubble */
       .imgmark {
         display: block;
