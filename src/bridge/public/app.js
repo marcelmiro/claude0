@@ -2859,7 +2859,9 @@ function fmtGap(ms) {
 }
 
 // A history image: skeleton → the image (tap for full-screen) via the low-priority loader
-// (pumpImages), or the plain "🖼 image" chip when it can't be read back.
+// (pumpImages), or the plain "🖼 image" chip when it can't be read back. Mount it keyed by
+// its ref (a record uuid, unique across sessions): its phase and loader slot belong to one
+// image, and Detail stays mounted across session switches with turns keyed by index.
 function TranscriptImage({ src }) {
   const known = imgLoaded.has(src);
   const [phase, setPhase] = useState(known ? "loading" : "wait"); // wait → loading → shown | failed
@@ -2872,13 +2874,18 @@ function TranscriptImage({ src }) {
   };
   useEffect(() => {
     if (known) return undefined;
+    let hung = 0;
     const start = () => {
       holding.current = true;
       setPhase("loading");
+      // An <img> has no abort timeout: a request lost to a tunnel black hole hangs for the
+      // platform default, so give its slot back (it keeps loading) after the API timeout.
+      hung = setTimeout(release, API_TIMEOUT_MS);
     };
     imgWaiting.push(start);
     pumpImages();
     return () => {
+      clearTimeout(hung);
       const i = imgWaiting.indexOf(start);
       if (i >= 0) imgWaiting.splice(i, 1);
       release();
@@ -2983,7 +2990,7 @@ function Turn({ turn, upCount, canCode }) {
     if (b.type === "image") {
       els.push(
         b.ref
-          ? html`<${TranscriptImage} src=${`/sessions/${encodeURIComponent(selectedId.value)}/image/${b.ref}`} />`
+          ? html`<${TranscriptImage} key=${b.ref} src=${`/sessions/${encodeURIComponent(selectedId.value)}/image/${b.ref}`} />`
           : html`<div class="imgmark">🖼 image</div>`,
       );
       continue;

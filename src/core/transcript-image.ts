@@ -8,6 +8,16 @@ import { isValidSessionId, resolveTranscriptPaths } from "./last-turn";
 
 const MEDIA_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
+/** The JSONL fields this reader touches — everything else on the record is ignored. */
+interface RawImageRecord {
+  uuid?: unknown;
+  message?: { content?: unknown };
+}
+interface RawImageBlock {
+  type?: unknown;
+  source?: { type?: unknown; data?: unknown; media_type?: unknown };
+}
+
 export interface TranscriptImage {
   bytes: Uint8Array<ArrayBuffer>;
   mediaType: string;
@@ -28,7 +38,7 @@ export async function readTranscriptImage(
     for (const path of [...(await resolveTranscriptPaths(sessionId, projectsDir))].reverse()) {
       for await (const line of jsonlLines(path)) {
         if (!line.includes(uuid)) continue; // skip the parse for every other record
-        let record: { uuid?: unknown; message?: { content?: unknown } };
+        let record: RawImageRecord;
         try {
           record = JSON.parse(line);
         } catch {
@@ -36,9 +46,10 @@ export async function readTranscriptImage(
         }
         if (record.uuid !== uuid) continue; // a child naming it as parentUuid
         const content = record.message?.content;
-        const block = Array.isArray(content) ? content[index] : undefined;
+        const block: RawImageBlock | undefined = Array.isArray(content) ? content[index] : undefined;
         const src = block?.type === "image" ? block.source : undefined;
-        if (src?.type !== "base64" || typeof src.data !== "string" || !MEDIA_TYPES.has(src.media_type)) return null;
+        if (src?.type !== "base64" || typeof src.data !== "string" || typeof src.media_type !== "string") return null;
+        if (!MEDIA_TYPES.has(src.media_type)) return null;
         return { bytes: new Uint8Array(Buffer.from(src.data, "base64")), mediaType: src.media_type };
       }
     }
