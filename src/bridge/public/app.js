@@ -2860,8 +2860,10 @@ function fmtGap(ms) {
 
 // A history image: skeleton → the image (tap for full-screen) via the low-priority loader
 // (pumpImages), or the plain "🖼 image" chip when it can't be read back. Mount it keyed by
-// its ref (a record uuid, unique across sessions): its phase and loader slot belong to one
-// image, and Detail stays mounted across session switches with turns keyed by index.
+// `src`, not the ref alone: its phase and loader slot belong to one image, Detail stays
+// mounted across session switches with turns keyed by index, and a fork shares its parent's
+// record uuids (the seeded transcript is a copy).
+const imageSrc = (ref) => `/sessions/${encodeURIComponent(selectedId.value)}/image/${ref}`;
 function TranscriptImage({ src }) {
   const known = imgLoaded.has(src);
   const [phase, setPhase] = useState(known ? "loading" : "wait"); // wait → loading → shown | failed
@@ -2990,7 +2992,7 @@ function Turn({ turn, upCount, canCode }) {
     if (b.type === "image") {
       els.push(
         b.ref
-          ? html`<${TranscriptImage} key=${b.ref} src=${`/sessions/${encodeURIComponent(selectedId.value)}/image/${b.ref}`} />`
+          ? html`<${TranscriptImage} key=${imageSrc(b.ref)} src=${imageSrc(b.ref)} />`
           : html`<div class="imgmark">🖼 image</div>`,
       );
       continue;
