@@ -59,6 +59,7 @@ import {
 import { nativeStatus, parkedJobSessions } from "../core/session-state";
 import { pendingScriptsAt, backgroundLead, screenTotal, withScreenTotals, type BackgroundTask, type BackgroundLead } from "../core/background-tasks";
 import { isValidSessionId, resolveTranscriptPath, resolveTranscriptPaths } from "../core/last-turn";
+import { readTranscriptImage } from "../core/transcript-image";
 import { homedir } from "os";
 import { discoverRepos, getBaseRepoPath } from "../core/git";
 import { recentRepos } from "../core/recent-repos";
@@ -1339,6 +1340,8 @@ export function applyTail(payload: Record<string, unknown>, tailParam: string | 
 // matching exactly what the real handler below matches, or `?tail` silently diverges
 // between demo and production.
 const TRANSCRIPT_PATH = /^\/sessions\/([^/]+)\/transcript$/;
+// An image block's bytes, by the `ref` its transcript marker carries ("<uuid>/<index>").
+const IMAGE_PATH = /^\/sessions\/([^/]+)\/image\/([^/]+\/\d+)$/;
 
 // Shell-sheet scrollback: the last runs, oldest first. Process memory only (see the route).
 const shellRuns: ShellRun[] = [];
@@ -1516,6 +1519,18 @@ async function route(req: Request): Promise<Response> {
       }
     }
     return json(applyTail(await composeTranscriptPayload(id), url.searchParams.get("tail")));
+  }
+
+  const image = path.match(IMAGE_PATH);
+  if (method === "GET" && image) {
+    const id = decodeURIComponent(image[1]!);
+    const txId = (await parkedJobSessions()).get(id) ?? id;
+    const img = await readTranscriptImage(txId, decodeURIComponent(image[2]!));
+    if (!img) return json({ ok: false, reason: "not-found" }, 404);
+    // A ref names one record's block, which Claude Code never rewrites — cache for good.
+    return new Response(img.bytes, {
+      headers: { "content-type": img.mediaType, "cache-control": "private, max-age=31536000, immutable" },
+    });
   }
 
   // Transcript subscription (versioned state push): the device tells the bridge which

@@ -274,9 +274,10 @@ export type TranscriptBlock =
   // renders as a conversation exchange instead of an opaque chip.
   | { type: "tool_use"; id: string; name: string; input: unknown; result?: ToolResultSummary; qa?: QuestionAnswer[] }
   | { type: "tool_result"; tool_use_id: string; content: unknown; is_error?: boolean }
-  // Byte-free marker only: the source's base64 image data is dropped at parse time so it
-  // never bloats the transcript payload — the UI just shows a "🖼 image" chip.
-  | { type: "image" };
+  // Byte-free marker: the source's base64 image data is dropped at parse time so it never
+  // bloats the transcript payload. `ref` ("<record uuid>/<block index>") is where the bytes
+  // sit in the JSONL — the bridge's image route reads them back on demand.
+  | { type: "image"; ref?: string };
 
 export interface QuestionAnswer {
   q: string; // the question asked (capped)
