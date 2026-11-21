@@ -20,6 +20,7 @@
 // Re-export so the contract test can import these from "./transcript".
 export type { TranscriptBlock, TranscriptTurn } from "../types";
 import type { TranscriptBlock, TranscriptTurn } from "../types";
+import { unwrapPastedContent } from "./pasted-content";
 
 interface RawBlock {
   type?: string;
@@ -192,7 +193,7 @@ function recordToTurn(record: RawRecord): FoldableTurn | null {
 
 function recordToTurnBody(record: RawRecord): FoldableTurn | null {
   if (isQueuedPromptAttachment(record)) {
-    const text = typeof record.attachment?.prompt === "string" ? record.attachment.prompt : "";
+    const text = typeof record.attachment?.prompt === "string" ? unwrapPastedContent(record.attachment.prompt) : "";
     if (!text || LOCAL_COMMAND_META.test(text) || TASK_NOTIFICATION.test(text)) return null;
     // A teams delivery consumed mid-turn from the input queue is still a teammate
     // message, not something the user queued — render it as a teammate turn. `queued`
@@ -224,12 +225,16 @@ function recordToTurnBody(record: RawRecord): FoldableTurn | null {
     return null;
   }
 
-  const blocks: TranscriptBlock[] =
+  const raw: TranscriptBlock[] =
     typeof content === "string"
       ? [{ type: "text", text: content }]
       : Array.isArray(content)
         ? (content as RawBlock[]).map((b, i) => toBlock(b, record.uuid, i)).filter((b): b is TranscriptBlock => b !== null)
         : [];
+  const blocks =
+    record.type === "user"
+      ? raw.map((b) => (b.type === "text" ? { ...b, text: unwrapPastedContent(b.text) } : b))
+      : raw;
 
   // An executed slash command's runner record (`<command-name>…`): map to a command turn
   // instead of dropping it — the terminal echoes the command as your prompt line; dropping

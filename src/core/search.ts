@@ -5,6 +5,7 @@ import { repoNameFromPath } from "./sessions";
 import { slugify, getSessionName, type NameCache } from "./names";
 import { isConversationalRecord } from "./last-turn";
 import { searchIndex, type ContentIndex } from "./search-index";
+import { unwrapPastedContent } from "./pasted-content";
 
 const home = homedir();
 const projectsDir = `${home}/.claude/projects`;
@@ -429,6 +430,7 @@ async function parseJsonlHeader(filePath: string): Promise<ExtendedIndexEntry | 
             const tb = content.find((b: { type: string }) => b.type === "text");
             if (tb?.text) text = tb.text;
           }
+          text = unwrapPastedContent(text);
           if (text && !text.startsWith("[Request interrupted") && !text.trimStart().startsWith("<")) {
             const clean = text.replace(/\s+/g, " ").trim();
             firstPromptDisplay = clean.length > 200 ? clean.slice(0, 200) + "..." : clean;

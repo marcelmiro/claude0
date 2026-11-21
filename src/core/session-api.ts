@@ -41,6 +41,7 @@ import { recoverWorktreeTranscript } from "./recover";
 import { buildBaseName } from "./notifications";
 import { inheritName, loadNameCache, saveNameCache, slugify } from "./names";
 import { getLatestUserPrompt } from "./sessions";
+import { unwrapPastedContent } from "./pasted-content";
 import { subagentStatus } from "./agent-status";
 import { parseBackgroundTasks, liveScripts, agentScriptsAt, withWorkflowProgress, endedWorkflows, type BackgroundTask } from "./background-tasks";
 import { decideQuestion, declineQuestion, buildAnswersMap } from "./approval";
@@ -1055,7 +1056,7 @@ function queueReplay(): { feed(line: string): void; pending(): string[] } {
           break;
       }
     },
-    pending: () => queue.filter((e) => !e.delivered && isUserQueueEntry(e.text)).map((e) => e.text),
+    pending: () => queue.filter((e) => !e.delivered && isUserQueueEntry(e.text)).map((e) => unwrapPastedContent(e.text)),
   };
 }
 
