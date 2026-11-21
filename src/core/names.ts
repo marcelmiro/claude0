@@ -494,7 +494,9 @@ async function generateOneName(ctx: NamingContext): Promise<{ name: string; fail
   const { timeoutMs = 15_000 } = ctx;
   try {
     const namePrompt = buildNamingPrompt(ctx);
-    const proc = Bun.spawn([CLAUDE_PATH, "-p", "--model", "haiku", "--no-session-persistence"], {
+    // No tools, MCP servers or skills: given tools, haiku tried to read files the prompt
+    // mentioned ("I need permission to read the handoff file…") instead of naming.
+    const proc = Bun.spawn([CLAUDE_PATH, "-p", "--model", "haiku", "--no-session-persistence", "--tools", "", "--strict-mcp-config", "--disable-slash-commands"], {
       stdin: new Response(namePrompt),
       stdout: "pipe",
       stderr: "pipe",

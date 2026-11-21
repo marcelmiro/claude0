@@ -16,7 +16,8 @@ cut), used only on tmux windows, where `reverseNameMap` resolves panes back to s
 ## Generation (`generateAIName`)
 
 - `claude -p --model haiku` from a **neutral cwd** (the caller's cwd loads that repo's
-  workspace context and biases names toward it).
+  workspace context and biases names toward it), with no tools, MCP servers or skills (given
+  tools, haiku answered prompts that mention a file by asking permission to read it).
 - **Inputs**, in prompt order (`buildNamingPrompt`, `core/names.ts`): plan title, branch,
   session intent (the latest compaction summary's "Primary Request and Intent"), first user
   message, first substantive assistant reply, summary, up to three mid-session messages,
