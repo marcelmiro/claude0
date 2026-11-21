@@ -97,15 +97,18 @@ test("workPullRequest: a live worktree's PR is pinned as lastPr so it outlives t
   const byBranch = async (root: string) =>
     root === dir ? ({ state: "open", branch: "tf-1", number: 5, title: "", url: "", add: 0, del: 0 } as const) : ({ state: "none" } as const);
   const byNumber = async (_root: string, n: number) => ({ state: "merged", branch: "tf-1", number: n, title: "", url: "", add: 0, del: 0 }) as const;
-  expect((await workPullRequest(scan, BASE, { byBranch, byNumber })).state).toBe("open");
+  const live = await workPullRequest(scan, BASE, { byBranch, byNumber });
+  expect(live.pr.state).toBe("open");
+  expect(live.dir).toBe(dir);
   expect(scan.lastPr).toBe(5);
 
   rmSync(dir, { recursive: true, force: true }); // landed and cleaned up
-  const pr = await workPullRequest(scan, BASE, { byBranch, byNumber });
-  expect(pr.state === "merged" && pr.number).toBe(5);
+  const landed = await workPullRequest(scan, BASE, { byBranch, byNumber });
+  expect(landed.pr.state === "merged" && landed.pr.number).toBe(5);
+  expect(landed.dir).toBe(BASE); // the PR outlives the worktree; the live checkout is the pane again
 
   // no edits in a worktree and no PR of its own → the pane's own branch
-  expect((await workPullRequest({ path: "p", offset: 0 }, BASE, { byBranch, byNumber })).state).toBe("none");
+  expect((await workPullRequest({ path: "p", offset: 0 }, BASE, { byBranch, byNumber })).pr.state).toBe("none");
 });
 
 test("liveEditDir: falls back when the picked worktree is gone", async () => {

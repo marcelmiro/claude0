@@ -187,7 +187,8 @@ function sessionLine(
   if (opts.oneLine) return [wrap(line1)];
 
   // `repo/branch` (tmux short repo names), dim, aligned with the name. The
-  // branch is the one the session edits in (its worktree), else the pane's.
+  // branch is the live worktree the session edits in, else the pane's — never a
+  // landed PR's head once its worktree is gone.
   // PR chip: #N colored by state — open white (alive, someone's move), draft
   // dim, merged purple (the Claude0 "clear me" cue), closed red; no PR → nothing.
   const branch = s.pr?.branch ?? s.branch;

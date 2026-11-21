@@ -103,17 +103,18 @@ export async function liveEditDir(scan: EditScan | null | undefined, fallback: s
 /**
  * The PR a base-checkout session is working on: its live worktree's (pinned into
  * `scan.lastPr` so it survives cleanup), else its own last PR, else the pane's branch.
+ * `dir` is the live checkout: after cleanup the PR is a landed one, its branch no longer the session's.
  */
 export async function workPullRequest(
   scan: EditScan | undefined,
   pane: string,
   lookup = { byBranch: branchPullRequest, byNumber: pullRequestByNumber },
-): Promise<PullRequestInfo> {
+): Promise<{ pr: PullRequestInfo; dir: string }> {
   const dir = await liveEditDir(scan, pane);
   let pr: PullRequestInfo | undefined;
   if (dir !== pane) {
     pr = await lookup.byBranch(dir);
     if (scan && "number" in pr) scan.lastPr = pr.number;
   } else if (scan?.lastPr) pr = await lookup.byNumber(pane, scan.lastPr);
-  return pr ?? lookup.byBranch(pane);
+  return { pr: pr ?? (await lookup.byBranch(pane)), dir };
 }

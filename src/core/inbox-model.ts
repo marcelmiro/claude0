@@ -40,8 +40,8 @@ export interface InboxSession {
   scriptSince?: number;
   /**
    * PR of the checkout the session last edited in (a worktree the pane never cd'd
-   * into counts), refreshed lazily by discovery. `branch` is that checkout's, which
-   * can differ from the pane's; number absent = no PR.
+   * into counts), refreshed lazily by discovery. `branch` is set only while that
+   * checkout is a live worktree other than the pane's; number absent = no PR.
    */
   pr?: { number?: number; state: PullRequestInfo["state"]; branch?: string; fetchedAt: number };
   /** Incremental transcript-scan cursor behind `pr` — where the session's edits land. */

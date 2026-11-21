@@ -47,5 +47,5 @@ pull requests found" falls through to `no-pr` (pushed) or `local-only` (never pu
 | PR row on top of the list; nothing for `none` | `PrRow` (`app.js`) |
 | Per-file diff re-indented for phone width (display only) | `narrowIndent` (`shared/diff-lines.js`) |
 | Edit/Write/Read chips: filename bright, directory dim; they open no diff | tool-chip rendering (`isEdit`, `app.js`); ADR 1 |
-| Sidebar PR chip: which checkout and which PR, refresh budget (≤5 rows/tick, 60s) | comment above the PR refresh in `core/inbox-discovery.ts`, `core/edit-dir.ts` header |
+| Sidebar PR chip and branch label: which checkout and which PR (the chip keeps the session's last PR after its worktree's cleanup; the label goes back to the pane's branch), refresh budget (≤5 rows/tick, 60s) | comment above the PR refresh in `core/inbox-discovery.ts`, `core/edit-dir.ts` header |
 | Sidebar chip colors (`#N`; open white, draft dim, merged purple, closed red) | `PR_CHIP_COLOR` and the comment above it (`sidebar/rows.ts`) |

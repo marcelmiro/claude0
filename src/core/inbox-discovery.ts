@@ -225,6 +225,8 @@ export async function discoveryTick(store: InboxStore): Promise<void> {
   // cwd. A pane already inside a worktree is explicit intent and wins as-is.
   // With that worktree gone (landed and cleaned up), the session's own PR (see
   // workPullRequest) stands in — merged is the "clear me" cue, so it must outlive cleanup.
+  // `branch` is set only for a live worktree the pane isn't in: the branch label shows
+  // where the session works now, never a landed PR's head.
   const pathsById = new Map(
     sessions.filter((s) => byId.has(s.id)).map((s) => [s.id, { pane: s.repoPath, base: s.baseRepoPath }]),
   );
@@ -240,14 +242,17 @@ export async function discoveryTick(store: InboxStore): Promise<void> {
         const row = byId.get(id)!;
         const { pane, base } = pathsById.get(id)!;
         let pr;
+        let elsewhere = false;
         if (pane === base) {
           row.workScan = (await scanEditDir(id, { base, slug: slugByBase.get(base)! }, row.workScan)) ?? undefined;
-          pr = await workPullRequest(row.workScan, pane);
+          const work = await workPullRequest(row.workScan, pane);
+          pr = work.pr;
+          elsewhere = work.dir !== pane;
         } else pr = await branchPullRequest(pane);
         row.pr = {
           number: "number" in pr ? pr.number : undefined,
           state: pr.state,
-          branch: "branch" in pr ? pr.branch : undefined,
+          branch: elsewhere && "branch" in pr ? pr.branch : undefined,
           fetchedAt: now,
         };
       } catch {}
