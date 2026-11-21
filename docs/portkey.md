@@ -148,7 +148,11 @@ Order of one dictation:
    `CLAUDE_CODE_DISABLE_THINKING` turns that off. What `claudePrint` does cut is the tool,
    MCP and skill definitions (`--tools ""`, `--strict-mcp-config`, `--disable-slash-commands`),
    about 22K of ~32K input tokens. On 5 long takes
-   that halved the mean, ~8.0s to ~4.7s, with the same fixes.
+   that halved the mean, ~8.0s to ~4.7s, with the same fixes. A backtest of 131 logged
+   takes against the sent messages kept it that way: with thinking mostly skipped the
+   median fell 3.0s → 1.7s with no more rule breaks, but spoken lists converted less
+   reliably. Examples of answers to numbered points ("number one, I'd say… Number two,
+   yes.") closed that in the prompt; thinking wasn't brought back for it.
 
    Haiku, not Sonnet, though Sonnet is ~1.5s faster. On a 48-clip benchmark Sonnet turned
    correct words into vocabulary terms 4–7 times per run ("CSM", "local Claude", "Camp One"
