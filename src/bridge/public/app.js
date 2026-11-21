@@ -4508,8 +4508,8 @@ function ComposerButton({ face, cleaning, recLabel, canDictate, disabled, canCle
   function onPointerDown(e) {
     e.preventDefault(); // keeps the textarea focused, so the keyboard stays up
     if (inert || menu === "tap") return;
-    if (e.pointerType === "mouse") wrapRef.current.setPointerCapture(e.pointerId); // touch is captured implicitly
-    g.current = { x0: e.clientX, y0: e.clientY, moved: false, opened: false };
+    if (e.pointerType !== "touch") wrapRef.current.setPointerCapture(e.pointerId); // touch is captured implicitly
+    g.current = { x0: e.clientX, y0: e.clientY, t0: performance.now(), type: e.pointerType, on: e.target.tagName, moved: false, opened: false };
     g.current.timer = setTimeout(open, CB_HOLD_MS);
   }
   function onPointerMove(e) {
@@ -4547,6 +4547,16 @@ function ComposerButton({ face, cleaning, recLabel, canDictate, disabled, canCle
     if (g.current) clearTimeout(g.current.timer);
     g.current = null;
     close();
+  }
+  // A drag menu closes only on its own gesture's pointerup/cancel, which reach .cbwrap through
+  // the touch's implicit capture. On iOS that pointerup seems to sometimes never arrive: the
+  // hold timer then opens the menu with no finger down, and the full-screen layer would swallow
+  // every later touch. A fresh tap on the layer can only mean that, so it closes — on click, not
+  // pointerdown: gone by then, the layer can let the tap's click land on Send (Chrome does).
+  function rescue() {
+    const s = g.current;
+    dtrace("cbmenu-rescue", s ? { heldMs: Math.round(performance.now() - s.t0), type: s.type, on: s.on, moved: s.moved, switchOn: !!(switchRef.current && switchRef.current.checked) } : { gesture: false });
+    onPointerCancel();
   }
   function tapRow(act) {
     close();
@@ -4596,7 +4606,7 @@ function ComposerButton({ face, cleaning, recLabel, canDictate, disabled, canCle
       />
     </div>
     ${menu &&
-    html`<div class="cblayer">
+    html`<div class="cblayer" onClick=${menu === "drag" ? rescue : undefined}>
       <div class=${menu === "tap" ? "cbscrim" : "cbdim"} onPointerDown=${menu === "tap" ? close : undefined}></div>
       <div ref=${menuRef} class=${"cbmenu" + (muted ? " muted" : "")} role="menu">
         ${rows.map((r, i) =>

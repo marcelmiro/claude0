@@ -57,6 +57,11 @@ One button left of the textarea (`ComposerButton`) replaces the old attach `＋`
   fire it; lifting anywhere else cancels, so a hold released in place does nothing. Off the
   menu the rows fade (`muted`) to say a lift will cancel. Top to bottom: **Clear**,
   **Attach**, **All skills**, then the pinned skills with the first pin nearest the thumb.
+  If a gesture's `pointerup` never arrives (seen on iOS, cause unconfirmed), the hold timer
+  opens the menu after a plain tap with no finger down. A new tap on its full-screen layer
+  closes it, on `click` so the tap can't fall through to Send. Each one logs
+  `dictation-trace: cbmenu-rescue`: `heldMs` since the lost touch went down, its pointer
+  `type`, the element it landed `on`, and whether the hidden haptic switch toggled.
 - **Pins** are config `ui.composerSkills` (default `["/compact"]`, served by `GET /composer`).
   A skill goes to the front of the draft and replaces any leading `/command`; the rest of the
   draft becomes its arguments (`withSkill`, `shared/message-text.js`). It never sends. **All
