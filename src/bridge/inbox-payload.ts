@@ -9,7 +9,7 @@
 import {
   deriveSections,
   effectiveSince,
-  isWoken,
+  showsWokeMark,
   type InboxSession,
   type Section,
 } from "../core/inbox-model";
@@ -26,7 +26,7 @@ export interface InboxRowMeta {
   wakeAt?: number;
   /** Block note — blocked rows only (may be empty). */
   note?: string;
-  /** A due snooze not yet auto-resumed — renders in Needs You with the ☾ mark. */
+  /** The ⏰ woke mark (`showsWokeMark`). */
   woken?: boolean;
 }
 
@@ -59,7 +59,7 @@ function metaOf(s: InboxSession, section: Section, now: number): InboxRowMeta {
   };
   if (s.disposition?.kind === "snoozed" && s.disposition.until > now) m.wakeAt = s.disposition.until;
   if (s.disposition?.kind === "blocked") m.note = s.disposition.note;
-  if (isWoken(s, now)) m.woken = true;
+  if (showsWokeMark(s, now)) m.woken = true;
   return m;
 }
 

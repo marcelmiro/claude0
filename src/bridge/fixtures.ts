@@ -75,7 +75,7 @@ export const FIXTURE_SESSIONS = [
     summary: "Retry Web Push sends with backoff",
     statusSource: "fixture",
     modified: ago(9 * 60_000),
-    // A snooze that came due: files under needs-you with the ☾ woken mark. A dev server it
+    // A snooze that came due: files under needs-you with the ⏰ woke mark. A dev server it
     // left running is a service: named on the sub-line, never the ⏳ wait mark.
     pendingScripts: 1,
     background: { kind: "service", label: "Run the ink dev server on port 3000" },

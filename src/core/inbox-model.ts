@@ -23,6 +23,7 @@ export interface InboxSession {
   running?: { finishAt: number };
   disposition?: Disposition;
   archivedAt?: number;
+  /** The current turn is a wake prompt's run (`isWakePromptRun`) — set until the next run starts. */
   fromSnooze?: boolean;
   /** Present on rows backed by a live pane — Enter switches to it. */
   real?: { paneId: string; target: string; status: "running" | "waiting" | "ready" };
@@ -162,6 +163,15 @@ export function effectiveSince(s: InboxSession, now: number): number {
 
 export function isWoken(s: InboxSession, now: number): boolean {
   return !s.archivedAt && s.disposition?.kind === "snoozed" && s.disposition.until <= now;
+}
+
+/**
+ * The ⏰ woke mark, shared by the sidebar and portkey: a Needs You row whose
+ * snooze came due, until the user's first reply after the wake (for a
+ * prompted wake, the first reply after the prompt's turn).
+ */
+export function showsWokeMark(s: InboxSession, now: number): boolean {
+  return sectionOf(s, now) === "needs-you" && (isWoken(s, now) || !!s.fromSnooze);
 }
 
 export interface InboxSections {

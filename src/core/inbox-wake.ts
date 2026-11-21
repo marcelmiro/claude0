@@ -195,7 +195,7 @@ export async function wakePass(store: InboxStore, now = Date.now()): Promise<voi
       // "alert me on wake" toggle, and which medium delivers it is the
       // platform's business, not a second setting.
       if (stamped && config.notifications.native) {
-        const title = `☾ Woke — ${row.name ?? row.repo ?? w.sessionId.slice(0, 8)}`;
+        const title = `⏰ Woke — ${row.name ?? row.repo ?? w.sessionId.slice(0, 8)}`;
         const body = `snoozed ${snoozeSpan(w.snoozedAt, now)} ago — due now`;
         if (process.platform === "darwin") sendNativeNotification(title, body, win, config.notifications.terminalBundleId);
         try {

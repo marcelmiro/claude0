@@ -95,7 +95,7 @@ describe("wakeBanner", () => {
 
 // ── section derivation ─────────────────────────────────────────────────────
 
-import { deriveSections, effectiveSince, isWoken, sectionOf, type InboxSession } from "./inbox-model";
+import { deriveSections, effectiveSince, isWoken, sectionOf, showsWokeMark, type InboxSession } from "./inbox-model";
 
 const M = 60_000;
 const H = 3_600_000;
@@ -137,6 +137,21 @@ describe("effectiveSince", () => {
     expect(effectiveSince(sess({ running: { finishAt: NOW - 5 * M } }), NOW)).toBe(NOW - 5 * M);
     expect(effectiveSince(sess({ disposition: { kind: "snoozed", until: NOW - 2 * M } }), NOW)).toBe(NOW - 2 * M);
     expect(effectiveSince(sess({}), NOW)).toBe(NOW - H);
+  });
+});
+
+describe("showsWokeMark", () => {
+  test("a due snooze shows it; one not yet due, archived, or a plain row doesn't", () => {
+    expect(showsWokeMark(sess({ disposition: { kind: "snoozed", until: NOW - 1 } }), NOW)).toBe(true);
+    expect(showsWokeMark(sess({ disposition: { kind: "snoozed", until: NOW + 1 } }), NOW)).toBe(false);
+    expect(showsWokeMark(sess({ archivedAt: NOW, disposition: { kind: "snoozed", until: NOW - 1 } }), NOW)).toBe(false);
+    expect(showsWokeMark(sess({}), NOW)).toBe(false);
+  });
+
+  test("a wake prompt's finished turn shows it in Needs You, never while it runs or once re-parked", () => {
+    expect(showsWokeMark(sess({ fromSnooze: true }), NOW)).toBe(true);
+    expect(showsWokeMark(sess({ fromSnooze: true, running: { finishAt: NOW + M } }), NOW)).toBe(false);
+    expect(showsWokeMark(sess({ fromSnooze: true, disposition: { kind: "snoozed", until: NOW + 1 } }), NOW)).toBe(false);
   });
 });
 

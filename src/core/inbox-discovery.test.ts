@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { closedPanes, replacedInPane } from "./inbox-discovery";
+import { closedPanes, isWakePromptRun, replacedInPane } from "./inbox-discovery";
+import type { DispositionRow } from "./inbox-store";
 import type { InboxSession } from "./inbox-model";
 
 const row = (id: string, paneId?: string): InboxSession => ({
@@ -46,4 +47,25 @@ test("closedPanes: a pane that still exists is never closed — a session missin
 test("closedPanes: a session that moved to another pane, or a pane-less previous row, is not closed", () => {
   expect(closedPanes([row("a", "%7")], current(row("a", "%9")), new Set(["%9"]))).toEqual([]);
   expect(closedPanes([row("parked")], current(), new Set(["%1"]))).toEqual([]);
+});
+
+const disp = (over: Partial<DispositionRow>): DispositionRow => ({
+  sessionId: "s",
+  kind: "snoozed",
+  until: 0,
+  note: null,
+  createdAt: 0,
+  autoResumed: true,
+  deviceId: null,
+  ...over,
+});
+
+test("isWakePromptRun: only a resumed prompted snooze starting to run is the wake prompt's turn", () => {
+  expect(isWakePromptRun(disp({ note: "check the run" }))).toBe(true);
+  // a plain wake's first run is the user's reply — it ends the woke mark
+  expect(isWakePromptRun(disp({}))).toBe(false);
+  // not yet resumed by the daemon (a manual resume mid-snooze), a block, or no disposition
+  expect(isWakePromptRun(disp({ note: "check the run", autoResumed: false }))).toBe(false);
+  expect(isWakePromptRun(disp({ kind: "blocked", until: null, note: "keys" }))).toBe(false);
+  expect(isWakePromptRun(undefined)).toBe(false);
 });

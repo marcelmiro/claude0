@@ -20,7 +20,7 @@ import { readLastPromptAt, resolveTranscriptPath } from "./last-turn";
 import { pendingToolCall } from "./hook-events";
 import { loadState } from "./state";
 import { listPanes } from "./tmux";
-import type { InboxStore } from "./inbox-store";
+import type { DispositionRow, InboxStore } from "./inbox-store";
 import { stripOverlay, type InboxSession } from "./inbox-model";
 
 // A wait that outlives this is almost surely a service `isServiceScript` missed, or a
@@ -138,7 +138,8 @@ export async function discoveryTick(store: InboxStore): Promise<void> {
     // it started working again — you clearly went back to it, so the parked/
     // archived overlay no longer describes reality (reply observed, per ADR).
     if (statusChanged && eff === "running") {
-      row.fromSnooze = store.replyObserved(s.id, now) === "snoozed";
+      row.fromSnooze = isWakePromptRun(disp.get(s.id));
+      store.replyObserved(s.id, now);
     }
     // An OBSERVED transition into ready/waiting goes to the event log to keep
     // a history of when sessions handed back.
@@ -257,6 +258,16 @@ export async function discoveryTick(store: InboxStore): Promise<void> {
 
 
 const PANE_CLOSED = { reason: "pane-closed" } as const;
+
+/**
+ * Whether the run that just started is a wake prompt working, not the user's
+ * reply: a prompted snooze the daemon already resumed starts running on its
+ * own, seconds after boot. Its finished turn keeps the woke mark until the
+ * user replies; a plain wake's first run IS the reply, which ends the mark.
+ */
+export function isWakePromptRun(d: DispositionRow | undefined): boolean {
+  return d?.kind === "snoozed" && d.autoResumed && d.note !== null;
+}
 
 function isPaneClosedArchive(ev: { type: string; meta: unknown } | null): boolean {
   return ev?.type === "archive" && (ev.meta as { reason?: string } | null)?.reason === PANE_CLOSED.reason;

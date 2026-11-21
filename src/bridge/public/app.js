@@ -1993,7 +1993,7 @@ function List() {
           : ""
       : bgDetail;
     const sub = detail ? `${repo} · ${detail}` : repo;
-    // Marks are inline prefixes of the name (like ⏳/☾ always were) — a reserved dot
+    // Marks are inline prefixes of the name (like ⏳/☾/⏰ always were) — a reserved dot
     // column read as an empty gutter on rows with nothing to say. Pending/unread keep
     // the glowing dot, running keeps its mint, parked shows its state glyph.
     // Row marks speak the tmux window-name vocabulary (⚡ unread, ⏳ script-waiting)
@@ -2023,7 +2023,7 @@ function List() {
       >
         <span class="grow">
           <span class="name"
-            >${zap}${mark}${ib.woken && html`<span class="wokemark" title="snooze came due">☾</span>`}${script &&
+            >${zap}${mark}${ib.woken && html`<span class="wokemark" title="snooze came due">⏰</span>`}${script &&
             html`<span class="scriptmark" title="waiting on background work">⏳</span>`}${listTitle(s)}</span
           >
           ${sub &&

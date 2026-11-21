@@ -15,7 +15,7 @@ import { abbreviateRepo } from "../core/notifications";
 import {
   deriveSections,
   effectiveSince,
-  isWoken,
+  showsWokeMark,
   wakeAt,
   type InboxSession,
   type Section,
@@ -261,7 +261,7 @@ export function renderView(
   lines.push("");
   header("NEEDS YOU", needsYou.length, needsYou.length ? C.peach : C.dim);
   for (const s of needsYou) {
-    const woken = isWoken(s, now) || s.fromSnooze;
+    const woken = showsWokeMark(s, now);
     const age = fmtAge(now - effectiveSince(s, now));
     // ⚡ = unread (the window-name flag), then the reply due: ❓ question,
     // ✋ approval, ⏰ snooze wake. Marks stack, left-most = most important: a

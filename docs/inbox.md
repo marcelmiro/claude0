@@ -217,6 +217,9 @@ key as an extended sequence (CSI u); without that, it is a plain `^j`/`^k` move.
   the marks while a service still runs. Running rows show `⏳` for script-wait, and `⚡⏳`
   while that turn still carries the attention flag. `e` on any `⏳` row needs a second
   press, because the script dies with the pane.
+  `⏰` holds from the wake until your first reply after it; a prompted wake's own run is
+  not a reply, so its finished turn keeps `⏰` until you answer it. Portkey shows the same
+  mark by the same rule (`showsWokeMark`, `isWakePromptRun`); `☾` there is snoozed only.
   Parked keeps one-cell `☾` (snoozed) and `✗` (blocked) so parked rows stay light.
 - **Status-right** renders `⚡ N 🔄 N` only (a `✓N` cleared-today counter was tried and
   removed).
