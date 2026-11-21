@@ -174,12 +174,14 @@ const flash = signal(""); // transient FAILURE feedback in the detail view (succ
 const flashKind = signal(""); // "" = error styling; "notice" = neutral (restore-on-interrupt)
 const flashUndo = signal(null); // () => void — an Undo on the current notice (Clear draft)
 const copied = signal(false); // transient "✓ copied" pill (clipboard success needs visible feedback)
-// Optimistic user bubbles awaiting transcript catch-up: { text, after, deliveredAt? }. `after`
-// is the held thread's newest turn time at tap (`newestTurnAt`, shared/sync.js) — only a user
-// turn stamped after it retires the bubble. `deliveredAt` marks a `!cmd` or `/command` the
-// bridge typed: Claude Code writes those to the transcript only once they FINISH (a
-// /compact takes over a minute), so the bubble shows "running" with the elapsed time
-// instead of "sending…".
+// Optimistic user bubbles awaiting transcript catch-up: { text, after, queued?, deliveredAt? }.
+// `after` is the held thread's newest turn time at tap (`newestTurnAt`, shared/sync.js) — only
+// a user turn stamped after it retires the bubble. `queued`: the bridge saw Claude queue it —
+// needed because a message queued during a compaction never reaches `queuedPending` (its
+// enqueue record carries no text). `deliveredAt` marks a `!cmd` or `/command` the bridge
+// typed: Claude Code writes those to the transcript only once they FINISH (a /compact takes
+// over a minute), so the bubble reads as sent — a `!cmd` with its running time, a /command
+// plain, its progress being the working line ("compacting…") — never "sending…".
 const pendingSends = signal([]);
 const showNewSession = signal(false); // repo picker for launching a new session
 const showShell = signal(false); // shell sheet: run one command on the host, read its output
@@ -4123,8 +4125,10 @@ function Composer({ disabled, status }) {
         interruptRestore.value = null;
         clearStatusOverlay(sid);
       }
-      if (ok && (text.trim().startsWith("!") || isSlashCommand(text)) && pendingSends.value.includes(entry)) {
-        pendingSends.value = pendingSends.value.map((p) => (p === entry ? { ...p, deliveredAt: Date.now() } : p));
+      const command = text.trim().startsWith("!") || isSlashCommand(text);
+      if (ok && (ok.queued || command) && pendingSends.value.includes(entry)) {
+        const delivered = { queued: !!ok.queued, ...(command && { deliveredAt: Date.now() }) };
+        pendingSends.value = pendingSends.value.map((p) => (p === entry ? { ...p, ...delivered } : p));
       }
       if (ok) logDictations(sid, text, dictated);
       if (!ok) {
@@ -5103,26 +5107,31 @@ function Detail() {
         )}
         ${pendingSends.value
           .filter((p) => !hasLanded(bangKey(p.text), p.after))
-          .map(({ text, deliveredAt }, i) =>
+          .map(({ text, queued, deliveredAt }, i) =>
             // A `!cmd` echo renders as the bash command bubble (no output yet) so the
             // optimistic bubble matches the folded turn it retires into.
             // Once delivered it renders as running (the live tool chip's mint frame, full opacity).
+            // Queued ones take the queued look, exactly as a `queuedPending` entry renders.
             text.trim().startsWith("!")
               ? html`<div
-                  class=${`bang-cmd ${deliveredAt ? "running" : "pending"}`}
+                  class=${`bang-cmd ${queued ? "queued" : deliveredAt ? "running" : "pending"}`}
                   key=${`p${i}`}
                   ...${lpProps(lpStartCopyOnly(text))}
                 >
                   <span class="glyph">!</span>${text.trim().slice(1)}
-                  ${deliveredAt ? html`<${RunningTag} since=${deliveredAt} />` : html`<${SendingTag} />`}
+                  ${queued
+                    ? html`<div class="queuedtag">queued</div>`
+                    : deliveredAt
+                      ? html`<${RunningTag} since=${deliveredAt} />`
+                      : html`<${SendingTag} />`}
                 </div>`
               : html`<div
-                  class="bubble user pending"
+                  class=${`bubble user ${queued ? "queued" : deliveredAt ? "" : "pending"}`}
                   key=${`p${i}`}
                   ...${lpProps(lpStartCopyOnly(text))}
-                >${isSlashCommand(text) ? commandBody(text) : text}${deliveredAt
-                  ? html`<${RunningTag} since=${deliveredAt} />`
-                  : html`<${SendingTag} />`}</div>`,
+                >${isSlashCommand(text) ? commandBody(text) : text}${queued
+                  ? html`<div class="queuedtag">queued</div>`
+                  : !deliveredAt && html`<${SendingTag} />`}</div>`,
           )}
         ${pendingImageSends.value
           .filter((e) => !hasLanded(stripAttachmentPrefix(e.text).trim(), e.after))

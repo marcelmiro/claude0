@@ -15,6 +15,7 @@ import { eventSourcedStatus } from "./hook-events";
 import { nativeFilePending, nativeSessionIdByPid, nativeStatus, resolveStatus } from "./session-state";
 import { isPromptRecord, readLastTurnAt, resolveTranscriptPath, latestTranscriptCwd } from "./last-turn";
 import { jsonlLines } from "./jsonl-reader";
+import { unwrapPastedContent } from "./pasted-content";
 
 const home = homedir();
 
@@ -1261,6 +1262,7 @@ async function getFirstUserPrompt(sessionPath: string): Promise<string> {
             text = textBlock.text;
           }
         }
+        text = unwrapPastedContent(text);
 
         // Slash commands arrive as <command-name>…<command-args>… blocks (they
         // start with `<`, so the XML-tag skip below would drop them). For
@@ -1358,10 +1360,10 @@ export function promptTextOf(rec: Parameters<typeof isPromptRecord>[0] & { isCom
     return slashCommandIntent(content) ?? "";
   }
   if (!isPromptRecord(rec)) return "";
-  if (rec.type === "attachment") return typeof rec.attachment?.prompt === "string" ? rec.attachment.prompt : "";
-  if (typeof content === "string") return content;
+  if (rec.type === "attachment") return typeof rec.attachment?.prompt === "string" ? unwrapPastedContent(rec.attachment.prompt) : "";
+  if (typeof content === "string") return unwrapPastedContent(content);
   return (content as Array<{ type?: string; text?: unknown }>)
-    .flatMap((b) => (b.type === "text" && typeof b.text === "string" ? [b.text] : []))
+    .flatMap((b) => (b.type === "text" && typeof b.text === "string" ? [unwrapPastedContent(b.text)] : []))
     .join(" ");
 }
 

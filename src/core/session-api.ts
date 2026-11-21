@@ -41,6 +41,7 @@ import { recoverWorktreeTranscript } from "./recover";
 import { buildBaseName } from "./notifications";
 import { inheritName, loadNameCache, saveNameCache, slugify } from "./names";
 import { getLatestUserPrompt } from "./sessions";
+import { unwrapPastedContent } from "./pasted-content";
 import { subagentStatus } from "./agent-status";
 import { parseBackgroundTasks, liveScripts, agentScriptsAt, withWorkflowProgress, endedWorkflows, type BackgroundTask } from "./background-tasks";
 import { decideQuestion, declineQuestion, buildAnswersMap } from "./approval";
@@ -986,7 +987,8 @@ function isUserQueueEntry(text: string): boolean {
  * Replay a transcript's `queue-operation` records into the messages still queued at EOF.
  * These are op-log lines, not tree nodes (no `uuid`), so this cannot be derived from the
  * active-branch turns — it mirrors `parseBackgroundTasks`'s linear scan instead. Observed
- * ops (validated against real history): `enqueue` carries the text, `dequeue` carries
+ * ops (validated against real history): `enqueue` carries the text (none when queued
+ * during a compaction — such entries aren't replayed, see `userEnqueueAfter`), `dequeue` carries
  * null (a FIFO shift), `remove` carries the text of the entry Claude consumed mid-turn,
  * `popAll` drains everything (one record per drained entry — clearing is idempotent).
  * Task-notification payloads ride the same queue and must be replayed (a dequeue shifts
@@ -1054,7 +1056,7 @@ function queueReplay(): { feed(line: string): void; pending(): string[] } {
           break;
       }
     },
-    pending: () => queue.filter((e) => !e.delivered && isUserQueueEntry(e.text)).map((e) => e.text),
+    pending: () => queue.filter((e) => !e.delivered && isUserQueueEntry(e.text)).map((e) => unwrapPastedContent(e.text)),
   };
 }
 
@@ -1382,12 +1384,12 @@ export async function interruptSession(sessionId: string): Promise<SendResult> {
 /**
  * Whether Claude's queue held messages at an Escape sent just after `mark`: queued at the
  * mark, or — when Claude hadn't flushed the enqueue yet — the user's enqueue the Escape's
- * auto-submit writes past it. A revert writes none.
+ * auto-submit writes past it, or the compaction the Escape canceled. A revert writes none.
  */
 export async function queuedAtEscape(mark: { path: string; size: number }): Promise<boolean | undefined> {
   const atMark = await queuedAtMark(mark);
   if (atMark !== false) return atMark;
-  return userEnqueueAfter(mark, 400);
+  return userEnqueueAfter(mark, 400, { canceledCompaction: true });
 }
 
 /**
@@ -1419,25 +1421,41 @@ export async function transcriptMark(sessionId: string): Promise<{ path: string;
  * not the queue's state, since an Escape right after the send drains it at once. Claude
  * flushes the line a beat late, sometimes only with the auto-submit an Escape triggers, so
  * poll; a send that started a turn instead times out as false. Harness entries (a Monitor's
- * notifications) don't count: they arrive any time.
+ * notifications) don't count: they arrive any time. An enqueue with no text does: Claude
+ * Code writes a message queued during a compaction without it (93 of the 97 text-less
+ * enqueues in a week came just before a compaction ended).
+ *
+ * `canceledCompaction` also counts a dequeue plus a "Compaction canceled." record: an
+ * Escape during a compaction cancels it and the queue auto-submits, the entry having been
+ * enqueued (with no text, so `queuedAtMark` can't see it) before the mark.
  */
-export async function userEnqueueAfter(mark: { path: string; size: number }, timeoutMs: number): Promise<boolean> {
+export async function userEnqueueAfter(
+  mark: { path: string; size: number },
+  timeoutMs: number,
+  { canceledCompaction = false } = {},
+): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   let offset = mark.size; // past the complete lines already scanned — each poll reads only new bytes
+  let dequeued = false;
+  let canceled = false;
   for (;;) {
     try {
       const bytes = new Uint8Array(await Bun.file(mark.path).slice(offset).arrayBuffer());
       const end = bytes.lastIndexOf(10) + 1; // a torn last line waits for the next poll
       for (const line of new TextDecoder().decode(bytes.subarray(0, end)).split("\n")) {
-        if (!line.includes('"queue-operation"')) continue;
-        let rec: { type?: unknown; operation?: unknown; content?: unknown };
+        const cancelLine = canceledCompaction && line.includes("Compaction canceled.");
+        if (!line.includes('"queue-operation"') && !cancelLine) continue;
+        let rec: { type?: unknown; subtype?: unknown; operation?: unknown; content?: unknown };
         try {
           rec = JSON.parse(line);
         } catch {
           continue; // a mark taken mid-line leaves a partial first line
         }
         const enqueue = rec.type === "queue-operation" && rec.operation === "enqueue";
-        if (enqueue && typeof rec.content === "string" && isUserQueueEntry(rec.content)) return true;
+        if (enqueue && (typeof rec.content !== "string" || isUserQueueEntry(rec.content))) return true;
+        if (rec.type === "queue-operation" && rec.operation === "dequeue") dequeued = true;
+        if (cancelLine && rec.type === "system" && rec.subtype === "local_command") canceled = true;
+        if (dequeued && canceled) return true;
       }
       offset += end;
     } catch {

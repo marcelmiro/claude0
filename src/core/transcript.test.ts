@@ -152,6 +152,19 @@ test("a bare slash-command prompt record is a command turn; a path-led prompt st
   ]);
 });
 
+test("a pasted prompt renders as its text, without Claude's pasted_content wrapper", () => {
+  // Shape observed in Claude Code 2.1.330: a long paste (portkey's sends go through tmux
+  // paste) is recorded wrapped, with the same id on both tags.
+  const raw = [
+    '{"type":"user","message":{"role":"user","content":"\\n\\n<pasted_content id=\\"07a9\\">\\nline one\\n\\nline two\\n</pasted_content id=\\"07a9\\">\\n"}}',
+    '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"see this:\\n\\n<pasted_content id=\\"ab12\\">\\npasted\\n</pasted_content id=\\"ab12\\">\\n"}]}}',
+  ].join("\n");
+  expect(parseTranscript(raw)).toEqual([
+    { role: "user", content: [{ type: "text", text: "line one\n\nline two" }] },
+    { role: "user", content: [{ type: "text", text: "see this:\n\npasted" }] },
+  ]);
+});
+
 test("drops isMeta user records (e.g. skill base-directory injection)", () => {
   const raw = [
     '{"type":"user","isMeta":true,"message":{"role":"user","content":"Base directory for this skill: /x\\n\\n# Skill"}}',
