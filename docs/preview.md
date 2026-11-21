@@ -28,8 +28,8 @@ part of the sidebar), [ADR 35](adr/0035-enter-never-refiles-a-parked-or-recent-r
   and never awaits it. Not `Bun.$`: an unawaited `Bun.$` never starts, and an awaited one
   would hold the renderer's handler for as long as the popup is open.
 - **`-y` names the popup's bottom row** — tmux subtracts the height, so `-y` = top + height.
-  The popup is as wide as the text needs (106 columns) and 85% of the height, centred over
-  the work area right of the sidebar (`popupGeometry`). A work area under 60 columns gets a
+  The popup is 92% of the width (at most 126 columns, so text wraps at 120 or less) and 90% of
+  the height of the work area right of the sidebar, centred over it (`popupGeometry`). A work area under 60 columns gets a
   centred 90% popup instead.
 - **Popups send no focus events** to the pane under them, and don't change `pane_active`, so
   the sidebar keeps its focus — and search keeps its query and results — while the popup is up.

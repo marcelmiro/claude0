@@ -26,23 +26,23 @@ export interface PreviewFile {
 export const previewPath = (windowId: string) => `${PATHS.dir}/preview/${windowId}.json`;
 const LOG = `${PATHS.dir}/preview.log`;
 const SOCK = `${PATHS.dir}/sidebar.sock`;
-/** Wrap width: past ~100 columns prose stops reading as lines. */
-const MAX_TEXT = 100;
+/** Wrap width cap: past ~120 columns prose stops reading as lines. */
+const MAX_TEXT = 120;
 /** Popup width that fits MAX_TEXT: border 2 + left margin 2 + gap 1 + scrollbar 1. */
 const POPUP_WIDTH = MAX_TEXT + 6;
 
 /**
- * `tmux display-popup` position and size: wide enough for the text and no wider,
- * 85% of the height, centred over the work area right of the sidebar. A work area
- * under 60 columns gets a centred 90% popup instead.
+ * `tmux display-popup` position and size: 92% of the work area right of the
+ * sidebar (never wider than the text cap needs) by 90% of its height, centred
+ * over it. A work area under 60 columns gets a centred 90% popup instead.
  */
 export function popupGeometry(o: { sidebar: number; width: number; height: number; statusLines: number; statusTop: boolean }): string[] {
   const left = o.sidebar + 1; // first column past the sidebar's pane border
   const areaW = o.width - left;
   const areaH = o.height - o.statusLines;
   if (areaW < 60) return ["-x", "C", "-y", "C", "-w", "90%", "-h", "90%"];
-  const w = Math.min(areaW - 4, POPUP_WIDTH);
-  const h = Math.max(10, Math.round(areaH * 0.85));
+  const w = Math.min(Math.round(areaW * 0.92), POPUP_WIDTH);
+  const h = Math.max(10, Math.round(areaH * 0.9));
   const x = left + Math.floor((areaW - w) / 2);
   const top = (o.statusTop ? o.statusLines : 0) + Math.floor((areaH - h) / 2);
   // -y names the popup's BOTTOM row: tmux subtracts the height from it

@@ -29,17 +29,19 @@ describe("popupGeometry", () => {
   const geo = (width: number, height: number, statusTop = false) =>
     popupGeometry({ sidebar: 30, width, height, statusLines: 1, statusTop });
 
-  test("text-wide, 85% tall, centred over the work area; -y is the bottom row", () => {
+  test("capped at the text width, 90% tall, centred over the work area; -y is the bottom row", () => {
     // work area: columns 31..203 (173 wide), rows 0..65 (66 tall)
-    expect(geo(204, 67)).toEqual(["-x", "64", "-y", "61", "-w", "106", "-h", "56"]);
+    expect(geo(204, 67)).toEqual(["-x", "54", "-y", "62", "-w", "126", "-h", "59"]);
   });
 
   test("a status line on top shifts the popup down", () => {
-    expect(geo(204, 67, true)[3]).toBe("62");
+    expect(geo(204, 67, true)[3]).toBe("63");
   });
 
-  test("narrower work areas shrink the popup; under 60 columns it centres at 90%", () => {
-    expect(geo(120, 40)[5]).toBe("85");
+  test("narrower work areas get 92% of their width; under 60 columns it centres at 90%", () => {
+    // the 161-column client: a 130-column work area
+    expect(geo(161, 44)[5]).toBe("120");
+    expect(geo(120, 40)[5]).toBe("82");
     expect(geo(80, 40)).toEqual(["-x", "C", "-y", "C", "-w", "90%", "-h", "90%"]);
   });
 });
