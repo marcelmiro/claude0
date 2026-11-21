@@ -129,9 +129,12 @@ Order of one dictation:
    context kept for the page's life kept reporting "running" while its analyser read zeros,
    in streaks of takes until a reload (peak 0 on 42 of 82 takes). A take the meter heard
    nothing of logs `dictation-trace: meter-silent`.
+   A live mic doesn't hold off iOS auto-lock, since only touches reset it, so the tap takes a
+   screen wake lock until the take ends (`holdScreenAwake`). It's requested before the mic
+   await, inside the gesture. A refused one logs `dictation-trace: wake-lock-failed`.
 
    Only rare failures go to `dictation-trace:` (`dtrace`): mic errors, a failed switch to
-   the built-in mic, an empty recording, retries, a silent meter, and the composer menu
+   the built-in mic, an empty recording, retries, a silent meter, a refused wake lock, and the composer menu
    rescue. The per-step trace that found the muted-mic bug was removed once 97 takes after
    109 iOS mutes and ends of the kept stream all recorded.
 3. **Transcribe.** `POST /sessions/:id/dictate` (multipart `audio`) sends the recording to

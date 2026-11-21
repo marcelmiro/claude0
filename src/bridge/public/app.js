@@ -3503,6 +3503,15 @@ function startMeter(stream) {
     return () => null;
   }
 }
+// A live mic doesn't hold off iOS auto-lock — only touches do — so a hands-off take hit the
+// lock mid-sentence. Requested inside the tap (before any await), released when the take ends;
+// iOS drops it on its own when the app is hidden, which finishes the take anyway.
+function holdScreenAwake() {
+  const lock = navigator.wakeLock
+    ? navigator.wakeLock.request("screen").catch((err) => (dtrace("wake-lock-failed", { error: String(err && err.message) }), null))
+    : (dtrace("wake-lock-failed", { error: "unsupported" }), Promise.resolve(null));
+  return () => lock.then((l) => l && l.release().catch(() => {}));
+}
 function startRecorder() {
   const mimeType = ["audio/mp4", "audio/webm;codecs=opus"].find((m) => MediaRecorder.isTypeSupported(m)) || "";
   const rec = new MediaRecorder(mic.stream, mimeType ? { mimeType } : undefined);
@@ -3936,12 +3945,14 @@ function Composer({ disabled, status }) {
     if (d.phase === "recording") return finishDictation();
     if (d.phase !== "idle") return; // still acquiring the mic, or transcribing
     unlockMeter();
+    d.releaseWake = holdScreenAwake();
     d.phase = "arming";
     d.sid = selectedId.value; // the take belongs to the session it was started in
     const warm = setTimeout(() => setDictFace("warm"), 150); // only if acquiring the mic takes a moment
     try {
       await ensureMic();
     } catch (err) {
+      d.releaseWake();
       d.phase = "idle";
       setDictFace("idle");
       dtrace("mic-error", { error: String(err && err.message) });
@@ -3949,7 +3960,7 @@ function Composer({ disabled, status }) {
     } finally {
       clearTimeout(warm);
     }
-    if (d.phase !== "arming") return; // the thread was left while the mic was starting
+    if (d.phase !== "arming") return d.releaseWake(); // the thread was left while the mic was starting
     const track = mic.stream.getAudioTracks()[0];
     // A call, Siri or the OS taking the mic ends or mutes the track: transcribe what was
     // captured rather than show red over a mic that hears nothing.
@@ -3970,6 +3981,7 @@ function Composer({ disabled, status }) {
     // A take the meter heard nothing of: a dead analyser, or a muted or wrong mic.
     if (d.stopMeter && d.stopMeter() === 0) dtrace("meter-silent", { ctx: meter.state });
     d.stopMeter = null;
+    d.releaseWake();
   }
   async function finishDictation() {
     const d = dict.current;
