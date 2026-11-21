@@ -3413,7 +3413,8 @@ function RunningTag({ since }) {
 // (re)acquired — nothing records then — and red from the moment the recorder starts.
 const mic = { stream: null };
 const DICTATION_ATTEMPTS = 3;
-// TEMPORARY on-device tracing: each step lands in the bridge log (`dictation-trace:`).
+// Rare on-device failures the host can't see land in the bridge log (`dictation-trace:`);
+// `ms` counts from the take's tap.
 let dtraceT0 = 0;
 function dtrace(step, extra = {}) {
   const body = JSON.stringify({ step, ms: Math.round(performance.now() - dtraceT0), ...extra });
@@ -3440,13 +3441,11 @@ async function ensureMic() {
   }
   const inputs = (await navigator.mediaDevices.enumerateDevices().catch(() => [])).filter((d) => d.kind === "audioinput");
   const builtIn = inputs.find((d) => BUILT_IN_MIC.test(d.label));
-  dtrace("mic-devices", { inputs: inputs.map((d) => d.label), using: track.label, builtIn: builtIn ? builtIn.label : null });
   if (!builtIn || track.getSettings().deviceId === builtIn.deviceId) return;
   try {
     const switched = await navigator.mediaDevices.getUserMedia({ audio: { ...MIC_AUDIO, deviceId: { exact: builtIn.deviceId } } });
     mic.stream.getTracks().forEach((t) => t.stop());
     mic.stream = switched;
-    dtrace("mic-switched", { using: switched.getAudioTracks()[0].label });
   } catch (err) {
     dtrace("mic-switch-failed", { error: String(err && err.message) }); // keep the working stream
   }
@@ -3454,14 +3453,18 @@ async function ensureMic() {
 // The take's voice level (0–1), drawn as the composer button's ring. Display only, never a
 // gate (the analyser above read silence while the recorder heard every word).
 const micLevel = signal(0);
-const meter = { ctx: null };
-// iOS runs an AudioContext only once it's resumed inside a user gesture, so the tap does this
-// before it awaits the mic.
+const meter = { ctx: null, state: "" };
+// A fresh AudioContext per take, made and resumed in the tap before it awaits the mic (iOS
+// runs one only from a gesture). One kept for the page's life went on reading "running" while
+// its analyser got zeros, in streaks of takes until a reload: peak 0 on 42 of 82 takes.
 function unlockMeter() {
   try {
-    meter.ctx ||= new AudioContext();
+    if (meter.ctx) meter.ctx.close().catch(() => {});
+    meter.ctx = new AudioContext();
     meter.ctx.resume().catch(() => {});
-  } catch {}
+  } catch {
+    meter.ctx = null;
+  }
 }
 /** Starts driving `micLevel` from `stream`; the returned stop() gives the take's peak level. */
 function startMeter(stream) {
@@ -3486,9 +3489,12 @@ function startMeter(stream) {
       raf = requestAnimationFrame(tick);
     };
     tick();
+    const ctx = meter.ctx;
     return () => {
       cancelAnimationFrame(raf);
       src.disconnect();
+      meter.state = ctx.state; // what the context claimed while it heard nothing
+      ctx.close().catch(() => {});
       micLevel.value = 0;
       return peak;
     };
@@ -3927,7 +3933,6 @@ function Composer({ disabled, status }) {
   async function micTap() {
     const d = dict.current;
     if (d.phase === "idle") dtraceT0 = performance.now();
-    dtrace("tap", { phase: d.phase });
     if (d.phase === "recording") return finishDictation();
     if (d.phase !== "idle") return; // still acquiring the mic, or transcribing
     unlockMeter();
@@ -3948,13 +3953,10 @@ function Composer({ disabled, status }) {
     const track = mic.stream.getAudioTracks()[0];
     // A call, Siri or the OS taking the mic ends or mutes the track: transcribe what was
     // captured rather than show red over a mic that hears nothing.
-    track.onended = track.onmute = (e) => {
-      dtrace("track-lost", { event: e.type });
+    track.onended = track.onmute = () => {
       if (dict.current.phase === "recording") finishDictation();
     };
-    dtrace("mic", { track: track && track.readyState, muted: track && track.muted });
     d.recorder = startRecorder();
-    dtrace("rec-start", { mime: d.recorder.mimeType });
     d.stopMeter = startMeter(mic.stream);
     d.phase = "recording";
     d.liveAt = performance.now();
@@ -3965,7 +3967,8 @@ function Composer({ disabled, status }) {
     const d = dict.current;
     clearInterval(d.timer);
     d.timer = null;
-    if (d.stopMeter) dtrace("meter", { peak: d.stopMeter(), ctx: meter.ctx && meter.ctx.state });
+    // A take the meter heard nothing of: a dead analyser, or a muted or wrong mic.
+    if (d.stopMeter && d.stopMeter() === 0) dtrace("meter-silent", { ctx: meter.state });
     d.stopMeter = null;
   }
   async function finishDictation() {
@@ -3974,9 +3977,7 @@ function Composer({ disabled, status }) {
     stopDictationTimer();
     setDictFace("busy");
     const spokeMs = d.liveAt ? performance.now() - d.liveAt : 0;
-    dtrace("stop", { spokeMs: Math.round(spokeMs) });
     const { blob, why, chunks, state } = await d.recorder.stop();
-    dtrace("blob", { bytes: blob.size, type: blob.type, why, chunks, state });
     d.recorder = null;
     const forSid = d.sid;
     const done = () => {
@@ -3989,13 +3990,13 @@ function Composer({ disabled, status }) {
     }
     if (blob.size < 1024) {
       done();
+      dtrace("empty-recording", { bytes: blob.size, type: blob.type, why, chunks, state, spokeMs: Math.round(spokeMs) });
       return flashError("✗ the recording came out empty");
     }
     const fd = new FormData();
     fd.append("audio", blob, "dictation");
     fd.append("mic", (mic.stream && mic.stream.getAudioTracks()[0].label) || "");
     let res;
-    const sentAt = performance.now();
     // A dropped connection or a failed upstream call is retried with the same recording, so
     // a network blip never means saying it all again. A 4xx (no audio, bad id) is final.
     for (let attempt = 1; ; attempt++) {
@@ -4011,7 +4012,6 @@ function Composer({ disabled, status }) {
       dtrace("retry", { attempt, status, reason: res.reason });
       await new Promise((r) => setTimeout(r, attempt * 1500));
     }
-    dtrace("dictate", { ok: res.ok, reason: res.reason, chars: (res.text || "").length, ms: Math.round(performance.now() - sentAt) });
     done(); // the mic is free again while cleanup runs
     if (!res.ok) return flashError(`✗ ${reasonText(res, "")}`);
     if (!res.text) return flashNotice("Heard nothing — check the mic and try again");
@@ -4053,19 +4053,14 @@ function Composer({ disabled, status }) {
     } finally {
       setCleaning((n) => n - 1);
     }
-    dtrace("clean", { ok: res && res.ok, guarded: res && res.guarded, changed: !!res && res.text !== entry.raw });
     const el = ref.current;
     // Sent already, or dictated into another session's draft: nothing here to report on.
-    if (!dictations.current.includes(entry) || selectedId.value !== forSid || !el) return dtrace("swap", { applied: false, why: "left" });
+    if (!dictations.current.includes(entry) || selectedId.value !== forSid || !el) return;
     if (!res || !res.ok || !res.text) return flashNotice("Cleanup failed — kept as dictated");
     if (res.guarded) return flashNotice("Cleanup dropped words — kept as dictated");
     if (res.text === entry.raw) return flashNotice("✓ Cleanup: nothing to fix");
     const at = el.value.indexOf(entry.raw);
-    if (at < 0 || el.value.indexOf(entry.raw, at + 1) >= 0) {
-      dtrace("swap", { applied: false, why: at < 0 ? "edited" : "twice" });
-      return flashNotice("Cleanup not applied — the text was edited");
-    }
-    dtrace("swap", { applied: true });
+    if (at < 0 || el.value.indexOf(entry.raw, at + 1) >= 0) return flashNotice("Cleanup not applied — the text was edited");
     // Keep the caret where the user is: past the dictation it shifts by the length change,
     // inside it lands at the cleaned text's end, before it stays put.
     const rawEnd = at + entry.raw.length;

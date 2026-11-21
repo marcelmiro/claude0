@@ -1581,7 +1581,6 @@ async function route(req: Request): Promise<Response> {
     const cfg = await loadConfig(); // a broken config is a logged 500, never the default pins
     return json({ skills: cfg.ui.composerSkills ?? DEFAULT_CONFIG.ui.composerSkills });
   }
-  // TEMPORARY: on-device step tracing while the iOS recording flow is being debugged.
   // Portkey's network trace (docs/portkey.md § Network trace): one `net-trace:` line per
   // failure the device queued while the network was down.
   if (method === "POST" && path === "/net/trace") {
@@ -1592,6 +1591,7 @@ async function route(req: Request): Promise<Response> {
     return json({ ok: true });
   }
 
+  // Rare on-device failures from dictation and the composer button (`dtrace` in app.js).
   if (method === "POST" && path === "/dictation/trace") {
     console.error(`dictation-trace: ${(await req.text().catch(() => "")).slice(0, 1000)}`);
     return json({ ok: true });

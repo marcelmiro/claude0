@@ -124,9 +124,16 @@ Order of one dictation:
    every word. In the test, counting aloud, 1–18 were all transcribed, and the gate only
    opened on its timeout at "fifteen".
    While red, the face counts seconds and a halo behind it grows with the voice level
-   (`startMeter`). The meter is display only, for the same reason. Its AudioContext is
-   resumed inside the tap, since iOS runs one only from a gesture, and each take logs its
-   peak (`dictation-trace: meter`): 0 means the meter heard nothing.
+   (`startMeter`). The meter is display only, for the same reason. Each take gets a fresh
+   AudioContext, made and resumed inside the tap, since iOS runs one only from a gesture. A
+   context kept for the page's life kept reporting "running" while its analyser read zeros,
+   in streaks of takes until a reload (peak 0 on 42 of 82 takes). A take the meter heard
+   nothing of logs `dictation-trace: meter-silent`.
+
+   Only rare failures go to `dictation-trace:` (`dtrace`): mic errors, a failed switch to
+   the built-in mic, an empty recording, retries, a silent meter, and the composer menu
+   rescue. The per-step trace that found the muted-mic bug was removed once 97 takes after
+   109 iOS mutes and ends of the kept stream all recorded.
 3. **Transcribe.** `POST /sessions/:id/dictate` (multipart `audio`) sends the recording to
    OpenAI `gpt-transcribe` with a vocabulary hint, and returns the raw text in about 1s. A
    network failure or a 5xx is retried with the same recording, up to 3 attempts, so a blip
