@@ -584,8 +584,9 @@ const FOOTER_TOTAL_RE = /^\s*\S (.+?) {2,}.*?\b\d+\/(\d+) · /;
 
 /**
  * A running workflow's agent total read off a pane capture, best effort: undefined unless
- * exactly one footer row names `label` (a truncated name matches by prefix) and its total
- * is at least `done`. A failed read just leaves the total out.
+ * every footer row naming `label` (a truncated name matches by prefix) shows the same total,
+ * at least `done`. Same-named runs (a fan-out of one script) can't be told apart, so they
+ * share a total only when they agree. A failed read just leaves the total out.
  */
 export function screenTotal(capture: string, label: string, done: number): number | undefined {
   const totals: number[] = [];
@@ -595,7 +596,7 @@ export function screenTotal(capture: string, label: string, done: number): numbe
     const name = m[1]!.trim();
     if (name === label || (name.endsWith("…") && label.startsWith(name.slice(0, -1)))) totals.push(+m[2]!);
   }
-  return totals.length === 1 && totals[0]! >= done ? totals[0] : undefined;
+  return totals.length > 0 && totals.every((t) => t === totals[0]) && totals[0]! >= done ? totals[0] : undefined;
 }
 
 /** `tasks` with each running workflow's screen-read total attached, where the read succeeds. */

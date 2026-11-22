@@ -818,10 +818,14 @@ describe("screenTotal", () => {
     expect(screenTotal(screen(footer("judge-vi…", 91, 165)), "judge-vigil", 91)).toBe(165);
   });
 
-  test("gives up quietly: no row, no N/M, two rows for one name, or a total below done", () => {
+  test("same-named runs share a total only when their rows agree", () => {
+    expect(screenTotal(screen(footer("judge-vigil", 91, 165), footer("judge-vigil", 4, 165)), "judge-vigil", 91)).toBe(165);
+  });
+
+  test("gives up quietly: no row, no N/M, same-named rows that disagree, or a total below done", () => {
     expect(screenTotal(screen(), "judge-vigil", 91)).toBeUndefined();
     expect(screenTotal(screen("  ◯ judge-vigil  ▰▰▰▱  12m03s · ↓ 1.2M tokens"), "judge-vigil", 91)).toBeUndefined();
-    expect(screenTotal(screen(footer("judge-vigil", 91, 165), footer("judge-vigil", 4, 165)), "judge-vigil", 91)).toBeUndefined();
+    expect(screenTotal(screen(footer("judge-vigil", 91, 165), footer("judge-vigil", 4, 150)), "judge-vigil", 91)).toBeUndefined();
     expect(screenTotal(screen(footer("judge-vigil", 91, 165)), "judge-vigil", 200)).toBeUndefined();
     expect(screenTotal(screen(footer("other-run", 91, 165)), "judge-vigil", 91)).toBeUndefined();
   });
