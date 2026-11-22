@@ -1597,6 +1597,13 @@ async function route(req: Request): Promise<Response> {
     return json({ ok: true });
   }
 
+  // Temporary viewport diagnostics for the layout-clipping bug (the trail script in index.html).
+  if (method === "POST" && path === "/viewport/trace") {
+    const text = (await req.text().catch(() => "")).slice(0, 8000);
+    console.error(`viewport-trace: ${JSON.stringify({ device: deviceOf(req), text })}`);
+    return json({ ok: true });
+  }
+
   const dictate = path.match(/^\/sessions\/([^/]+)\/dictate$/);
   if (method === "POST" && dictate) {
     const id = decodeURIComponent(dictate[1]!);

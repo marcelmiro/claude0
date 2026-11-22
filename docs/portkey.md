@@ -268,3 +268,13 @@ nudge. An opaque 11px strip removes it but hides the top 11px of content; a fixe
 slid across at launch works but the slide is visible; scrolling the document or inner list
 at launch changes nothing. A fixed clearance allowance below the blur (24px, then 12px,
 then 16px) was tuned on-device and then removed once the strip worked.
+
+## iOS bottom safe area (installed PWA)
+
+Back from the app switcher, iOS can report `env(safe-area-inset-bottom)` as 0 while the home
+indicator is still there (seen 2026-11-21 on an iPhone: 34 at launch, 0 after a switcher
+round-trip, and still 0 on the readings after it). Everything that clears the home indicator would then
+drop onto the screen's bottom edge, the composer included. Layout CSS therefore uses
+`--safe-bottom`, never the raw `env()`: `keepSafeBottom` (inline script in `index.html`)
+pins it to the largest inset seen per orientation, persisted in localStorage, so a lower
+reading never shrinks it. Browser tabs keep the raw `env()` value.
