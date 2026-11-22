@@ -176,7 +176,18 @@ Order of one dictation:
    (a list item, PR, code) in digits ("do 1 and 2"); counts in prose stay words. It fixes
    mis-heard terms and leaves every other word as said. That target came from your hand
    edits of real dictations. A looser prompt polished fluent sentences and doubled word
-   error against typed prompts.
+   error against typed prompts. A list item keeps the number you said for it: numbered by
+   position, "Agree on doing two and three. And four." became items "2. Agree on doing 2
+   and 3." and "3. And 4."
+
+   **Tuning the prompt.** `bun scripts/dictation-backtest.ts head=HEAD work=working --runs 3`
+   replays every logged take through each prompt with the production call and context (the
+   session's transcript up to the take), and scores it against what you sent. The score
+   covers rule breaks, guard rejections, your hand edits it reproduces, and learned
+   mis-hearings applied. Run 3 times per take: one run is too noisy to compare prompts.
+   Judge on the takes whose cleanup wasn't in the box when you sent: elsewhere the sent text
+   is the old prompt's output, so the comparison leans toward it. One more example of
+   a bare "one, ship. Two, …" list made every score worse.
 
    The client swaps the cleaned text in only if the raw text is still in the box exactly as
    inserted, so an edit you make meanwhile wins. While cleanup runs, the arc on the
