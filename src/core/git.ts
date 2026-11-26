@@ -17,26 +17,32 @@ export function extractTicketId(branch: string): string | null {
   return match ? match[1].toUpperCase() : null;
 }
 
-// Persistent cache: worktree path → base repo path (survives across refresh cycles)
-const baseRepoCache = new Map<string, string>();
+// Persistent cache: worktree path → base repo path (survives across refresh cycles).
+// Holds the in-flight promise: discovery resolves every pane at once, and a
+// result-only cache let each of N panes in one repo spawn its own git.
+const baseRepoCache = new Map<string, Promise<string>>();
 
 /**
  * Resolve a worktree path to its base repo path.
  * For non-worktree repos, returns the same path. Cached across refreshes.
  */
-export async function getBaseRepoPath(repoPath: string): Promise<string> {
-  if (baseRepoCache.has(repoPath)) return baseRepoCache.get(repoPath)!;
+export function getBaseRepoPath(repoPath: string): Promise<string> {
+  let hit = baseRepoCache.get(repoPath);
+  if (!hit) {
+    hit = resolveBaseRepoPath(repoPath);
+    baseRepoCache.set(repoPath, hit);
+  }
+  return hit;
+}
+
+async function resolveBaseRepoPath(repoPath: string): Promise<string> {
   try {
     const gitCommonDir = (await Bun.$`git -C ${repoPath} rev-parse --path-format=absolute --git-common-dir`.quiet().text()).trim();
-    const basePath = gitCommonDir.replace(/\/\.git\/?$/, "");
-    baseRepoCache.set(repoPath, basePath);
-    return basePath;
+    return gitCommonDir.replace(/\/\.git\/?$/, "");
   } catch {
     // git failed — directory may be deleted (orphaned worktree). Managed worktrees
     // encode their base structurally (`<base>/.claude/worktrees/<name>`).
-    const basePath = await inferManagedBaseRepo(repoPath) ?? repoPath;
-    baseRepoCache.set(repoPath, basePath);
-    return basePath;
+    return await inferManagedBaseRepo(repoPath) ?? repoPath;
   }
 }
 

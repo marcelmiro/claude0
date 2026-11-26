@@ -77,3 +77,24 @@ describe("discoverRepos session entries", () => {
     expect([repos[1]!.head, repos[1]!.committedAt]).toEqual([head, ct]);
   });
 });
+
+describe("base repo cache", () => {
+  test("concurrent lookups of one path spawn git once", async () => {
+    await initRepo();
+    // a git shim on PATH that logs each call, so the test counts real spawns
+    const log = `${dir}/git-calls.log`;
+    const shim = `${dir}/shim`;
+    const realGit = Bun.which("git")!;
+    await Bun.write(`${shim}/git`, `#!/bin/sh\necho x >> "${log}"\nexec "${realGit}" "$@"\n`);
+    await Bun.$`chmod +x ${shim}/git`.quiet();
+    const path = process.env.PATH;
+    process.env.PATH = `${shim}:${path}`;
+    try {
+      const results = await Promise.all(Array.from({ length: 8 }, () => getBaseRepoPath(dir)));
+      expect(new Set(results)).toEqual(new Set([dir]));
+    } finally {
+      process.env.PATH = path;
+    }
+    expect((await Bun.file(log).text()).trim().split("\n")).toHaveLength(1);
+  });
+});

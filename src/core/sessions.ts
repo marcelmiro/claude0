@@ -1077,21 +1077,18 @@ async function discoverArchivedSessions(
  * Get the current git branch for a project path.
  * Returns empty string if not a git repo or command fails.
  * Cached briefly per path — one subprocess per repo per discovery cycle, not per
- * caller; a checkout on the Mac shows up within the TTL.
+ * caller; a checkout on the Mac shows up within the TTL. The cache holds the
+ * in-flight promise, so the concurrent per-pane lookups share one spawn.
  */
 const GIT_BRANCH_TTL = 5000;
-const gitBranchCache = new Map<string, { ts: number; branch: string }>();
+const gitBranchCache = new Map<string, { ts: number; branch: Promise<string> }>();
 
-async function getGitBranch(projectPath: string): Promise<string> {
+function getGitBranch(projectPath: string): Promise<string> {
   const hit = gitBranchCache.get(projectPath);
   if (hit && Date.now() - hit.ts < GIT_BRANCH_TTL) return hit.branch;
-  let branch = "";
-  try {
-    branch = (await Bun.$`git -C ${projectPath} branch --show-current`.quiet().text()).trim();
-  } catch {
-    // not a git repo / git failed — cache the miss too (same TTL) so a non-repo
-    // pane doesn't re-spawn git every cycle
-  }
+  // not a git repo / git failed — cache the miss too (same TTL) so a non-repo
+  // pane doesn't re-spawn git every cycle
+  const branch = Bun.$`git -C ${projectPath} branch --show-current`.quiet().text().then((s) => s.trim(), () => "");
   gitBranchCache.set(projectPath, { ts: Date.now(), branch });
   return branch;
 }
