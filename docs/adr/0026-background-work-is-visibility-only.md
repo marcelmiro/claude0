@@ -46,7 +46,7 @@ forever. Real data had a 3-day-old wait on a live pane.
 - **A pending task counts only once the harness confirms it and a live runner backs it.**
   A Bash or Agent launch counts only when its `tool_result` confirms a task was created:
   without that, no notification will ever come (it was denied, or ran synchronously). Every pending task is then checked against reality: the
-  runner holds an open fd on its output file for its whole life, so one `lsof` per probe
+  runner holds an open fd on its output file for its whole life, so one fd walk (`/proc` on Linux, `lsof` on macOS) per probe
   round separates a live wait from an orphan. The exception is a `Monitor`: it streams to
   the harness over a socket and its output file appears only with its first event, so no
   fd marks it alive. Its launch record carries its `timeoutMs` (capped at 30m), and it

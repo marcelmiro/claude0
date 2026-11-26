@@ -73,7 +73,7 @@ git, programmatically:
 - Ref-to-ref diffs are three-dot revspecs passed as ONE string — `git diff A B` means `A..B` and grows phantom rows when the remote is ahead or the branch was rebased. The pushed-tier ref is `origin/<branch>` BY NAME, never `@{upstream}`/`@{push}` ([ADR 11](docs/adr/0011-pushed-vs-unpushed-is-a-tier-chain.md)).
 
 Processes & caches:
-- One `lsof` per probe round, never per item — it walks every fd table so it costs ~115ms flat; parse `-F n` output (exit code lies when one path is missing) and match on `realpath` ([ADR 26](docs/adr/0026-background-work-is-visibility-only.md)).
+- One fd walk per probe round, never per item — it reads every process's fd table, so its cost is flat in the number of paths; match on `realpath`. Linux reads `/proc/*/fd` directly: `lsof` there costs ~1.2s CPU per run on the VM (it stats every fd and mount), and three processes each re-probing every 15s kept it at ~30% of a core. macOS still uses `lsof`: parse `-F n` output (exit code lies when one path is missing) ([ADR 26](docs/adr/0026-background-work-is-visibility-only.md)).
 - Cross-process state with concurrent writers gets one file per key, atomic temp+rename (`panes/`, `verdicts/`, `consumers/`) — a shared JSON loses a writer's slice.
 - Set attention/prefixes via `state.json` + `stripAllPrefixes()`/`desiredPrefix()` (`core/notifications.ts`) — never by string surgery on window names; the monitor repaints every tick.
 - ⏳ (script-wait) is visibility-only — never feed it into notifications, attention, `claude0 next`, or sort order ([ADR 26](docs/adr/0026-background-work-is-visibility-only.md)).

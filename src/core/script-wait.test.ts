@@ -149,7 +149,7 @@ test("no targets → no probe, no store write", async () => {
   expect(await resolveVerdicts([], 1000, boom)).toEqual(new Map());
 });
 
-// --- runnersAlive (the real lsof probe) -----------------------------------
+// --- runnersAlive (the real fd probe) -------------------------------------
 
 test("runnersAlive: a file nothing holds open reads dead, and never throws", async () => {
   const path = join(CONFIG_DIR, "nobody-holds-this.output");

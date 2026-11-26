@@ -22,7 +22,7 @@
  * flat rather than per-session — that is what lets `liveScripts` (which only has
  * tasks, no session id) share it with the session-level parse cache.
  */
-import { mkdir, readdir, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readlink, rename, unlink, writeFile } from "node:fs/promises";
 import { realpath } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { PATHS } from "./config";
@@ -61,19 +61,18 @@ const fileFor = (key: string) => `${VERDICTS_DIR}/${encodeURIComponent(key)}`;
 
 /**
  * Whether anything still runs each task: the runner holds an open fd on its output
- * file for its whole life, so `lsof` on that path is a definitive orphan test. A
- * session resumed under a new Claude process orphans its tasks — the transcript then
- * says "pending" forever (seen in real data: a 3-day-old wait on a live pane), and
- * this probe is what catches it.
+ * file for its whole life, so "does any process hold this path open" is a definitive
+ * orphan test. A session resumed under a new Claude process orphans its tasks — the
+ * transcript then says "pending" forever (seen in real data: a 3-day-old wait on a live
+ * pane), and this probe is what catches it.
  *
- * One `lsof` for the whole set, not one per path. `lsof` walks every process's fd
- * table, so it costs ~115ms regardless of how many paths it is asked about — probing
- * serially made the cost scale with the number of orphaned tasks (7 accumulated
- * orphans measured at 807ms; batched, 118ms). It is also the more honest answer: a
- * single consistent snapshot rather than N snapshots smeared across a second.
+ * One fd walk for the whole set, not one per path (`/proc` on Linux, `lsof` elsewhere).
+ * Either walks every process's fd table, so its cost doesn't depend on how many paths
+ * it is asked about — probing serially made the cost scale with the number of orphaned
+ * tasks (7 accumulated orphans measured at 807ms; batched, 118ms).
  *
- * Paths absent from the output read dead, which folds in the missing-file case
- * (tmp pruned, reboot) for free.
+ * Paths no process holds read dead, which folds in the missing-file case (tmp pruned,
+ * reboot) for free.
  */
 export const runnersAlive: RunnerProbe = async (outputPaths) => {
   const verdicts = new Map<string, boolean>(outputPaths.map((p) => [p, false]));
@@ -96,9 +95,46 @@ export const runnersAlive: RunnerProbe = async (outputPaths) => {
   );
   if (byResolved.size === 0) return verdicts;
 
+  const wanted = new Set(byResolved.keys());
+  const held = process.platform === "linux" ? await heldViaProc(wanted) : await heldViaLsof(wanted);
+  for (const r of held) for (const p of byResolved.get(r) ?? []) verdicts.set(p, true);
+  return verdicts;
+};
+
+/**
+ * Linux: walk `/proc/<pid>/fd` links directly. Same answer as `lsof` (both see only the
+ * processes this user may inspect), but `lsof` also stats every fd and mount on the box:
+ * ~1.2s CPU per run on the VM (~930 processes) against ~30-60ms for this walk.
+ */
+async function heldViaProc(wanted: Set<string>): Promise<Set<string>> {
+  const held = new Set<string>();
+  try {
+    const pids = (await readdir("/proc")).filter((d) => /^\d+$/.test(d));
+    await Promise.all(
+      pids.map(async (pid) => {
+        let fds: string[];
+        try {
+          fds = await readdir(`/proc/${pid}/fd`);
+        } catch {
+          return; // another user's process, or it exited
+        }
+        for (const fd of fds) {
+          try {
+            const target = await readlink(`/proc/${pid}/fd/${fd}`);
+            if (wanted.has(target)) held.add(target);
+          } catch {}
+        }
+      }),
+    );
+  } catch {}
+  return held;
+}
+
+async function heldViaLsof(wanted: Set<string>): Promise<Set<string>> {
+  const held = new Set<string>();
   try {
     // `--` guards a path that starts with a dash.
-    const proc = Bun.spawn([LSOF, "-F", "n", "--", ...byResolved.keys()], {
+    const proc = Bun.spawn([LSOF, "-F", "n", "--", ...wanted], {
       stdout: "pipe",
       stderr: "ignore",
     });
@@ -112,14 +148,13 @@ export const runnersAlive: RunnerProbe = async (outputPaths) => {
     // so bound it and keep the (already complete) output either way.
     await withDeadline(proc.exited, 2000, "lsof exit").catch(() => {});
     for (const line of out.split("\n")) {
-      if (!line.startsWith("n")) continue;
-      for (const p of byResolved.get(line.slice(1)) ?? []) verdicts.set(p, true);
+      if (line.startsWith("n") && wanted.has(line.slice(1))) held.add(line.slice(1));
     }
   } catch {
     // lsof unavailable/failed — treat as dead rather than badge forever.
   }
-  return verdicts;
-};
+  return held;
+}
 
 async function readVerdict(key: string): Promise<Verdict | null> {
   try {
